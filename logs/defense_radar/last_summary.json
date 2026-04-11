@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-11T19:43:50",
+  "generated_at": "2026-04-11T20:09:36",
   "symbols": [
     {
       "code": "510300",
@@ -290,18 +290,6 @@
       "full_trigger": true
     },
     {
-      "code": "889999",
-      "name": "梅花2test",
-      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
-      "pen_60m": "向下",
-      "radar_zone_ok": true,
-      "pen_60m_down": true,
-      "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
-      "full_trigger": true
-    },
-    {
       "code": "601166",
       "name": "兴业银行",
       "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
@@ -454,6 +442,18 @@
       "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
+      "blue_triangle_strict": false,
+      "full_trigger": false
+    },
+    {
+      "code": "889999",
+      "name": "梅花2test",
+      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
+      "has_alert": true,
+      "pen_60m": "向下",
+      "radar_zone_ok": true,
+      "pen_60m_down": true,
+      "macd_momentum_ok": true,
       "blue_triangle_strict": false,
       "full_trigger": false
     }

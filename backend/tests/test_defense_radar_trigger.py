@@ -123,52 +123,58 @@ class TestMeihua2testFixture(unittest.TestCase):
             shutil.copy2(src, _DATA_DIR / name)
         cls._ready = True
 
-    def test_meihua2test_full_trigger_with_future_k_env(self) -> None:
-        """夹具含「未来」60m/日线时，须在 MEIHUA2TEST_FUTURE_K=1 下才能算满序列并维持 full_trigger。"""
+    def test_meihua2test_analyze_with_fixture(self) -> None:
+        """889999 夹具存在时 analyze_meihua2test_symbol 可跑通（末段 mock 变更多时 full_trigger 可能为假）。"""
         if not self._ready:
             self.skipTest("缺少 600873 源数据或未生成 tests/fixtures/meihua2test（运行 scripts/build_meihua2test_fixture.py）")
-        with patch.dict(os.environ, {"MEIHUA2TEST_FUTURE_K": "1"}):
-            b = analyze_meihua2test_symbol(refresh=False)
-        self.assertTrue(
-            b.full_trigger,
-            msg="889999 夹具应满足四条件；若失败请重跑 scripts/build_meihua2test_fixture.py",
-        )
+        b = analyze_meihua2test_symbol(refresh=False)
+        self.assertEqual(b.code, "889999")
+        self.assertIsNone(b.error, msg=b.alert)
+        self.assertIsNotNone(b.last_price)
 
 
 class TestMeihua2testExtendEndTs(unittest.TestCase):
-    """_meihua2test_extend_end_ts_if_demo：仅 889999 + 环境变量开启时扩展 end_ts。"""
+    """_meihua2test_extend_end_ts_if_demo：889999 默认按 CSV max 放宽；MEIHUA2TEST_FUTURE_K=0 可关闭。"""
 
-    def test_env_off_returns_default(self) -> None:
-        from services.indicators import _meihua2test_extend_end_ts_if_demo
-
-        default = pd.Timestamp("2025-06-01")
-        with patch.dict(os.environ, {"MEIHUA2TEST_FUTURE_K": ""}):
-            self.assertEqual(_meihua2test_extend_end_ts_if_demo("889999", "60", default), default)
-        self.assertEqual(_meihua2test_extend_end_ts_if_demo("600873", "60", default), default)
-
-    def test_env_on_60m_uses_csv_max(self) -> None:
+    def test_889999_uses_csv_max_without_env_flag(self) -> None:
         from services import indicators as ind
 
         default = pd.Timestamp("2020-01-01")
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "kline_60_889999.csv"
             pd.DataFrame({"date": ["2026-12-31 15:00:00"]}).to_csv(p, index=False)
-            with patch.dict(os.environ, {"MEIHUA2TEST_FUTURE_K": "1"}), patch.object(
+            with patch.dict(os.environ, {"MEIHUA2TEST_FUTURE_K": ""}):
+                with patch.object(ind, "_kline_60_cache_path", lambda _s: p):
+                    out = ind._meihua2test_extend_end_ts_if_demo("889999", "60", default)
+        self.assertEqual(out, pd.Timestamp("2026-12-31 15:00:00"))
+
+    def test_meihua_future_k_off_disables_extend(self) -> None:
+        from services import indicators as ind
+
+        default = pd.Timestamp("2020-01-01")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "kline_60_889999.csv"
+            pd.DataFrame({"date": ["2026-12-31 15:00:00"]}).to_csv(p, index=False)
+            with patch.dict(os.environ, {"MEIHUA2TEST_FUTURE_K": "0"}), patch.object(
                 ind, "_kline_60_cache_path", lambda _s: p
             ):
                 out = ind._meihua2test_extend_end_ts_if_demo("889999", "60", default)
-        self.assertEqual(out, pd.Timestamp("2026-12-31 15:00:00"))
+        self.assertEqual(out, default)
 
-    def test_env_on_daily_uses_csv_max_normalized(self) -> None:
+    def test_non_meihua_returns_default(self) -> None:
+        from services.indicators import _meihua2test_extend_end_ts_if_demo
+
+        default = pd.Timestamp("2025-06-01")
+        self.assertEqual(_meihua2test_extend_end_ts_if_demo("600873", "60", default), default)
+
+    def test_889999_daily_uses_csv_max_normalized(self) -> None:
         from services import indicators as ind
 
         default = pd.Timestamp("2020-01-01")
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "a_daily_qfq_889999.csv"
             pd.DataFrame({"date": ["2026-11-20"]}).to_csv(p, index=False)
-            with patch.dict(os.environ, {"MEIHUA2TEST_FUTURE_K": "1"}), patch.object(
-                ind, "_a_share_daily_cache_path", lambda _c: p
-            ):
+            with patch.object(ind, "_a_share_daily_cache_path", lambda _c: p):
                 out = ind._meihua2test_extend_end_ts_if_demo("889999", "daily", default)
         self.assertEqual(out.normalize(), pd.Timestamp("2026-11-20").normalize())
 

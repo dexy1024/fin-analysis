@@ -399,11 +399,13 @@ function writeTrigSeen(seen: Record<string, true>): void {
   }
 }
 
-/** full_trigger 去重后返回跑马灯文案；首次出现的标的会同步 `window.alert`（与 Tab 橙色同源四条件） */
+/** 仅梅花2test（889999）：full_trigger 跑马灯 + 首次 `window.alert`（实盘 full_trigger 不提示，与 Tab 橙色一致） */
 function alertRadarFullTriggers(data: DefenseRadarSummaryResponse): string | null {
   const genAt =
     typeof data.generated_at === 'string' && data.generated_at.trim() ? data.generated_at.trim() : '_'
-  const hits = (data.symbols ?? []).filter((s) => s.full_trigger === true)
+  const hits = (data.symbols ?? []).filter(
+    (s) => s.full_trigger === true && String(s.code ?? '').trim() === '889999',
+  )
   if (hits.length === 0) return null
 
   const seen = readTrigSeen()
@@ -446,7 +448,7 @@ function App() {
   )
   /** 摘要生成时间 ISO，便于与磁盘 json 对照 */
   const [defenseSummaryGeneratedAt, setDefenseSummaryGeneratedAt] = useState<string | null>(null)
-  /** 四条件扳机：顶栏跑马灯 + 首次弹窗 */
+  /** 仅 889999 mock：顶栏跑马灯 + 首次弹窗 */
   const [fullTriggerBanner, setFullTriggerBanner] = useState<string | null>(null)
 
   const loadDefenseSummary = useCallback(async () => {

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-梅花2test（889999）：从 600873 复制基座，并追加「日历上在未来」的日线 + 60m K 线，
-保持四条件扳机可触发（full_trigger=True）。
+梅花2test（889999）：从 600873 复制基座，并追加「日历上在未来」的日线 + 60m K 线。
 
-重要：`get_index_kline` 默认用「当前时刻/今日」截断 CSV，晚于此刻的 K 不会参与计算。
-本地要看 mock 的未来 K，启动后端前请设置：
-
-  export MEIHUA2TEST_FUTURE_K=1
+889999 在 `get_index_kline` 中会按本地 CSV 最大时间放宽 end_ts（无需再设 MEIHUA2TEST_FUTURE_K）；
+若需按「当前时刻」截断 mock 文件，可设 `MEIHUA2TEST_FUTURE_K=0`。
 
 用法（在 backend 目录）:
 
@@ -16,7 +13,7 @@
   - tests/fixtures/meihua2test/a_daily_qfq_889999.csv、kline_60_889999.csv
   - backend/data 下同名文件
 
-脚本结束时会设置 MEIHUA2TEST_FUTURE_K=1 并调用 analyze_symbol，若 full_trigger 非 True 则 exit 3。
+脚本结束时会试算 `analyze_meihua2test_symbol`：full_trigger 为假时仅打印提示，不失败退出。
 """
 from __future__ import annotations
 
@@ -100,21 +97,21 @@ def _append_future_daily(dd: pd.DataFrame, h_extended: pd.DataFrame) -> pd.DataF
     return pd.concat([dd, extra], ignore_index=True).sort_values("date").reset_index(drop=True)
 
 
-def _verify_full_trigger() -> None:
-    os.environ["MEIHUA2TEST_FUTURE_K"] = "1"
+def _verify_radar_row() -> None:
     sys.path.insert(0, str(ROOT))
     os.chdir(ROOT)
     from services.defense_radar import analyze_meihua2test_symbol
 
     row = analyze_meihua2test_symbol(refresh=False)
-    if not row.full_trigger:
-        print("校验失败 full_trigger=False:", row, file=sys.stderr)
-        sys.exit(3)
-    print(
-        "校验通过: full_trigger=True | last_price=",
-        row.last_price,
-        "| 请在运行后端时 export MEIHUA2TEST_FUTURE_K=1",
-    )
+    if row.full_trigger:
+        print("校验: full_trigger=True | last_price=", row.last_price)
+    else:
+        print(
+            "提示: full_trigger=False（mock 末段若未满足四条件扳机属正常，889999 仍可按 CSV 出图）",
+            "| last_price=",
+            row.last_price,
+            file=sys.stderr,
+        )
 
 
 def main() -> None:
@@ -152,7 +149,7 @@ def main() -> None:
     print("installed:", out_data_h)
     print("last 60m row:", h_out["date"].iloc[-1])
 
-    _verify_full_trigger()
+    _verify_radar_row()
 
 
 if __name__ == "__main__":

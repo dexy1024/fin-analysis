@@ -157,10 +157,8 @@ python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 ### 4.7 梅花2test（889999）与「未来 K」Mock
 
 - 测试标的 **889999**（显示名梅花2test）**不列入** `DEFENSE_RADAR_WATCHLIST`：与实盘雷达列表隔离，跑雷达时在实盘标的之后**单独追加**一行（`analyze_meihua2test_symbol`）；定时任务也不会对 889999 做网络 refresh，仅读本地夹具 CSV。
-- 本地 CSV 由 `backend/scripts/build_meihua2test_fixture.py` 从 600873 复制基座并**追加日历上在未来**的日线与 60m；脚本结束时会校验 `full_trigger=True`（需本机已有 `600873` 源 CSV）。
-- **默认行为**：`get_index_kline` 在未指定 `end_date` 时按**当前时刻 / 今日**截断，CSV 里晚于该时刻的 K **不会参与**缠论与雷达。若要在浏览器或 API 里看到这段「未来」数据，启动后端前请执行：  
-  `export MEIHUA2TEST_FUTURE_K=1`  
-  仅对 **889999** 生效，不设则与线上一致。
+- 本地 CSV 由 `backend/scripts/build_meihua2test_fixture.py` 从 600873 复制基座并**追加日历上在未来**的日线与 60m（需本机已有 `600873` 源 CSV）；脚本结束时会试算雷达，**full_trigger 非真仅提示、不退出失败**。
+- **889999 专用**：`get_index_kline` 对 **889999** 会把 `end_ts` 放宽到本地 CSV 内最大日期/时间，使「晚于当前时刻」的 mock K 仍参与缠论与图；**不必**再设 `MEIHUA2TEST_FUTURE_K=1`。若要对 889999 也按当前时刻截断（少见），可设 `MEIHUA2TEST_FUTURE_K=0`。
 - 重新生成夹具并安装到 `backend/data/`：  
   `cd backend && python3 scripts/build_meihua2test_fixture.py`
 

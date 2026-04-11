@@ -25,21 +25,19 @@ KLINE_60_CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 _KLINE_RESP_CACHE_TTL_SECONDS = 300
 
 
-def _meihua2test_future_k_env_enabled() -> bool:
-    """梅花2test（889999）演示用：允许 CSV 中「晚于当前时刻/今日」的 K 参与计算（默认关闭）。"""
-    return os.environ.get("MEIHUA2TEST_FUTURE_K", "").strip().lower() in ("1", "true", "yes", "on")
-
-
 def _meihua2test_extend_end_ts_if_demo(
     symbol: str,
     period: str,
     default_end: pd.Timestamp,
 ) -> pd.Timestamp:
     """
-    仅 symbol=889999 且 MEIHUA2TEST_FUTURE_K=1：将 end_ts 扩展到本地 CSV 内最大日期，
-    使 mock 的「未来」K 不被默认的 now/today 截掉。
+    仅 symbol=889999（本项目内专用于梅花2test mock）：将 end_ts 扩展到本地 CSV 内最大时间，
+    使「日历上晚于当前时刻」的 mock K 仍参与计算；不设环境变量也会生效。
+    若需按线上口径截断 mock 文件，可设 MEIHUA2TEST_FUTURE_K=0|false|off。
     """
-    if symbol.strip() != "889999" or not _meihua2test_future_k_env_enabled():
+    if symbol.strip() != "889999":
+        return default_end
+    if os.environ.get("MEIHUA2TEST_FUTURE_K", "").strip().lower() in ("0", "false", "no", "off"):
         return default_end
     try:
         api_sym, src = _split_kline_symbol(symbol)
