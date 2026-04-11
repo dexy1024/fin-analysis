@@ -1,0 +1,5 @@
+#!/bin/sh
+# 本仓库约定：仅本地版本管理，禁止推送到远程。
+# 若日后确需远程：删除本文件，并执行 git config --unset core.hooksPath
+echo "已拦截 git push：本仓库仅本地使用，不推送到远程。"
+exit 1
