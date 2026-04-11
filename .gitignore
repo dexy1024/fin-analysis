@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+.env.*
+
+# Node / 前端构建
+frontend/node_modules/
+frontend/dist/
+
+# 运行日志与本地生成数据（可再生成；避免仓库臃肿）
+logs/
+backend/data/*.csv
+
+# 系统与编辑器
+.DS_Store
+.idea/
+*.swp
+*.swo
