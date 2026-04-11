@@ -7,6 +7,7 @@ import {
   KLINE_DOWN_GREEN,
   KLINE_UP_RED,
 } from './chartMacd'
+import { computeHourlyBuySellState } from './hourlyBuySellSignals'
 import {
   formatMacdYAxisLabel,
   formatPriceYAxisLabel,
@@ -230,35 +231,6 @@ export function HourlyChanChart({
 
   const dateToIdx = new Map(indexKline.data.map((p, i) => [p.date, i] as const))
 
-  // 顶背驰：相邻向上笔创新高，且对应 MACD 红柱面积缩小
-  const topDivergenceSquares = (() => {
-    const up = pensEff.filter((p) => p.direction === 'up')
-    if (up.length < 2) return [] as [string, number][]
-    const res: [string, number][] = []
-    const areaOf = (pen: IndexPen) => {
-      const sIdx = dateToIdx.get(pen.start_date)
-      const eIdx = dateToIdx.get(pen.end_date)
-      if (sIdx == null || eIdx == null || sIdx > eIdx) return null
-      let area = 0
-      for (const b of indexKline.data.slice(sIdx, eIdx + 1)) {
-        const m = b.macd?.macd
-        if (m != null && Number.isFinite(m) && m > 0) area += Math.abs(m)
-      }
-      return area
-    }
-    for (let i = 1; i < up.length; i += 1) {
-      const prev = up[i - 1]
-      const cur = up[i]
-      const prevArea = areaOf(prev)
-      const curArea = areaOf(cur)
-      if (prevArea == null || curArea == null) continue
-      if (cur.end_price > prev.end_price && curArea < prevArea) {
-        res.push([cur.end_date, cur.end_price])
-      }
-    }
-    return res
-  })()
-
   const centralTips: CentralTipEntry[] = centrals.map((c, i) => ({
     label: centralLegendName(i),
     zg: Number(c.zg),
@@ -283,8 +255,6 @@ export function HourlyChanChart({
   const Daily_C_ZD = 57.41
   const H1_C_ZG = 56.39
   const EPS = 1e-6
-
-  const dates3B = indexKline.data.map((p) => p.date)
 
   type PenMetrics = {
     lowMin: number
@@ -416,171 +386,11 @@ export function HourlyChanChart({
   const threeBLast = threeBSignals.length ? threeBSignals[threeBSignals.length - 1] : null
   const threeBExtraMinPrice = threeBLast ? threeBLast.y : null
 
-  const { signalMarker, buyConditionChecklist, sellSignalActive } = (() => {
-    if (indexKline.data.length < 3) {
-      return {
-        signalMarker: null as {
-          text: string
-          date: string
-          y: number
-          color: string
-          reasons: string[]
-        } | null,
-        buyConditionChecklist: null as { label: string; ok: boolean }[] | null,
-        sellSignalActive: false,
-      }
-    }
-    const last = indexKline.data[indexKline.data.length - 1]
-    const prev = indexKline.data[indexKline.data.length - 2]
-    const prev2 = indexKline.data[indexKline.data.length - 3]
-    const m0 = last.macd?.macd
-    const m1 = prev.macd?.macd
-    const m2 = prev2.macd?.macd
-    const dif0 = last.macd?.dif
-    const dif1 = prev.macd?.dif
-    const dea0 = last.macd?.dea
-    const dea1 = prev.macd?.dea
-    const b0 = last.boll
-    const b1 = prev.boll
-    const c = cCentralIdx >= 0 ? centrals[cCentralIdx] : null
-    const cZd = c ? Number(c.zd) : null
-    const cZg = c ? Number(c.zg) : null
-    const inCCentral =
-      cZd != null && cZg != null && Number.isFinite(cZd) && Number.isFinite(cZg)
-        ? last.close >= cZd && last.close <= cZg
-        : false
-    const keepDailySupport =
-      dailyCZd != null && dailyAZd != null ? last.close >= dailyCZd && last.close >= dailyAZd : false
-    const switchedDownToUp =
-      pensEff.length >= 2 &&
-      pensEff[pensEff.length - 2].direction === 'down' &&
-      pensEff[pensEff.length - 1].direction === 'up'
-    const switchedUpToDown =
-      pensEff.length >= 2 &&
-      pensEff[pensEff.length - 2].direction === 'up' &&
-      pensEff[pensEff.length - 1].direction === 'down'
-    const lastUpPen = switchedDownToUp ? pensEff[pensEff.length - 1] : null
-    const hasBottomFractalInSwitch =
-      lastUpPen != null &&
-      (indexKline.fractals ?? []).some(
-        (f) => f.type === 'bottom' && f.date >= lastUpPen.start_date && f.date <= lastUpPen.end_date,
-      )
-    const hasBottomDivInSwitch =
-      lastUpPen != null &&
-      divergenceArrows.some((pt) => pt[0] >= lastUpPen.start_date && pt[0] <= lastUpPen.end_date)
-    const hasTopFractal = (indexKline.fractals ?? []).some((f) => f.type === 'top' && f.date === last.date)
-    const hasTopDivNow = topDivergenceSquares.some((pt) => pt[0] === last.date)
-
-    const macdBuy =
-      m0 != null &&
-      m1 != null &&
-      m2 != null &&
-      dif0 != null &&
-      dif1 != null &&
-      dea0 != null &&
-      dea1 != null &&
-      m0 < 0 &&
-      Math.abs(m0) < Math.abs(m1) &&
-      (dif0 > dif1 || (dif1 <= dea1 && dif0 > dea0)) &&
-      !(m0 < 0 && m1 < 0 && m2 < 0 && Math.abs(m0) > Math.abs(m1) && Math.abs(m1) > Math.abs(m2))
-
-    const bollBuy =
-      b0?.middle != null &&
-      b1?.middle != null &&
-      b0?.lower != null &&
-      last.close > b0.middle &&
-      (prev.close <= b1.middle || (prev.low <= b1.lower * 1.01 && last.close > b0.middle))
-
-    const buyReasons: string[] = []
-    if (keepDailySupport) buyReasons.push('【日线】未跌破 C-ZD 与 A-ZD')
-    if (inCCentral) buyReasons.push('【60m】现价在 C 中枢内（ZD～ZG）')
-    if (switchedDownToUp) buyReasons.push('【60m】有效笔：前一下笔、当前上笔')
-    if (hasBottomFractalInSwitch) buyReasons.push('【60m】当前向上笔内有底分型')
-    if (hasBottomDivInSwitch) buyReasons.push('【60m】底背驰点落在当前向上笔内')
-    if (macdBuy) buyReasons.push('【60m】MACD 转强')
-    if (bollBuy) buyReasons.push('【60m】BOLL 站回中轨')
-    const buySignal =
-      inCCentral &&
-      keepDailySupport &&
-      hasBottomFractalInSwitch &&
-      hasBottomDivInSwitch &&
-      switchedDownToUp &&
-      macdBuy &&
-      bollBuy
-
-    const dailyBreak = (dailyCZd != null && last.close < dailyCZd) || (dailyAZd != null && last.close < dailyAZd)
-    const macdSell =
-      m0 != null &&
-      m1 != null &&
-      dif0 != null &&
-      dif1 != null &&
-      dea0 != null &&
-      dea1 != null &&
-      ((m1 > 0 && m0 > 0 && m0 < m1) || (dif1 >= dea1 && dif0 < dea0) || m0 < 0)
-    const bollSellMiddle =
-      b0?.middle != null &&
-      b1?.middle != null &&
-      last.close < b0.middle &&
-      prev.close < b1.middle
-
-    const bollSellLower =
-      b0?.lower != null &&
-      b1?.lower != null &&
-      last.close < b0.lower &&
-      prev.close < b1.lower
-
-    const bollSell = bollSellMiddle || bollSellLower
-    const sellReasons: string[] = []
-    if (dailyBreak) sellReasons.push('日线跌破C-ZD/A-ZD')
-    if (switchedUpToDown) sellReasons.push('向上笔转向下笔')
-    if (hasTopFractal && hasTopDivNow) sellReasons.push('顶分型+顶背驰')
-    if (macdSell) sellReasons.push('MACD转弱')
-    if (bollSellMiddle) sellReasons.push('60分钟 BOLL 跌破中轨')
-    if (bollSellLower) sellReasons.push('60分钟 BOLL 跌破下轨')
-    const sellSignal = dailyBreak || switchedUpToDown || (hasTopFractal && hasTopDivNow) || macdSell || bollSell
-
-    const buyConditionChecklist: { label: string; ok: boolean }[] = [
-      { label: '【日线】未跌破 C-ZD 与 A-ZD', ok: keepDailySupport },
-      { label: '【60m】现价在 C 中枢内（ZD～ZG）', ok: inCCentral },
-      { label: '【60m】有效笔：前一下笔、当前上笔', ok: switchedDownToUp },
-      { label: '【60m】当前向上笔内有底分型', ok: hasBottomFractalInSwitch },
-      { label: '【60m】底背驰点落在当前向上笔内', ok: hasBottomDivInSwitch },
-      { label: '【60m】MACD 转强', ok: macdBuy },
-      { label: '【60m】BOLL 站回中轨', ok: bollBuy },
-    ]
-
-    if (sellSignal) {
-      return {
-        signalMarker: {
-          text: '卖',
-          date: last.date,
-          y: last.high * 1.01,
-          color: '#ef4444',
-          reasons: sellReasons,
-        },
-        buyConditionChecklist,
-        sellSignalActive: true,
-      }
-    }
-    if (buySignal) {
-      return {
-        signalMarker: {
-          text: '买',
-          date: last.date,
-          y: last.low * 0.99,
-          color: '#22c55e',
-          reasons: buyReasons,
-        },
-        buyConditionChecklist,
-        sellSignalActive: false,
-      }
-    }
-    return {
-      signalMarker: null,
-      buyConditionChecklist,
-      sellSignalActive: false,
-    }
-  })()
+  const { signalMarker, buyConditionChecklist, sellSignalActive } = computeHourlyBuySellState(
+    indexKline,
+    dailyAZd,
+    dailyCZd,
+  )
 
   const priceYExtent = mainChartYExtent(indexKline.data, [
     ...centrals.flatMap((c) => [Number(c.zd), Number(c.zg)]),

@@ -86,7 +86,7 @@ function marketSyncHint(self: DefenseAlertKind, idx: DefenseAlertKind): string {
   if (self === 'red') {
     return '（个股已红档禁买；与大盘是否同档不改变禁买。）'
   }
-  if (idx === 'red' && self !== 'red') {
+  if (idx === 'red') {
     return '大盘已红档走弱，个股信号一律降权，不宜重仓逆势赌反弹。'
   }
   if (idx === 'ultimate' && (self === 'level1' || self === 'gap')) {
