@@ -21,7 +21,11 @@ from datetime import datetime, timedelta, time as time_of_day
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from services.defense_radar import DEFENSE_RADAR_WATCHLIST, run_defense_radar
+from services.defense_radar import (
+    DEFENSE_RADAR_SYNC_SKIP_CODES,
+    DEFENSE_RADAR_WATCHLIST,
+    run_defense_radar,
+)
 from services.indicators import get_index_kline
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
@@ -46,7 +50,11 @@ def _h60_start_date() -> str:
 
 def sync_symbol_list_for_kline() -> list[str]:
     """与前端原 sync 列表一致：上证 + 全部 CHART 标的，不含港股小米（60m 数据源限制）。"""
-    return ["sh000001"] + [code for code, _ in DEFENSE_RADAR_WATCHLIST if code.lower() != "hk01810"]
+    return ["sh000001"] + [
+        code
+        for code, _ in DEFENSE_RADAR_WATCHLIST
+        if code.lower() != "hk01810" and code not in DEFENSE_RADAR_SYNC_SKIP_CODES
+    ]
 
 
 def _sync_all_daily() -> None:

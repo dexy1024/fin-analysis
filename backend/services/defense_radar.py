@@ -58,6 +58,7 @@ DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
     ("002415", "海康威视"),
     ("601919", "中远海控"),
     ("600873", "梅花生物"),
+    ("889999", "梅花2test"),
     ("601166", "兴业银行"),
     ("600900", "长江电力"),
     ("600887", "伊利股份"),
@@ -74,6 +75,9 @@ DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
 )
 
 EXCLUDED_SYMBOLS = frozenset({"sh000001", "SH000001"})
+
+# 仅本地 CSV 夹具（见 scripts/build_meihua2test_fixture.py），定时任务不对其 refresh 拉网
+DEFENSE_RADAR_SYNC_SKIP_CODES: frozenset[str] = frozenset({"889999"})
 
 LAST_SUMMARY_JSON = "last_summary.json"
 
