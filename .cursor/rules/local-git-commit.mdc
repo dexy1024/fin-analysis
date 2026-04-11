@@ -1,0 +1,11 @@
+---
+description: 本仓库改代码后必须用本地 Git 提交；禁止远程
+alwaysApply: true
+---
+
+# 本地 Git 提交约定
+
+- 在本项目（fin-analysis）中**完成有意义的代码或配置修改后**，应执行本地 `git add` 与 `git commit`，附简短中文说明；除非用户明确说不要提交。
+- **仅本地仓库**：不要添加 `git remote`、不要执行 `git push`（仓库已配置 pre-push 拦截）。
+- 若本次任务**未改动**任何受版本控制的文件，则无需强行 commit。
+- `logs/*.log`、`logs/*.csv` 仍忽略；`logs/defense_radar/` 若有意保留快照可单独 commit。
