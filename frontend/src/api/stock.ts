@@ -222,6 +222,16 @@ export interface DefenseRadarSummaryItem {
   has_alert: boolean
   /** 与雷达 md 一致：60m 有效笔最后一笔方向 */
   pen_60m?: string
+  /** 条件1：现价在一级或极限防线 ±1% 带内 */
+  radar_zone_ok?: boolean
+  /** 条件2：60m 有效笔末笔向下 */
+  pen_60m_down?: boolean
+  /** 条件3：MACD 绿柱面积较上一跌段缩小；null 表示未启用该过滤 */
+  macd_momentum_ok?: boolean | null
+  /** 条件4：合并后末三 K 严格底分型且 K3 收 > K2 低 */
+  blue_triangle_strict?: boolean
+  /** 四条件同时满足（条件3 未启用时视为通过） */
+  full_trigger?: boolean
 }
 
 export interface DefenseRadarSummaryResponse {

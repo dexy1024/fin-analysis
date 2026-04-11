@@ -16,12 +16,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
-from services.indicators import get_index_kline
+from services.indicators import _axis_date_key, _merge_inclusive_bars, get_index_kline
+
+# 条件 3：比较最近两段向下有效笔的 MACD 绿柱（零轴下）面积；设 false 则摘要中 macd_momentum_ok 恒为 null
+RADAR_MACD_FILTER_ENABLED: bool = os.environ.get("RADAR_MACD_FILTER", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 
 # 与 frontend/src/App.tsx 中 CHART_TABS 一致（不含上证指数；本列表为雷达扫描范围）
 DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
@@ -82,6 +91,11 @@ def defense_rows_to_summary_items(rows: List[DefenseRow]) -> List[DefenseRadarSu
             "alert": r.alert,
             "has_alert": defense_alert_is_active(r.alert),
             "pen_60m": r.pen_60m or "",
+            "radar_zone_ok": r.radar_zone_ok,
+            "pen_60m_down": r.pen_60m_down,
+            "macd_momentum_ok": r.macd_momentum_ok,
+            "blue_triangle_strict": r.blue_triangle_strict,
+            "full_trigger": r.full_trigger,
         }
         for r in rows
     ]
@@ -191,6 +205,108 @@ def _classify(
     return "其他区间（请人工核对价位与中枢）"
 
 
+def _price_in_tier1_or_ultimate_zone(p: float, value_c: float, value_a: float) -> bool:
+    """
+    条件 1：现价落在第一防线 ±1% 或极限防线 ±1%（不含观望带、不含红色破位、不含高于上沿）。
+    """
+    support_high = max(value_c, value_a)
+    support_low = min(value_c, value_a)
+    z1_upper = support_high * 1.01
+    z1_lower = support_high * 0.99
+    z2_upper = support_low * 1.01
+    z2_lower = support_low * 0.99
+    in_z1 = z1_lower <= p <= z1_upper
+    in_z2 = z2_lower <= p <= z2_upper
+    return bool(in_z1 or in_z2)
+
+
+def strict_blue_triangle_last_three_raw(bars_raw: List[Dict[str, Any]]) -> bool:
+    """
+    仅雷达：合并包含后取时间序末三根 K1,K2,K3，严格底分型 + K3 收盘 > K2 最低。
+    与全链路 _find_fractals_from_standardized 无关，不改变图表分型。
+    """
+    if len(bars_raw) < 3:
+        return False
+    source: List[Dict[str, Any]] = []
+    for b in bars_raw:
+        try:
+            source.append(
+                {
+                    "date": b["date"],
+                    "open": float(b["open"]),
+                    "high": float(b["high"]),
+                    "low": float(b["low"]),
+                    "close": float(b["close"]),
+                    "volume": float(b.get("volume") or 0),
+                },
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+    std = _merge_inclusive_bars(source)
+    if len(std) < 3:
+        return False
+    k1, k2, k3 = std[-3], std[-2], std[-1]
+    lh, ll = float(k1["high"]), float(k1["low"])
+    mh, ml = float(k2["high"]), float(k2["low"])
+    rh, rl = float(k3["high"]), float(k3["low"])
+    c3 = float(k3["close"])
+    strict_low = ml < ll and ml < rl
+    strict_high = mh < lh and mh < rh
+    confirm = c3 > ml
+    return bool(strict_low and strict_high and confirm)
+
+
+def _macd_neg_green_area_between(bars: List[Dict[str, Any]], d_start: str, d_end: str) -> float:
+    """笔区间内仅统计 MACD 柱 < 0 的部分（绿柱），力度用绝对值之和近似。"""
+    k0 = _axis_date_key(d_start)
+    k1 = _axis_date_key(d_end)
+    s = 0.0
+    for b in bars:
+        ds = _axis_date_key(b["date"])
+        if ds < k0:
+            continue
+        if ds > k1:
+            break
+        macd_obj = b.get("macd")
+        if not isinstance(macd_obj, dict):
+            continue
+        v = macd_obj.get("macd")
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv < 0:
+            s += abs(fv)
+    return s
+
+
+def macd_momentum_ok_two_down_pens(h60_payload: Dict[str, Any]) -> Optional[bool]:
+    """
+    条件 3：最近一段向下有效笔的绿柱面积 < 再上一段向下有效笔（面积缩小则 True）。
+    未启用 MACD 过滤时返回 None；有效笔不足两段向下笔时返回 True（不挡扳机）。
+    """
+    if not RADAR_MACD_FILTER_ENABLED:
+        return None
+    pens = h60_payload.get("pens_effective") or []
+    if not pens:
+        return True
+    down_pens: List[Dict[str, Any]] = [p for p in pens if p.get("direction") == "down"]
+    if len(down_pens) < 2:
+        return True
+    prev_pen = down_pens[-2]
+    cur_pen = down_pens[-1]
+    bars = h60_payload.get("data") or []
+    if not bars:
+        return True
+    a_prev = _macd_neg_green_area_between(bars, str(prev_pen["start_date"]), str(prev_pen["end_date"]))
+    a_cur = _macd_neg_green_area_between(bars, str(cur_pen["start_date"]), str(cur_pen["end_date"]))
+    if a_prev <= 1e-12:
+        return True
+    return bool(a_cur < a_prev)
+
+
 # 与前端「有警报才展示 tab」一致：仅这三种算有效警报（含【】前缀）
 RADAR_ALERT_MARKERS: Tuple[str, ...] = ("【一级警报】", "【终极警报】", "【红色警报】")
 
@@ -205,6 +321,11 @@ class DefenseRadarSummaryItem(TypedDict):
     alert: str
     has_alert: bool
     pen_60m: str
+    radar_zone_ok: bool
+    pen_60m_down: bool
+    macd_momentum_ok: Optional[bool]
+    blue_triangle_strict: bool
+    full_trigger: bool
 
 
 def build_defense_radar_summary(
@@ -223,6 +344,11 @@ def build_defense_radar_summary(
                 "alert": row.alert,
                 "has_alert": defense_alert_is_active(row.alert),
                 "pen_60m": row.pen_60m or "",
+                "radar_zone_ok": row.radar_zone_ok,
+                "pen_60m_down": row.pen_60m_down,
+                "macd_momentum_ok": row.macd_momentum_ok,
+                "blue_triangle_strict": row.blue_triangle_strict,
+                "full_trigger": row.full_trigger,
             },
         )
     return out
@@ -251,6 +377,11 @@ class DefenseRow:
     last_price: Optional[float]
     error: Optional[str] = None
     pen_60m: Optional[str] = None
+    radar_zone_ok: bool = False
+    pen_60m_down: bool = False
+    macd_momentum_ok: Optional[bool] = None
+    blue_triangle_strict: bool = False
+    full_trigger: bool = False
 
 
 def analyze_symbol(code: str, name: str, *, refresh: bool = False) -> DefenseRow:
@@ -334,6 +465,13 @@ def analyze_symbol(code: str, name: str, *, refresh: bool = False) -> DefenseRow
 
     p = float(bars[-1]["close"])
     alert = _classify(p, c_zd, a_zd)
+    zone_ok = _price_in_tier1_or_ultimate_zone(p, c_zd, a_zd)
+    pen_label = _effective_60m_pen_label(h60)
+    pen_down = pen_label == "向下"
+    macd_ok = macd_momentum_ok_two_down_pens(h60)
+    blue_ok = strict_blue_triangle_last_three_raw(bars)
+    macd_pass = macd_ok is None or macd_ok is True
+    full_ok = bool(zone_ok and pen_down and blue_ok and macd_pass)
     return DefenseRow(
         code=code,
         name=name,
@@ -342,7 +480,12 @@ def analyze_symbol(code: str, name: str, *, refresh: bool = False) -> DefenseRow
         a_zd=round(a_zd, 4),
         last_price=round(p, 4),
         error=None,
-        pen_60m=_effective_60m_pen_label(h60),
+        pen_60m=pen_label,
+        radar_zone_ok=zone_ok,
+        pen_60m_down=pen_down,
+        macd_momentum_ok=macd_ok,
+        blue_triangle_strict=blue_ok,
+        full_trigger=full_ok,
     )
 
 
@@ -375,17 +518,18 @@ def run_defense_radar(
         "",
         f"生成时间：`{display_time}`",
         "",
-        "| 代码 | 标的名称 | 预警信息 | C-ZD价格 | A-ZD价格 | 现价(60m末根收盘) | 60分钟笔向 |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| 代码 | 标的名称 | 预警信息 | C-ZD价格 | A-ZD价格 | 现价(60m末根收盘) | 60分钟笔向 | 四条件扳机 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in rows_out:
         cz = "" if r.c_zd is None else f"{r.c_zd:.4f}"
         az = "" if r.a_zd is None else f"{r.a_zd:.4f}"
         lp = "" if r.last_price is None else f"{r.last_price:.4f}"
         pen = r.pen_60m or ""
+        trig = "是" if r.full_trigger else "否"
         lines.append(
             f"| {_md_cell(r.code)} | {_md_cell(r.name)} | {_md_cell(r.alert)} | "
-            f"{_md_cell(cz)} | {_md_cell(az)} | {_md_cell(lp)} | {_md_cell(pen)} |",
+            f"{_md_cell(cz)} | {_md_cell(az)} | {_md_cell(lp)} | {_md_cell(pen)} | {_md_cell(trig)} |",
         )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
