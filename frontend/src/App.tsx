@@ -52,6 +52,7 @@ type ChartTabKey =
   | 's002415'
   | 's601919'
   | 's600873'
+  | 's889999'
   | 's601166'
   | 's600900'
   | 's600887'
@@ -240,6 +241,13 @@ const CHART_TABS: {
     tabLabel: '梅花生物（600873）',
     seriesName: '梅花生物',
     seriesName60: '梅花生物·60m',
+  },
+  {
+    key: 's889999',
+    code: '889999',
+    tabLabel: '梅花2test（889999）',
+    seriesName: '梅花2test',
+    seriesName60: '梅花2test·60m',
   },
   {
     key: 's601166',
