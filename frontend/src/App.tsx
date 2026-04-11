@@ -368,30 +368,6 @@ function radarTrigKey(generatedAt: string, code: string): string {
   return `${generatedAt}::::${code}`
 }
 
-function playRadarBeep(): void {
-  try {
-    const ACtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    if (!ACtx) return
-    const ctx = new ACtx()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = 'sine'
-    osc.frequency.value = 880
-    gain.gain.value = 0.07
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start()
-    setTimeout(() => {
-      osc.stop()
-      void ctx.close()
-    }, 200)
-  } catch {
-    /* 自动播放策略等 */
-  }
-}
-
 function readTrigSeen(): Record<string, true> {
   try {
     const raw = sessionStorage.getItem(SS_RADAR_TRIG)
@@ -415,8 +391,8 @@ function writeTrigSeen(seen: Record<string, true>): void {
   }
 }
 
-/** full_trigger 去重后桌面通知 + 蜂鸣；无通知权限时返回横幅文案 */
-async function alertRadarFullTriggers(data: DefenseRadarSummaryResponse): Promise<string | null> {
+/** full_trigger 去重后返回跑马灯文案（不弹系统通知、不蜂鸣） */
+function alertRadarFullTriggers(data: DefenseRadarSummaryResponse): string | null {
   const genAt =
     typeof data.generated_at === 'string' && data.generated_at.trim() ? data.generated_at.trim() : '_'
   const hits = (data.symbols ?? []).filter((s) => s.full_trigger === true)
@@ -437,39 +413,7 @@ async function alertRadarFullTriggers(data: DefenseRadarSummaryResponse): Promis
   }
   writeTrigSeen(next)
 
-  playRadarBeep()
-
-  let banner: string | null = null
-  if (typeof Notification !== 'undefined') {
-    if (Notification.permission === 'granted') {
-      for (const s of fresh) {
-        const code = String(s.code ?? '').trim()
-        new Notification('双防线 · 四条件扳机', {
-          body: `${s.name ?? code}（${code}）`,
-          tag: radarTrigKey(genAt, code),
-        })
-      }
-    } else if (Notification.permission === 'default') {
-      const perm = await Notification.requestPermission()
-      if (perm === 'granted') {
-        for (const s of fresh) {
-          const code = String(s.code ?? '').trim()
-          new Notification('双防线 · 四条件扳机', {
-            body: `${s.name ?? code}（${code}）`,
-            tag: radarTrigKey(genAt, code),
-          })
-        }
-      } else {
-        banner = `【四条件扳机】${fresh.map((s) => `${s.name}（${s.code}）`).join('；')}`
-      }
-    } else {
-      banner = `【四条件扳机】${fresh.map((s) => `${s.name}（${s.code}）`).join('；')}`
-    }
-  } else {
-    banner = `【四条件扳机】${fresh.map((s) => `${s.name}（${s.code}）`).join('；')}`
-  }
-
-  return banner
+  return `【四条件扳机】${fresh.map((s) => `${s.name}（${s.code}）`).join(' · ')}`
 }
 
 function App() {
@@ -519,7 +463,7 @@ function App() {
           ? data.generated_at.trim()
           : null,
       )
-      const banner = await alertRadarFullTriggers(data)
+      const banner = alertRadarFullTriggers(data)
       setFullTriggerBanner(banner)
     } catch (err) {
       console.warn('双防线摘要拉取失败，非核心 Tab 将隐藏：', err)
@@ -701,7 +645,14 @@ function App() {
     >
       {fullTriggerBanner ? (
         <div className="radar-full-trigger-banner" role="alert">
-          <span className="radar-full-trigger-banner-text">{fullTriggerBanner}</span>
+          <div className="radar-marquee-outer">
+            <div className="radar-marquee-track">
+              <span className="radar-marquee-segment">{fullTriggerBanner}</span>
+              <span className="radar-marquee-segment" aria-hidden="true">
+                {fullTriggerBanner}
+              </span>
+            </div>
+          </div>
           <button
             type="button"
             className="radar-full-trigger-banner-close"

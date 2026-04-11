@@ -530,21 +530,50 @@
 .radar-full-trigger-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
-  flex-wrap: wrap;
   margin: 0 1rem 0.5rem;
-  padding: 0.65rem 1rem;
+  padding: 0.55rem 0 0.55rem 1rem;
   border-radius: 0.5rem;
-  background: linear-gradient(90deg, rgba(220, 38, 38, 0.35), rgba(234, 179, 8, 0.2));
+  background: linear-gradient(90deg, rgba(220, 38, 38, 0.4), rgba(234, 179, 8, 0.22));
   border: 1px solid rgba(248, 113, 113, 0.55);
   color: #fef2f2;
   font-size: 0.95rem;
+  overflow: hidden;
 }
 
-.radar-full-trigger-banner-text {
+.radar-marquee-outer {
   flex: 1;
-  min-width: 12rem;
+  min-width: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 0.75rem, #000 calc(100% - 0.75rem), transparent);
+}
+
+.radar-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: radar-marquee-move 22s linear infinite;
+}
+
+.radar-marquee-segment {
+  flex-shrink: 0;
+  padding-right: 4rem;
+  white-space: nowrap;
+}
+
+@keyframes radar-marquee-move {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-marquee-track {
+    animation: none;
+    flex-wrap: wrap;
+  }
 }
 
 .radar-full-trigger-banner-close {
