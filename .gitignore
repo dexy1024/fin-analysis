@@ -12,8 +12,13 @@ venv/
 frontend/node_modules/
 frontend/dist/
 
-# 运行日志与本地生成数据（可再生成；避免仓库臃肿）
-logs/
+# 运行日志（体积大、常轮转，不纳入版本）
+logs/*.log
+logs/*.csv
+
+# 双防线雷达摘要与报告：纳入 Git，便于回滚对照与前端摘要一致性
+# （目录 logs/defense_radar/ 下 *.json、*.md 会被跟踪）
+
 backend/data/*.csv
 
 # 系统与编辑器
