@@ -59,6 +59,23 @@
   background: rgba(30, 41, 59, 0.55);
 }
 
+/* 仅梅花2test（889999）mock：摘要 full_trigger 为真时 Tab 橙色（其它品种不用此样式） */
+.daily-tab.daily-tab-full-trigger {
+  color: #fdba74;
+  font-weight: 600;
+}
+
+.daily-tab.daily-tab-full-trigger:hover {
+  color: #ffedd5;
+  background: rgba(234, 88, 12, 0.18);
+}
+
+.daily-tab.daily-tab-full-trigger.daily-tab-active {
+  color: #fff7ed;
+  border-bottom-color: #f97316;
+  background: rgba(234, 88, 12, 0.28);
+}
+
 .card {
   width: 100%;
   max-width: none;

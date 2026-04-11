@@ -8,8 +8,10 @@
     16:01 另写日线；雷达**只读缓存**，不主动拉网补数。
   - C-ZD / A-ZD：本地**日线**缓存上的缠论中枢；现价 P：本地 **60m** 末根收盘（`kline_60_*.csv`）。
   - Markdown 表含 **60分钟笔向**：取 60m `pens_effective` 最后一笔方向（向上/向下）。
+  - **四条件扳机（full_trigger）串联**：①伏击带 ±1% → ②末笔有效笔向下 → ③MACD（两段下跌绿柱面积缩小 **或** 末段绿柱连续缩短）→ ④合并末三根严格底分型 + K3 确认且与图 fractals 末段底分型一致；**全部为真**才记扳机（Tab 橙、前端弹窗）。
   - 仅排障时可 `refresh=True` 或命令行 `--refresh` 强制先拉线上再算。
   - 调度链内由 `kline_scheduler` 在每次 60m 同步后调用；亦可 POST `/api/diagnosis/defense-radar` 或脚本手动跑（默认仍只读本地）。
+  - **梅花2test（889999）** 不列入 `DEFENSE_RADAR_WATCHLIST`：数据为 600873 基座 + 本地 mock 尾部，雷达在跑完实盘列表后 **单独追加** 一行（`analyze_meihua2test_symbol`），与生产标的隔离。
 """
 
 from __future__ import annotations
@@ -24,15 +26,11 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from services.indicators import _axis_date_key, _merge_inclusive_bars, get_index_kline
 
-# 条件 3：比较最近两段向下有效笔的 MACD 绿柱（零轴下）面积；设 false 则摘要中 macd_momentum_ok 恒为 null
-RADAR_MACD_FILTER_ENABLED: bool = os.environ.get("RADAR_MACD_FILTER", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-    "off",
-)
+# 测试标的：与 production watchlist 分离；日线/60m 前半为 600873 复制，之后为 mock（见 build_meihua2test_fixture.py）
+MEIHUA2TEST_CODE = "889999"
+MEIHUA2TEST_NAME = "梅花2test"
 
-# 与 frontend/src/App.tsx 中 CHART_TABS 一致（不含上证指数；本列表为雷达扫描范围）
+# 与 frontend/src/App.tsx 中 CHART_TABS 一致（不含上证指数、不含 889999 mock）
 DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
     ("510300", "沪深300ETF"),
     ("159915", "创业板ETF"),
@@ -58,7 +56,6 @@ DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
     ("002415", "海康威视"),
     ("601919", "中远海控"),
     ("600873", "梅花生物"),
-    ("889999", "梅花2test"),
     ("601166", "兴业银行"),
     ("600900", "长江电力"),
     ("600887", "伊利股份"),
@@ -75,9 +72,6 @@ DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
 )
 
 EXCLUDED_SYMBOLS = frozenset({"sh000001", "SH000001"})
-
-# 仅本地 CSV 夹具（见 scripts/build_meihua2test_fixture.py），定时任务不对其 refresh 拉网
-DEFENSE_RADAR_SYNC_SKIP_CODES: frozenset[str] = frozenset({"889999"})
 
 LAST_SUMMARY_JSON = "last_summary.json"
 
@@ -224,10 +218,38 @@ def _price_in_tier1_or_ultimate_zone(p: float, value_c: float, value_a: float) -
     return bool(in_z1 or in_z2)
 
 
+def chart_tail_bottom_fractal_ok(h60: Dict[str, Any]) -> bool:
+    """
+    与 60m 图一致：全链路 fractals 中存在底分型，且落在「最近一段」合并 K 上（与 HourlyChanChart 蓝三角同源）。
+
+    末三根 OHLC 常与分型日期错开（底分型多在倒数第 2～4 根，末根已是反弹 K），故用末 12 根合并 K
+    的日期集合与分型 date 对齐（不用 bar_index，避免与 date 不一致时误判）。
+    """
+    bars = h60.get("data") or []
+    if len(bars) < 3:
+        return False
+    n = len(bars)
+    n_tail = min(12, n)
+    tail_from = n - n_tail
+    last_keys = {_axis_date_key(b["date"]) for b in bars[tail_from:]}
+    for f in h60.get("fractals") or []:
+        if f.get("type") != "bottom":
+            continue
+        dk = f.get("date")
+        if dk is None:
+            continue
+        try:
+            if _axis_date_key(dk) in last_keys:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def strict_blue_triangle_last_three_raw(bars_raw: List[Dict[str, Any]]) -> bool:
     """
-    仅雷达：合并包含后取时间序末三根 K1,K2,K3，严格底分型 + K3 收盘 > K2 最低。
-    与全链路 _find_fractals_from_standardized 无关，不改变图表分型。
+    雷达辅助：合并包含后取时间序末三根 K1,K2,K3，严格底分型 + K3 收盘 > K2 最低。
+    四条件扳机中与 chart_tail_bottom_fractal_ok 同时满足才记为「蓝三角」通过（与图一致）。
     """
     if len(bars_raw) < 3:
         return False
@@ -286,29 +308,59 @@ def _macd_neg_green_area_between(bars: List[Dict[str, Any]], d_start: str, d_end
     return s
 
 
-def macd_momentum_ok_two_down_pens(h60_payload: Dict[str, Any]) -> Optional[bool]:
+def macd_green_bars_shortening_ok(bars: List[Dict[str, Any]]) -> bool:
     """
-    条件 3：最近一段向下有效笔的绿柱面积 < 再上一段向下有效笔（面积缩小则 True）。
-    未启用 MACD 过滤时返回 None；有效笔不足两段向下笔时返回 True（不挡扳机）。
+    条件 3（分支 B）：末段至少 3 根 K 的 MACD 柱均为负，且逐根抬高（绿柱缩短，向零轴收敛）。
     """
-    if not RADAR_MACD_FILTER_ENABLED:
-        return None
-    pens = h60_payload.get("pens_effective") or []
-    if not pens:
-        return True
-    down_pens: List[Dict[str, Any]] = [p for p in pens if p.get("direction") == "down"]
-    if len(down_pens) < 2:
-        return True
-    prev_pen = down_pens[-2]
-    cur_pen = down_pens[-1]
+    vals: List[float] = []
+    for b in bars[-12:]:
+        m = b.get("macd")
+        if not isinstance(m, dict):
+            continue
+        v = m.get("macd")
+        if v is None:
+            continue
+        try:
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if len(vals) < 3:
+        return False
+    t = vals[-3:]
+    if not all(x < 0 for x in t):
+        return False
+    return bool(t[0] < t[1] < t[2])
+
+
+def macd_condition3_radar_ok(h60_payload: Dict[str, Any]) -> bool:
+    """
+    条件 3（必选）：最近两段向下有效笔的零轴下绿柱面积前者更大、当前段更小；**或**末段绿柱连续缩短。
+    二者满足其一即 True；均不满足则 False（避免无 MACD 依据仍扳机）。
+    """
     bars = h60_payload.get("data") or []
     if not bars:
-        return True
-    a_prev = _macd_neg_green_area_between(bars, str(prev_pen["start_date"]), str(prev_pen["end_date"]))
-    a_cur = _macd_neg_green_area_between(bars, str(cur_pen["start_date"]), str(cur_pen["end_date"]))
-    if a_prev <= 1e-12:
-        return True
-    return bool(a_cur < a_prev)
+        return False
+    pens = h60_payload.get("pens_effective") or []
+    down_pens: List[Dict[str, Any]] = [p for p in pens if p.get("direction") == "down"]
+    area_ok = False
+    if len(down_pens) >= 2:
+        prev_pen = down_pens[-2]
+        cur_pen = down_pens[-1]
+        a_prev = _macd_neg_green_area_between(
+            bars, str(prev_pen["start_date"]), str(prev_pen["end_date"])
+        )
+        a_cur = _macd_neg_green_area_between(
+            bars, str(cur_pen["start_date"]), str(cur_pen["end_date"])
+        )
+        if a_prev > 1e-12 and a_cur < a_prev:
+            area_ok = True
+    shorten_ok = macd_green_bars_shortening_ok(bars)
+    return bool(area_ok or shorten_ok)
+
+
+def macd_momentum_ok_two_down_pens(h60_payload: Dict[str, Any]) -> bool:
+    """兼容单元测试与旧调用名；等价于 macd_condition3_radar_ok。"""
+    return macd_condition3_radar_ok(h60_payload)
 
 
 # 与前端「有警报才展示 tab」一致：仅这三种算有效警报（含【】前缀）
@@ -327,9 +379,16 @@ class DefenseRadarSummaryItem(TypedDict):
     pen_60m: str
     radar_zone_ok: bool
     pen_60m_down: bool
-    macd_momentum_ok: Optional[bool]
+    macd_momentum_ok: bool
     blue_triangle_strict: bool
     full_trigger: bool
+
+
+def _append_meihua2test_row_if_missing(rows: List[DefenseRow], *, refresh: bool) -> None:
+    """889999 不混入 production 循环，仅在末尾单独追加（若调用方未已包含）。"""
+    if any(r.code == MEIHUA2TEST_CODE for r in rows):
+        return
+    rows.append(analyze_meihua2test_symbol(refresh=refresh))
 
 
 def build_defense_radar_summary(
@@ -338,24 +397,11 @@ def build_defense_radar_summary(
     watchlist: Optional[Tuple[Tuple[str, str], ...]] = None,
 ) -> List[DefenseRadarSummaryItem]:
     wl = watchlist or DEFENSE_RADAR_WATCHLIST
-    out: List[DefenseRadarSummaryItem] = []
+    rows: List[DefenseRow] = []
     for code, name in wl:
-        row = analyze_symbol(code, name, refresh=refresh)
-        out.append(
-            {
-                "code": row.code,
-                "name": row.name,
-                "alert": row.alert,
-                "has_alert": defense_alert_is_active(row.alert),
-                "pen_60m": row.pen_60m or "",
-                "radar_zone_ok": row.radar_zone_ok,
-                "pen_60m_down": row.pen_60m_down,
-                "macd_momentum_ok": row.macd_momentum_ok,
-                "blue_triangle_strict": row.blue_triangle_strict,
-                "full_trigger": row.full_trigger,
-            },
-        )
-    return out
+        rows.append(analyze_symbol(code, name, refresh=refresh))
+    _append_meihua2test_row_if_missing(rows, refresh=refresh)
+    return defense_rows_to_summary_items(rows)
 
 
 def _effective_60m_pen_label(h60_payload: Dict[str, Any]) -> Optional[str]:
@@ -383,13 +429,29 @@ class DefenseRow:
     pen_60m: Optional[str] = None
     radar_zone_ok: bool = False
     pen_60m_down: bool = False
-    macd_momentum_ok: Optional[bool] = None
+    macd_momentum_ok: bool = False
     blue_triangle_strict: bool = False
     full_trigger: bool = False
 
 
+def analyze_meihua2test_symbol(*, refresh: bool = False) -> DefenseRow:
+    """
+    梅花2test（889999）专用入口：与 `DEFENSE_RADAR_WATCHLIST` 中的实盘标的隔离。
+    数据由 `build_meihua2test_fixture.py` 生成（600873 历史 + 日历未来 mock）；`get_index_kline` 对 889999
+    在 `MEIHUA2TEST_FUTURE_K=1` 时放宽 end_ts，否则未来 K 不参与计算。
+    """
+    return _compute_defense_row(MEIHUA2TEST_CODE, MEIHUA2TEST_NAME, refresh=refresh)
+
+
 def analyze_symbol(code: str, name: str, *, refresh: bool = False) -> DefenseRow:
-    """日线缓存取 A/C 中枢 ZD；现价取本地 60 分钟最后一根收盘（与定时同步的 60m 数据一致）。"""
+    """production 标的；889999 请用 `analyze_meihua2test_symbol`（本函数对 889999 仍转发至该入口）。"""
+    if code.strip() == MEIHUA2TEST_CODE:
+        return analyze_meihua2test_symbol(refresh=refresh)
+    return _compute_defense_row(code.strip(), name, refresh=refresh)
+
+
+def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> DefenseRow:
+    """四条件雷达核心计算（889999 与实盘共用本实现，仅入口与 watchlist 分离）。"""
     if code.strip() in EXCLUDED_SYMBOLS or code.lower() in EXCLUDED_SYMBOLS:
         return DefenseRow(
             code=code,
@@ -469,13 +531,19 @@ def analyze_symbol(code: str, name: str, *, refresh: bool = False) -> DefenseRow
 
     p = float(bars[-1]["close"])
     alert = _classify(p, c_zd, a_zd)
+    # 四条件串联过滤（全部为真才 full_trigger / Tab 橙色 / 前端弹窗）：
+    # 1 空间：现价在第一或极限防线 ±1% 缓冲带
     zone_ok = _price_in_tier1_or_ultimate_zone(p, c_zd, a_zd)
+    # 2 方向：60m 有效笔最后一笔为向下（红色一笔下）
     pen_label = _effective_60m_pen_label(h60)
     pen_down = pen_label == "向下"
-    macd_ok = macd_momentum_ok_two_down_pens(h60)
-    blue_ok = strict_blue_triangle_last_three_raw(bars)
-    macd_pass = macd_ok is None or macd_ok is True
-    full_ok = bool(zone_ok and pen_down and blue_ok and macd_pass)
+    # 3 动能：两段向下笔绿柱面积缩小，或末段绿柱连续缩短（必选）
+    macd_ok = macd_condition3_radar_ok(h60)
+    # 4 蓝三角：合并后末三根严格底分型 + K3 收盘 > K2 低（末根即走完的 K3）+ 与图 fractals 末段底分型一致
+    strict_tri = strict_blue_triangle_last_three_raw(bars)
+    chart_bottom = chart_tail_bottom_fractal_ok(h60)
+    blue_ok = bool(strict_tri and chart_bottom)
+    full_ok = bool(zone_ok and pen_down and macd_ok and blue_ok)
     return DefenseRow(
         code=code,
         name=name,
@@ -516,6 +584,7 @@ def run_defense_radar(
     rows_out: List[DefenseRow] = []
     for code, name in wl:
         rows_out.append(analyze_symbol(code, name, refresh=refresh))
+    _append_meihua2test_row_if_missing(rows_out, refresh=refresh)
 
     lines: List[str] = [
         "# 双防线雷达",

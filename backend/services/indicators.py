@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -22,6 +23,58 @@ from services.index_cache import (
 
 KLINE_60_CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 _KLINE_RESP_CACHE_TTL_SECONDS = 300
+
+
+def _meihua2test_future_k_env_enabled() -> bool:
+    """梅花2test（889999）演示用：允许 CSV 中「晚于当前时刻/今日」的 K 参与计算（默认关闭）。"""
+    return os.environ.get("MEIHUA2TEST_FUTURE_K", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _meihua2test_extend_end_ts_if_demo(
+    symbol: str,
+    period: str,
+    default_end: pd.Timestamp,
+) -> pd.Timestamp:
+    """
+    仅 symbol=889999 且 MEIHUA2TEST_FUTURE_K=1：将 end_ts 扩展到本地 CSV 内最大日期，
+    使 mock 的「未来」K 不被默认的 now/today 截掉。
+    """
+    if symbol.strip() != "889999" or not _meihua2test_future_k_env_enabled():
+        return default_end
+    try:
+        api_sym, src = _split_kline_symbol(symbol)
+    except ValueError:
+        return default_end
+
+    mx: pd.Timestamp | None = None
+    if period == "daily" and src == "a_share":
+        path = _a_share_daily_cache_path(api_sym)
+        if path.is_file():
+            try:
+                peek = pd.read_csv(path, parse_dates=["date"], usecols=["date"])
+            except (ValueError, KeyError, pd.errors.EmptyDataError):
+                peek = None
+            if peek is not None and not peek.empty:
+                mx = pd.to_datetime(peek["date"], errors="coerce").max()
+    elif period == "60":
+        path = _kline_60_cache_path(symbol)
+        if path.is_file():
+            try:
+                peek = pd.read_csv(path, parse_dates=["date"], usecols=["date"])
+            except (ValueError, KeyError, pd.errors.EmptyDataError):
+                peek = None
+            if peek is not None and not peek.empty:
+                mx = pd.to_datetime(peek["date"], errors="coerce").max()
+
+    if mx is None or pd.isna(mx):
+        return default_end
+    if getattr(mx, "tzinfo", None) is not None:
+        mx = mx.tz_convert("Asia/Shanghai").tz_localize(None)
+    if period == "daily":
+        mx = mx.normalize()
+    if mx > default_end:
+        return mx
+    return default_end
 _KLINE_RESP_CACHE_MAX_ITEMS = 256
 # (缓存写入时刻, 写入时本地 CSV 的 st_mtime, 响应体)；日线与 60m 分文件，任一侧更新只 purge 对应 period
 _KLINE_RESP_CACHE: Dict[tuple[str, str, str, str], tuple[float, float | None, Dict[str, Any]]] = {}
@@ -1365,6 +1418,9 @@ def get_index_kline(
         end_ts = pd.Timestamp.now()
     else:
         end_ts = pd.Timestamp.today().normalize()
+
+    end_ts = _meihua2test_extend_end_ts_if_demo(symbol, period, end_ts)
+
     if end_ts < start_ts:
         raise ValueError("end_date 不能早于 start_date")
 

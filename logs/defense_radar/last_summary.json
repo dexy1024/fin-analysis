@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-11T19:10:14",
+  "generated_at": "2026-04-11T19:43:50",
   "symbols": [
     {
       "code": "510300",
@@ -9,7 +9,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -69,7 +69,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -141,7 +141,7 @@
       "pen_60m": "向下",
       "radar_zone_ok": false,
       "pen_60m_down": true,
-      "macd_momentum_ok": false,
+      "macd_momentum_ok": true,
       "blue_triangle_strict": true,
       "full_trigger": false
     },
@@ -177,7 +177,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": false,
+      "macd_momentum_ok": true,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -225,7 +225,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": false,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -237,7 +237,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -249,9 +249,9 @@
       "pen_60m": "向下",
       "radar_zone_ok": true,
       "pen_60m_down": true,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": true
+      "full_trigger": false
     },
     {
       "code": "002415",
@@ -273,7 +273,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -309,7 +309,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -345,7 +345,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": false,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -357,7 +357,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": false,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": true,
       "full_trigger": false
     },
@@ -429,7 +429,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -441,7 +441,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -453,7 +453,7 @@
       "pen_60m": "",
       "radar_zone_ok": false,
       "pen_60m_down": false,
-      "macd_momentum_ok": null,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     }

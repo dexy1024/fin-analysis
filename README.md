@@ -154,6 +154,16 @@ python backend/run_defense_radar.py          # 只读本地
 python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 ```
 
+### 4.7 梅花2test（889999）与「未来 K」Mock
+
+- 测试标的 **889999**（显示名梅花2test）**不列入** `DEFENSE_RADAR_WATCHLIST`：与实盘雷达列表隔离，跑雷达时在实盘标的之后**单独追加**一行（`analyze_meihua2test_symbol`）；定时任务也不会对 889999 做网络 refresh，仅读本地夹具 CSV。
+- 本地 CSV 由 `backend/scripts/build_meihua2test_fixture.py` 从 600873 复制基座并**追加日历上在未来**的日线与 60m；脚本结束时会校验 `full_trigger=True`（需本机已有 `600873` 源 CSV）。
+- **默认行为**：`get_index_kline` 在未指定 `end_date` 时按**当前时刻 / 今日**截断，CSV 里晚于该时刻的 K **不会参与**缠论与雷达。若要在浏览器或 API 里看到这段「未来」数据，启动后端前请执行：  
+  `export MEIHUA2TEST_FUTURE_K=1`  
+  仅对 **889999** 生效，不设则与线上一致。
+- 重新生成夹具并安装到 `backend/data/`：  
+  `cd backend && python3 scripts/build_meihua2test_fixture.py`
+
 ---
 
 ## 5. 前端逻辑（`frontend/src`）

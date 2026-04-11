@@ -399,7 +399,7 @@ function writeTrigSeen(seen: Record<string, true>): void {
   }
 }
 
-/** full_trigger 去重后返回跑马灯文案（不弹系统通知、不蜂鸣） */
+/** full_trigger 去重后返回跑马灯文案；首次出现的标的会同步 `window.alert`（与 Tab 橙色同源四条件） */
 function alertRadarFullTriggers(data: DefenseRadarSummaryResponse): string | null {
   const genAt =
     typeof data.generated_at === 'string' && data.generated_at.trim() ? data.generated_at.trim() : '_'
@@ -438,13 +438,15 @@ function App() {
   const [defenseCodeToAlert, setDefenseCodeToAlert] = useState<Map<string, boolean> | null>(null)
   /** code -> 雷达摘要中的 60 分钟笔向（向上/向下/空）；与 defenseCodeToAlert 同次拉取 */
   const [defensePen60mByCode, setDefensePen60mByCode] = useState<Map<string, string> | null>(null)
+  /** 仅梅花2test（889999）mock：摘要中 full_trigger 为真时 Tab 橙色（其它标的不再用橙色 Tab） */
+  const [meihuaMockFullTriggerTab, setMeihuaMockFullTriggerTab] = useState(false)
   /** 与 last_summary.json / 雷达 md 同步的预警原文（刷新页面后从 GET summary 拉取） */
   const [defenseAlertTextByCode, setDefenseAlertTextByCode] = useState<Map<string, string>>(
     () => new Map(),
   )
   /** 摘要生成时间 ISO，便于与磁盘 json 对照 */
   const [defenseSummaryGeneratedAt, setDefenseSummaryGeneratedAt] = useState<string | null>(null)
-  /** 无桌面通知权限时展示四条件扳机文案 */
+  /** 四条件扳机：顶栏跑马灯 + 首次弹窗 */
   const [fullTriggerBanner, setFullTriggerBanner] = useState<string | null>(null)
 
   const loadDefenseSummary = useCallback(async () => {
@@ -453,6 +455,7 @@ function App() {
       const m = new Map<string, boolean>()
       const pens = new Map<string, string>()
       const texts = new Map<string, string>()
+      let meihuaTrig = false
       for (const s of data.symbols ?? []) {
         const code = String(s.code ?? '').trim()
         if (!code) continue
@@ -462,10 +465,14 @@ function App() {
         if (typeof s.alert === 'string' && s.alert.trim()) {
           texts.set(code, s.alert.trim())
         }
+        if (code === '889999' && s.full_trigger === true) {
+          meihuaTrig = true
+        }
       }
       setDefenseCodeToAlert(m)
       setDefensePen60mByCode(pens)
       setDefenseAlertTextByCode(texts)
+      setMeihuaMockFullTriggerTab(meihuaTrig)
       setDefenseSummaryGeneratedAt(
         typeof data.generated_at === 'string' && data.generated_at.trim()
           ? data.generated_at.trim()
@@ -473,11 +480,15 @@ function App() {
       )
       const banner = alertRadarFullTriggers(data)
       setFullTriggerBanner(banner)
+      if (banner) {
+        window.alert(banner)
+      }
     } catch (err) {
       console.warn('双防线摘要拉取失败，非核心 Tab 将隐藏：', err)
       setDefenseCodeToAlert(new Map())
       setDefensePen60mByCode(new Map())
       setDefenseAlertTextByCode(new Map())
+      setMeihuaMockFullTriggerTab(false)
       setDefenseSummaryGeneratedAt(null)
       setFullTriggerBanner(null)
     }
@@ -698,7 +709,7 @@ function App() {
                 role="tab"
                 aria-selected={dailyTab === tab.key}
                 id={`tab-${tab.key}`}
-                className={`daily-tab ${dailyTab === tab.key ? 'daily-tab-active' : ''}`}
+                className={`daily-tab${tab.code === '889999' && meihuaMockFullTriggerTab ? ' daily-tab-full-trigger' : ''} ${dailyTab === tab.key ? 'daily-tab-active' : ''}`}
                 onClick={() => setDailyTab(tab.key)}
               >
                 {tab.tabLabel}
