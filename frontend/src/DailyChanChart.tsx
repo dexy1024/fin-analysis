@@ -214,8 +214,9 @@ export function DailyChanChart({
     if (byStart !== 0) return byStart
     return a.end_date.localeCompare(b.end_date)
   })
-  const lastClose =
-    indexKline.data.length > 0 ? indexKline.data[indexKline.data.length - 1].close : 0
+  const lastPoint = indexKline.data.length > 0 ? indexKline.data[indexKline.data.length - 1] : null
+  const lastClose = lastPoint?.close ?? 0
+  const lastDate = lastPoint?.date ?? ''
   const neutralLine = '#64748b'
   /** 时间轴最右侧的中枢视为「当前 C 中枢」（仅该中枢 markArea 绿/红填充；ZG/ZD/DD 线与 A/B 一致为全屏 ZG/ZD + 框内 DD） */
   const cCentralIdx = centrals.length > 0 ? centrals.length - 1 : -1
@@ -705,8 +706,10 @@ export function DailyChanChart({
           ) : null}
           <div className="central-compare-aside-title">实时对比</div>
           <div className="central-compare-price">
-            现价{' '}
-            <strong>{lastClose.toFixed(3)}</strong>
+            现价 <strong>{lastClose.toFixed(3)}</strong>
+            <span className="central-compare-time" style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: '#94a3b8', fontWeight: 400 }}>
+              {lastDate}
+            </span>
           </div>
           {centrals.length === 0 ? (
             <p className="central-compare-muted">暂无中枢数据</p>
