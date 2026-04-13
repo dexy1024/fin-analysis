@@ -232,6 +232,12 @@ export interface DefenseRadarSummaryItem {
   blue_triangle_strict?: boolean
   /** 四条件同时满足（条件3 未启用时视为通过） */
   full_trigger?: boolean
+  /** 条件5：60m 现价在 C 中枢内（ZD～ZG） */
+  in_c_central?: boolean
+  /** 条件6：60m 底背驰点落在当前向上笔内 */
+  has_bottom_div_in_switch?: boolean
+  /** 条件7：60m BOLL 站回中轨 */
+  boll_buy?: boolean
 }
 
 export interface DefenseRadarSummaryResponse {

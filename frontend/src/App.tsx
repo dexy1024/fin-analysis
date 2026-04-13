@@ -386,6 +386,18 @@ function App() {
   const [defenseCodeToAlert, setDefenseCodeToAlert] = useState<Map<string, boolean> | null>(null)
   /** code -> 雷达摘要中的 60 分钟笔向（向上/向下/空）；与 defenseCodeToAlert 同次拉取 */
   const [defensePen60mByCode, setDefensePen60mByCode] = useState<Map<string, string> | null>(null)
+  /** code -> 60分钟买点7条件（后端定时计算，前端直接使用） */
+  const [defenseBuyConditionsByCode, setDefenseBuyConditionsByCode] = useState<
+    Map<string, {
+      radarZoneOk: boolean
+      pen60mDown: boolean
+      macdMomentumOk: boolean
+      blueTriangleStrict: boolean
+      inCCentral: boolean
+      hasBottomDivInSwitch: boolean
+      bollBuy: boolean
+    }>
+  >(() => new Map())
   /** 仅梅花2test（889999）mock：摘要中 full_trigger 为真时 Tab 橙色（其它标的不再用橙色 Tab） */
   const [meihuaMockFullTriggerTab, setMeihuaMockFullTriggerTab] = useState(false)
   /** 与 last_summary.json / 雷达 md 同步的预警原文（刷新页面后从 GET summary 拉取） */
@@ -415,6 +427,15 @@ function App() {
       const m = new Map<string, boolean>()
       const pens = new Map<string, string>()
       const texts = new Map<string, string>()
+      const buyConds = new Map<string, {
+        radarZoneOk: boolean
+        pen60mDown: boolean
+        macdMomentumOk: boolean
+        blueTriangleStrict: boolean
+        inCCentral: boolean
+        hasBottomDivInSwitch: boolean
+        bollBuy: boolean
+      }>()
       let meihuaTrig = false
       for (const s of data.symbols ?? []) {
         const code = String(s.code ?? '').trim()
@@ -428,10 +449,21 @@ function App() {
         if (code === '889999' && s.full_trigger === true) {
           meihuaTrig = true
         }
+        // 存储7个买点条件（后端定时计算）
+        buyConds.set(code, {
+          radarZoneOk: s.radar_zone_ok === true,
+          pen60mDown: s.pen_60m_down === true,
+          macdMomentumOk: s.macd_momentum_ok === true,
+          blueTriangleStrict: s.blue_triangle_strict === true,
+          inCCentral: s.in_c_central === true,
+          hasBottomDivInSwitch: s.has_bottom_div_in_switch === true,
+          bollBuy: s.boll_buy === true,
+        })
       }
       setDefenseCodeToAlert(m)
       setDefensePen60mByCode(pens)
       setDefenseAlertTextByCode(texts)
+      setDefenseBuyConditionsByCode(buyConds)
       setMeihuaMockFullTriggerTab(meihuaTrig)
       setDefenseSummaryGeneratedAt(
         typeof data.generated_at === 'string' && data.generated_at.trim()
@@ -443,6 +475,7 @@ function App() {
       setDefenseCodeToAlert(new Map())
       setDefensePen60mByCode(new Map())
       setDefenseAlertTextByCode(new Map())
+      setDefenseBuyConditionsByCode(new Map())
       setMeihuaMockFullTriggerTab(false)
       setDefenseSummaryGeneratedAt(null)
     }
@@ -729,6 +762,7 @@ function App() {
                     seriesName="上证指数·60m"
                     dailyAZd={indexDailyAZd}
                     dailyCZd={indexDailyCZd}
+                    buyConditions={undefined}
                   />
                 </div>
               )}
@@ -766,6 +800,7 @@ function App() {
                     seriesName={activeChart.seriesName60}
                     dailyAZd={chartDailyAZd}
                     dailyCZd={chartDailyCZd}
+                    buyConditions={defenseBuyConditionsByCode.get(activeChart.code)}
                   />
                 </div>
               )}
