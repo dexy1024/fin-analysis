@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-13T15:04:04",
+  "generated_at": "2026-04-13T23:52:26",
   "symbols": [
     {
       "code": "510300",
@@ -11,7 +11,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "159915",
@@ -23,7 +26,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "588000",
@@ -35,7 +41,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "588200",
@@ -47,7 +56,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "159755",
@@ -59,7 +71,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "513130",
@@ -71,7 +86,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "159992",
@@ -83,7 +101,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "515790",
@@ -95,7 +116,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "159899",
@@ -107,7 +131,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "513360",
@@ -119,7 +146,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "601225",
@@ -131,7 +161,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "002508",
@@ -143,7 +176,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000333",
@@ -155,7 +191,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000429",
@@ -167,7 +206,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000423",
@@ -179,7 +221,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000338",
@@ -191,7 +236,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000895",
@@ -203,7 +251,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "600011",
@@ -215,7 +266,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "601138",
@@ -227,7 +281,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "600660",
@@ -239,7 +296,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "300048",
@@ -251,7 +311,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "002415",
@@ -263,19 +326,25 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "601919",
       "name": "中远海控",
-      "alert": "【一级警报】进入绝对防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
+      "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
+      "has_alert": false,
       "pen_60m": "向下",
-      "radar_zone_ok": true,
+      "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "600873",
@@ -287,7 +356,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "601166",
@@ -299,7 +371,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": true
+      "full_trigger": true,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "600900",
@@ -311,7 +386,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "600887",
@@ -323,7 +401,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "603317",
@@ -335,7 +416,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "601728",
@@ -347,7 +431,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": true
     },
     {
       "code": "601857",
@@ -359,7 +446,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "601766",
@@ -371,7 +461,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "600096",
@@ -383,7 +476,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000001",
@@ -395,7 +491,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "000651",
@@ -407,7 +506,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": true
+      "full_trigger": true,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "002230",
@@ -419,7 +521,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "002714",
@@ -431,7 +536,10 @@
       "pen_60m_down": true,
       "macd_momentum_ok": false,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "hk01810",
@@ -443,7 +551,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
     },
     {
       "code": "889999",
@@ -455,7 +566,10 @@
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": true,
-      "full_trigger": false
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": true
     }
   ]
 }

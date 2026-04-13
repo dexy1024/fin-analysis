@@ -497,6 +497,10 @@ class DefenseRow:
     macd_momentum_ok: bool = False
     blue_triangle_strict: bool = False
     full_trigger: bool = False
+    # 60分钟买点7条件中的剩余3个（与前端HourlyBuyConditionFlags对齐）
+    in_c_central: bool = False  # 【60m】现价在C中枢内（ZD～ZG）
+    has_bottom_div_in_switch: bool = False  # 【60m】底背驰点落在当前向上笔内
+    boll_buy: bool = False  # 【60m】BOLL站回中轨
 
 
 def analyze_meihua2test_symbol(*, refresh: bool = False) -> DefenseRow:
