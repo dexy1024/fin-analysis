@@ -486,11 +486,29 @@ function App() {
     } else {
       list = CHART_TABS_FOR_NAV.filter((tab) => {
         if (ALWAYS_VISIBLE_TAB_KEYS.has(tab.key)) return true
+
+        // 逻辑1：原有逻辑（has_alert + 60分钟笔向下）
         const hasAlert = defenseCodeToAlert.get(String(tab.code)) === true
-        if (!hasAlert) return false
         const pen = defensePen60mByCode.get(String(tab.code)) ?? ''
-        if (pen === '向上') return false
-        return pen === '向下'
+        const condition1 = hasAlert && pen === '向下'
+
+        // 逻辑2：7个买点条件中满足5个或以上
+        const buyConds = defenseBuyConditionsByCode.get(String(tab.code))
+        let condition2 = false
+        if (buyConds) {
+          const metCount = [
+            buyConds.radarZoneOk,
+            buyConds.pen60mDown,
+            buyConds.macdMomentumOk,
+            buyConds.blueTriangleStrict,
+            buyConds.inCCentral,
+            buyConds.hasBottomDivInSwitch,
+            buyConds.bollBuy,
+          ].filter(Boolean).length
+          condition2 = metCount >= 5
+        }
+
+        return condition1 || condition2
       })
     }
     // 始终展示的 Tab 排在最前（避免换行后误以为「消失」）
@@ -500,7 +518,7 @@ function App() {
       if (pa !== pb) return pa - pb
       return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
     })
-  }, [defenseCodeToAlert, defensePen60mByCode])
+  }, [defenseCodeToAlert, defensePen60mByCode, defenseBuyConditionsByCode])
 
   const visibleChartTabs = useMemo(() => {
     const byKey = new Map(CHART_TABS_FOR_NAV.map((t) => [t.key, t] as const))
