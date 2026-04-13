@@ -339,13 +339,14 @@ const CHART_TABS: {
 
 /**
  * 顶栏始终展示（不按双防线摘要隐藏）：
- * 四只核心 ETF（上证指数按钮本就独立常驻）
+ * 四只核心 ETF + 长江电力（上证指数按钮本就独立常驻）
  */
 const ALWAYS_VISIBLE_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
   'etf300',
   'etf588000',
   'etf159915',
   'etf513130',
+  's600900', // 长江电力
 ])
 
 /** 顶栏候选：除港股小米外全部；非 ALWAYS_VISIBLE 品种须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
