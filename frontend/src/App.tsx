@@ -3,6 +3,7 @@ import './App.css'
 import { classifyDefenseAlert, type DefenseAlertKind } from './DefenseAlertBrief'
 import { DailyChanChart } from './DailyChanChart'
 import { HourlyChanChart } from './HourlyChanChart'
+import { computeHourlyBuySellState } from './hourlyBuySellSignals'
 import {
   fetchDefenseRadarSummary,
   fetchIndexKline,
@@ -19,6 +20,18 @@ function sortCentralsChronologically(
     if (byStart !== 0) return byStart
     return a.end_date.localeCompare(b.end_date)
   })
+}
+
+function dailyAZdCzdFromResponse(daily: IndexKlineResponse | null): {
+  dailyAZd: number | null
+  dailyCZd: number | null
+} {
+  if (!daily?.centrals?.length) return { dailyAZd: null, dailyCZd: null }
+  const sorted = sortCentralsChronologically(daily.centrals)
+  return {
+    dailyAZd: Number(sorted[0].zd),
+    dailyCZd: Number(sorted[sorted.length - 1].zd),
+  }
 }
 
 function startDateDaysAgo(days: number): string {
@@ -342,11 +355,12 @@ const CHART_TABS: {
   },
 ]
 
-/** 始终展示（不按雷达隐藏）：沪深300 / 科创50 / 创业板 */
+/** 始终展示（不按雷达隐藏）：沪深300 / 科创50 / 创业板 / 梅花生物 */
 const CORE_ETF_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
   'etf300',
   'etf588000',
   'etf159915',
+  's600873',
 ])
 
 /** 顶栏候选：除港股小米外全部；非核心 ETF 须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
@@ -371,6 +385,7 @@ function emptyChartErrMap(): Record<ChartTabKey, string | null> {
 }
 
 const SS_RADAR_TRIG = 'finRadarTrigV1'
+const SS_HOURLY_SIG = 'finHourlySigV1'
 
 function radarTrigKey(generatedAt: string, code: string): string {
   return `${generatedAt}::::${code}`
@@ -394,6 +409,33 @@ function readTrigSeen(): Record<string, true> {
 function writeTrigSeen(seen: Record<string, true>): void {
   try {
     sessionStorage.setItem(SS_RADAR_TRIG, JSON.stringify(seen))
+  } catch {
+    /* 无痕模式等 */
+  }
+}
+
+function hourlySigKey(code: string, lastBar: string, kind: 'buy' | 'sell'): string {
+  return `${code.trim()}::::${lastBar.trim()}::::${kind}`
+}
+
+function readHourlySigSeen(): Record<string, true> {
+  try {
+    const raw = sessionStorage.getItem(SS_HOURLY_SIG)
+    if (!raw) return {}
+    const o = JSON.parse(raw) as Record<string, unknown>
+    const out: Record<string, true> = {}
+    for (const k of Object.keys(o)) {
+      if (o[k]) out[k] = true
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeHourlySigSeen(seen: Record<string, true>): void {
+  try {
+    sessionStorage.setItem(SS_HOURLY_SIG, JSON.stringify(seen))
   } catch {
     /* 无痕模式等 */
   }
@@ -450,6 +492,8 @@ function App() {
   const [defenseSummaryGeneratedAt, setDefenseSummaryGeneratedAt] = useState<string | null>(null)
   /** 仅 889999 mock：顶栏跑马灯 + 首次弹窗 */
   const [fullTriggerBanner, setFullTriggerBanner] = useState<string | null>(null)
+  /** 60m 买/卖条件（与右侧面板同源）触发时的跑马灯；按标的+末根时间+买/卖类型 session 去重 */
+  const [hourlySignalMarquee, setHourlySignalMarquee] = useState<string | null>(null)
 
   const loadDefenseSummary = useCallback(async () => {
     try {
@@ -629,6 +673,60 @@ function App() {
     void fetchDailyForTab(dailyTab)
   }, [dailyTab, chartDaily, fetchDailyForTab])
 
+  /** 60m 买/卖与右侧面板同源；已加载日线+60m 的品种均参与扫描；sessionStorage 按 code+末根时间+买/卖去重 */
+  useEffect(() => {
+    type Cand = { code: string; label: string; h60: IndexKlineResponse; daily: IndexKlineResponse }
+    const cands: Cand[] = []
+    if (indexKline60 && indexKline && indexKline60.data.length >= 3) {
+      cands.push({
+        code: String(indexKline60.symbol ?? '').trim() || 'sh000001',
+        label: '上证指数',
+        h60: indexKline60,
+        daily: indexKline,
+      })
+    }
+    for (const t of CHART_TABS) {
+      const h = chart60[t.key]
+      const d = chartDaily[t.key]
+      if (h && d && h.data.length >= 3) {
+        cands.push({
+          code: String(h.symbol ?? '').trim() || t.code,
+          label: t.tabLabel,
+          h60: h,
+          daily: d,
+        })
+      }
+    }
+    const seen = readHourlySigSeen()
+    const next: Record<string, true> = { ...seen }
+    const parts: string[] = []
+    for (const c of cands) {
+      const { dailyAZd, dailyCZd } = dailyAZdCzdFromResponse(c.daily)
+      const st = computeHourlyBuySellState(c.h60, dailyAZd, dailyCZd)
+      const lastBar = c.h60.data[c.h60.data.length - 1]?.date ?? ''
+      if (!lastBar) continue
+      if (st.sellSignal) {
+        const k = hourlySigKey(c.code, lastBar, 'sell')
+        if (!next[k]) {
+          next[k] = true
+          const rs = st.signalMarker?.reasons.join('；') ?? ''
+          parts.push(`【60m卖】${c.label}（${c.code}）@${lastBar}${rs ? ` · ${rs}` : ''}`)
+        }
+      } else if (st.buySignal) {
+        const k = hourlySigKey(c.code, lastBar, 'buy')
+        if (!next[k]) {
+          next[k] = true
+          const rs = st.signalMarker?.reasons.join('；') ?? ''
+          parts.push(`【60m买】${c.label}（${c.code}）@${lastBar}${rs ? ` · ${rs}` : ''}`)
+        }
+      }
+    }
+    if (parts.length > 0) {
+      writeHourlySigSeen(next)
+      setHourlySignalMarquee(parts.join(' ｜ '))
+    }
+  }, [indexKline60, indexKline, chart60, chartDaily])
+
   const indexDailyCentrals = indexKline?.centrals?.length
     ? sortCentralsChronologically(indexKline.centrals)
     : []
@@ -678,6 +776,25 @@ function App() {
             type="button"
             className="radar-full-trigger-banner-close"
             onClick={() => setFullTriggerBanner(null)}
+          >
+            关闭
+          </button>
+        </div>
+      ) : null}
+      {hourlySignalMarquee ? (
+        <div className="hourly-signal-marquee-banner" role="status">
+          <div className="radar-marquee-outer">
+            <div className="radar-marquee-track">
+              <span className="radar-marquee-segment">{hourlySignalMarquee}</span>
+              <span className="radar-marquee-segment" aria-hidden="true">
+                {hourlySignalMarquee}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="radar-full-trigger-banner-close"
+            onClick={() => setHourlySignalMarquee(null)}
           >
             关闭
           </button>
