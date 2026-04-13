@@ -3,13 +3,7 @@ import './App.css'
 import { classifyDefenseAlert, type DefenseAlertKind } from './DefenseAlertBrief'
 import { DailyChanChart } from './DailyChanChart'
 import { HourlyChanChart } from './HourlyChanChart'
-import { computeHourlyBuySellState } from './hourlyBuySellSignals'
-import {
-  fetchDefenseRadarSummary,
-  fetchIndexKline,
-  type DefenseRadarSummaryResponse,
-  type IndexKlineResponse,
-} from './api/stock'
+import { fetchDefenseRadarSummary, fetchIndexKline, type IndexKlineResponse } from './api/stock'
 
 /** 与 DailyChanChart 一致：按中枢起始日（再按结束日）排序，首段为 A、末段为 C */
 function sortCentralsChronologically(
@@ -20,18 +14,6 @@ function sortCentralsChronologically(
     if (byStart !== 0) return byStart
     return a.end_date.localeCompare(b.end_date)
   })
-}
-
-function dailyAZdCzdFromResponse(daily: IndexKlineResponse | null): {
-  dailyAZd: number | null
-  dailyCZd: number | null
-} {
-  if (!daily?.centrals?.length) return { dailyAZd: null, dailyCZd: null }
-  const sorted = sortCentralsChronologically(daily.centrals)
-  return {
-    dailyAZd: Number(sorted[0].zd),
-    dailyCZd: Number(sorted[sorted.length - 1].zd),
-  }
 }
 
 function startDateDaysAgo(days: number): string {
@@ -355,16 +337,18 @@ const CHART_TABS: {
   },
 ]
 
-/** 始终展示（不按雷达隐藏）：沪深300 / 科创50 / 创业板 / 梅花生物 / 恒生科技ETF */
-const CORE_ETF_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
+/**
+ * 顶栏始终展示（不按双防线摘要隐藏）：
+ * 四只核心 ETF（上证指数按钮本就独立常驻）
+ */
+const ALWAYS_VISIBLE_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
   'etf300',
   'etf588000',
   'etf159915',
-  's600873',
   'etf513130',
 ])
 
-/** 顶栏候选：除港股小米外全部；非核心 ETF 须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
+/** 顶栏候选：除港股小米外全部；非 ALWAYS_VISIBLE 品种须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
 const CHART_TABS_FOR_NAV = CHART_TABS.filter((t) => t.key !== 'hk01810')
 
 type DailyTab = 'index' | ChartTabKey
@@ -438,7 +422,7 @@ function App() {
           : null,
       )
     } catch (err) {
-      console.warn('双防线摘要拉取失败，非核心 Tab 将隐藏：', err)
+      console.warn('双防线摘要拉取失败，仅显示常驻 Tab：', err)
       setDefenseCodeToAlert(new Map())
       setDefensePen60mByCode(new Map())
       setDefenseAlertTextByCode(new Map())
@@ -448,16 +432,26 @@ function App() {
   }, [])
 
   const visibleChartTabs = useMemo(() => {
+    const tabOrder = new Map(CHART_TABS_FOR_NAV.map((t, i) => [t.key, i] as const))
+    let list: typeof CHART_TABS_FOR_NAV
     if (defenseCodeToAlert === null || defensePen60mByCode === null) {
-      return CHART_TABS_FOR_NAV.filter((t) => CORE_ETF_TAB_KEYS.has(t.key))
+      list = CHART_TABS_FOR_NAV.filter((t) => ALWAYS_VISIBLE_TAB_KEYS.has(t.key))
+    } else {
+      list = CHART_TABS_FOR_NAV.filter((tab) => {
+        if (ALWAYS_VISIBLE_TAB_KEYS.has(tab.key)) return true
+        const hasAlert = defenseCodeToAlert.get(String(tab.code)) === true
+        if (!hasAlert) return false
+        const pen = defensePen60mByCode.get(String(tab.code)) ?? ''
+        if (pen === '向上') return false
+        return pen === '向下'
+      })
     }
-    return CHART_TABS_FOR_NAV.filter((tab) => {
-      if (CORE_ETF_TAB_KEYS.has(tab.key)) return true
-      const hasAlert = defenseCodeToAlert.get(String(tab.code)) === true
-      if (!hasAlert) return false
-      const pen = defensePen60mByCode.get(String(tab.code)) ?? ''
-      if (pen === '向上') return false
-      return pen === '向下'
+    // 始终展示的 Tab 排在最前（避免换行后误以为「消失」）
+    return [...list].sort((a, b) => {
+      const pa = ALWAYS_VISIBLE_TAB_KEYS.has(a.key) ? 0 : 1
+      const pb = ALWAYS_VISIBLE_TAB_KEYS.has(b.key) ? 0 : 1
+      if (pa !== pb) return pa - pb
+      return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
     })
   }, [defenseCodeToAlert, defensePen60mByCode])
 
@@ -621,7 +615,7 @@ function App() {
             日K 分析（2024-12-01 至今；个股/港股前复权，ETF 不复权，本地缓存）
             <span className="section-title-hint">
               {' '}
-              · 本地缓存由后端定时更新；除上证与沪深300/科创50/创业板外，仅当双防线为一级/终极/红色警报且雷达摘要中
+              · 本地缓存由后端定时更新；除上证指数与始终展示的 Tab 外，仅当双防线为一级/终极/红色警报且雷达摘要中
               60分钟笔向为「向下」时显示品种 Tab（「向上」不显示）
             </span>
           </h2>

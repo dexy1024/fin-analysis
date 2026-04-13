@@ -178,8 +178,8 @@ python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 
 - **`CHART_TABS`**：每个品种 `key / code / tabLabel / seriesName / seriesName60`。  
 - **顶栏实际列表 `CHART_TABS_FOR_NAV`**：去掉 **港股小米** `hk01810`（不在顶栏展示）。  
-- **始终显示的 Tab（核心 ETF）**：`CORE_ETF_TAB_KEYS` = 沪深300（510300）、科创50（588000）、创业板（159915）。  
-- **其余品种**：须 **`has_alert === true` 且 `pen_60m === "向下"`**（摘要来自 `last_summary.json`）；`pen_60m === "向上"` 不显示。摘要未加载成功时（`defenseCodeToAlert === null`）只显示上述三只核心 ETF。  
+- **始终显示的 Tab**：`ALWAYS_VISIBLE_TAB_KEYS` = 沪深300（510300）、科创50（588000）、创业板（159915）、恒生科技ETF（513130）；上证指数按钮独立常驻。  
+- **其余品种**：须 **`has_alert === true` 且 `pen_60m === "向下"`**（摘要来自 `last_summary.json`）；`pen_60m === "向上"` 不显示。摘要未加载成功时（`defenseCodeToAlert === null`）仅显示上证指数 + 上述 4 只 ETF。  
 - **摘要请求**：`fetchDefenseRadarSummary` 使用 `cache: 'no-store'`；`code` 统一 `String` 化再查 Map，避免类型不一致。
 
 ### 5.2 数据加载时机
