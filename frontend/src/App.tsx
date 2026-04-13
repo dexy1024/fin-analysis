@@ -355,12 +355,13 @@ const CHART_TABS: {
   },
 ]
 
-/** 始终展示（不按雷达隐藏）：沪深300 / 科创50 / 创业板 / 梅花生物 */
+/** 始终展示（不按雷达隐藏）：沪深300 / 科创50 / 创业板 / 梅花生物 / 恒生科技ETF */
 const CORE_ETF_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
   'etf300',
   'etf588000',
   'etf159915',
   's600873',
+  'etf513130',
 ])
 
 /** 顶栏候选：除港股小米外全部；非核心 ETF 须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
