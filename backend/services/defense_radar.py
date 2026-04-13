@@ -411,6 +411,57 @@ def _effective_60m_pen_label(h60_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _macd_neg_area(bars: List[Dict[str, Any]], d0: str, d1: str) -> float:
+    """计算指定日期范围内的MACD负值区域面积（绿柱面积）。"""
+    total = 0.0
+    for bar in bars:
+        date = bar.get("date")
+        if date < d0:
+            continue
+        if date > d1:
+            break
+        macd = bar.get("macd", {}).get("macd")
+        if macd is not None and isinstance(macd, (int, float)) and macd < 0:
+            total += abs(macd)
+    return total
+
+
+def _compute_bottom_divergence_arrows(
+    bars: List[Dict[str, Any]], pens_eff: List[Dict[str, Any]]
+) -> List[Tuple[str, float]]:
+    """
+    计算底背驰箭头位置（与前端 divergenceArrowPointsFromDownPens 对齐）。
+    相邻两根向下笔：终点创新低，且绿柱面积缩小或笔长度更短 → 底背驰。
+    返回: [(date, y), ...]
+    """
+    downs = [p for p in pens_eff if p.get("direction") == "down"]
+    out: List[Tuple[str, float]] = []
+    for i in range(1, len(downs)):
+        prev = downs[i - 1]
+        last = downs[i]
+        # 终点必须创新低
+        if last.get("end_price", 0) >= prev.get("end_price", 0):
+            continue
+        # 计算绿柱面积
+        area_prev = _macd_neg_area(bars, prev.get("start_date", ""), prev.get("end_date", ""))
+        area_last = _macd_neg_area(bars, last.get("start_date", ""), last.get("end_date", ""))
+        # 计算笔长度
+        len_prev = abs(prev.get("end_price", 0) - prev.get("start_price", 0))
+        len_last = abs(last.get("end_price", 0) - last.get("start_price", 0))
+        # 判断背驰（面积缩小或笔长更短）
+        weaker = len_last < len_prev or (area_prev > 1e-8 and area_last < area_prev)
+        if not weaker:
+            continue
+        # 找到对应K线的low值
+        y = last.get("end_price", 0)
+        for bar in bars:
+            if bar.get("date") == last.get("end_date"):
+                y = bar.get("low", y)
+                break
+        out.append((last.get("end_date", ""), y))
+    return out
+
+
 def _compute_hourly_buy_conditions(
     h60: Dict[str, Any], bars: List[Dict[str, Any]], last_price: float
 ) -> Tuple[bool, bool, bool]:
@@ -445,19 +496,16 @@ def _compute_hourly_buy_conditions(
         prev_pen = pens_eff[-2]
         curr_pen = pens_eff[-1]
         if prev_pen.get("direction") == "down" and curr_pen.get("direction") == "up":
-            # 检查底背驰点（黄方块位置）是否在当前向上笔的起始范围内
-            # 底背驰箭头通常在向下笔的末端，也是向上笔的起始
-            div_arrows = h60.get("divergence_arrows_down") or []
+            # 实时计算底背驰箭头（不再依赖不存在的 divergence_arrows_down 字段）
+            div_arrows = _compute_bottom_divergence_arrows(bars, pens_eff)
             if div_arrows:
                 # 获取最后一个底背驰箭头
-                last_div = div_arrows[-1]
-                div_date = last_div.get("date") if isinstance(last_div, dict) else last_div[0] if isinstance(last_div, (list, tuple)) else None
-                if div_date:
-                    # 检查背驰点是否在向上笔的时间范围内
-                    pen_start = curr_pen.get("start_date")
-                    pen_end = curr_pen.get("end_date")
-                    if pen_start and pen_end:
-                        has_bottom_div_in_switch = pen_start <= div_date <= pen_end
+                last_div_date, _ = div_arrows[-1]
+                # 检查背驰点是否在向上笔的时间范围内
+                pen_start = curr_pen.get("start_date")
+                pen_end = curr_pen.get("end_date")
+                if pen_start and pen_end:
+                    has_bottom_div_in_switch = pen_start <= last_div_date <= pen_end
 
     # 3. boll_buy: BOLL站回中轨（与前端逻辑对齐）
     boll_buy = False
