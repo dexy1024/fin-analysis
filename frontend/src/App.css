@@ -544,6 +544,46 @@
   background-color: rgba(15, 23, 42, 0.9);
 }
 
+.pending-hide-banner {
+  margin: 0.25rem 1rem 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  background: rgba(120, 53, 15, 0.3);
+  color: #fef3c7;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pending-hide-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.pending-hide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.pending-hide-confirm {
+  flex-shrink: 0;
+  border: 1px solid rgba(245, 158, 11, 0.65);
+  border-radius: 0.35rem;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fffbeb;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+.pending-hide-confirm:hover {
+  background: rgba(245, 158, 11, 0.35);
+}
+
 @media (max-width: 640px) {
   .app {
     padding-inline: 1rem;

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-13T14:21:09",
+  "generated_at": "2026-04-13T15:04:04",
   "symbols": [
     {
       "code": "510300",
@@ -10,7 +10,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -106,7 +106,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -114,11 +114,11 @@
       "name": "教育ETF",
       "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
       "has_alert": false,
-      "pen_60m": "向上",
+      "pen_60m": "向下",
       "radar_zone_ok": false,
-      "pen_60m_down": false,
-      "macd_momentum_ok": true,
-      "blue_triangle_strict": false,
+      "pen_60m_down": true,
+      "macd_momentum_ok": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -126,12 +126,12 @@
       "name": "陕西煤业",
       "alert": "【一级警报】进入绝对防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向下",
+      "pen_60m": "向上",
       "radar_zone_ok": true,
-      "pen_60m_down": true,
+      "pen_60m_down": false,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
-      "full_trigger": true
+      "blue_triangle_strict": false,
+      "full_trigger": false
     },
     {
       "code": "002508",
@@ -142,7 +142,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -154,7 +154,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -178,7 +178,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -238,7 +238,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -268,13 +268,13 @@
     {
       "code": "601919",
       "name": "中远海控",
-      "alert": "【红色警报】已跌破绝对防线 MIN(C-ZD, A-ZD)！该标的已废，绝对禁买！",
+      "alert": "【一级警报】进入绝对防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向上",
-      "radar_zone_ok": false,
-      "pen_60m_down": false,
+      "pen_60m": "向下",
+      "radar_zone_ok": true,
+      "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -310,7 +310,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -318,11 +318,11 @@
       "name": "伊利股份",
       "alert": "【一级警报】进入绝对防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向下",
+      "pen_60m": "向上",
       "radar_zone_ok": true,
-      "pen_60m_down": true,
+      "pen_60m_down": false,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -330,11 +330,11 @@
       "name": "天味食品",
       "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
       "has_alert": false,
-      "pen_60m": "向上",
+      "pen_60m": "向下",
       "radar_zone_ok": false,
-      "pen_60m_down": false,
-      "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "pen_60m_down": true,
+      "macd_momentum_ok": true,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -346,7 +346,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -412,13 +412,13 @@
     {
       "code": "002230",
       "name": "科大讯飞",
-      "alert": "【一级警报】进入绝对防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
+      "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
+      "has_alert": false,
       "pen_60m": "向下",
-      "radar_zone_ok": true,
+      "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {

@@ -391,6 +391,8 @@ function App() {
   )
   /** 摘要生成时间 ISO，便于与磁盘 json 对照 */
   const [defenseSummaryGeneratedAt, setDefenseSummaryGeneratedAt] = useState<string | null>(null)
+  /** 盘中新增显示过的非常驻标的：本会话内保持显示，不自动隐藏 */
+  const [stickyVisibleTabKeys, setStickyVisibleTabKeys] = useState<Set<ChartTabKey>>(new Set())
 
   const loadDefenseSummary = useCallback(async () => {
     try {
@@ -431,7 +433,7 @@ function App() {
     }
   }, [])
 
-  const visibleChartTabs = useMemo(() => {
+  const baseVisibleChartTabs = useMemo(() => {
     const tabOrder = new Map(CHART_TABS_FOR_NAV.map((t, i) => [t.key, i] as const))
     let list: typeof CHART_TABS_FOR_NAV
     if (defenseCodeToAlert === null || defensePen60mByCode === null) {
@@ -454,6 +456,37 @@ function App() {
       return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
     })
   }, [defenseCodeToAlert, defensePen60mByCode])
+
+  const visibleChartTabs = useMemo(() => {
+    const byKey = new Map(CHART_TABS_FOR_NAV.map((t) => [t.key, t] as const))
+    const tabOrder = new Map(CHART_TABS_FOR_NAV.map((t, i) => [t.key, i] as const))
+    const merged = new Map(baseVisibleChartTabs.map((t) => [t.key, t] as const))
+    for (const key of stickyVisibleTabKeys) {
+      const tab = byKey.get(key)
+      if (tab) merged.set(key, tab)
+    }
+    const list = [...merged.values()]
+    return list.sort((a, b) => {
+      const pa = ALWAYS_VISIBLE_TAB_KEYS.has(a.key) ? 0 : 1
+      const pb = ALWAYS_VISIBLE_TAB_KEYS.has(b.key) ? 0 : 1
+      if (pa !== pb) return pa - pb
+      return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
+    })
+  }, [baseVisibleChartTabs, stickyVisibleTabKeys])
+
+  useEffect(() => {
+    // 新触发显示条件的非常驻标的，加入“保持显示”集合
+    setStickyVisibleTabKeys((prev) => {
+      const next = new Set(prev)
+      for (const t of baseVisibleChartTabs) {
+        if (!ALWAYS_VISIBLE_TAB_KEYS.has(t.key)) {
+          next.add(t.key)
+        }
+      }
+      if (next.size === prev.size) return prev
+      return next
+    })
+  }, [baseVisibleChartTabs])
 
   /**
    * 60m：默认 refresh=false，只读后端本地 CSV/缓存；与 kline_scheduler 槽位同步后的数据一致。
@@ -616,7 +649,7 @@ function App() {
             <span className="section-title-hint">
               {' '}
               · 本地缓存由后端定时更新；除上证指数与始终展示的 Tab 外，仅当双防线为一级/终极/红色警报且雷达摘要中
-              60分钟笔向为「向下」时显示品种 Tab（「向上」不显示）
+              60分钟笔向为「向下」时显示品种 Tab（「向上」不显示）；盘中新出现的品种本会话不自动隐藏
             </span>
           </h2>
           <div className="daily-tabs" role="tablist" aria-label="日K 品种切换">
