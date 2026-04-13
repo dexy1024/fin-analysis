@@ -94,6 +94,9 @@ def defense_rows_to_summary_items(rows: List[DefenseRow]) -> List[DefenseRadarSu
             "macd_momentum_ok": r.macd_momentum_ok,
             "blue_triangle_strict": r.blue_triangle_strict,
             "full_trigger": r.full_trigger,
+            "in_c_central": r.in_c_central,
+            "has_bottom_div_in_switch": r.has_bottom_div_in_switch,
+            "boll_buy": r.boll_buy,
         }
         for r in rows
     ]
@@ -369,6 +372,10 @@ class DefenseRadarSummaryItem(TypedDict):
     macd_momentum_ok: bool
     blue_triangle_strict: bool
     full_trigger: bool
+    # 60分钟买点7条件完整字段（与前端对齐）
+    in_c_central: bool
+    has_bottom_div_in_switch: bool
+    boll_buy: bool
 
 
 def _append_meihua2test_row_if_missing(rows: List[DefenseRow], *, refresh: bool) -> None:
@@ -402,6 +409,77 @@ def _effective_60m_pen_label(h60_payload: Dict[str, Any]) -> Optional[str]:
     if d == "down":
         return "向下"
     return None
+
+
+def _compute_hourly_buy_conditions(
+    h60: Dict[str, Any], bars: List[Dict[str, Any]], last_price: float
+) -> Tuple[bool, bool, bool]:
+    """
+    计算60分钟买点7条件中的剩余3个（与前端 computeHourlyBuySellState 对齐）：
+    - in_c_central: 现价在C中枢内（ZD～ZG）
+    - has_bottom_div_in_switch: 底背驰点落在当前向上笔内
+    - boll_buy: BOLL站回中轨
+    返回: (in_c_central, has_bottom_div_in_switch, boll_buy)
+    """
+    # 1. in_c_central: 检查现价是否在60分钟C中枢内（ZD～ZG）
+    centrals_raw = h60.get("centrals") or []
+    in_c_central = False
+    if centrals_raw:
+        # 按时间排序，最后一个中枢是C中枢
+        centrals_sorted = sorted(
+            list(centrals_raw),
+            key=lambda c: (c.get("start_date", ""), c.get("end_date", ""))
+        )
+        c_central = centrals_sorted[-1] if centrals_sorted else None
+        if c_central:
+            c_zd = float(c_central.get("zd") or 0)
+            c_zg = float(c_central.get("zg") or 0)
+            if c_zd and c_zg:
+                in_c_central = c_zd <= last_price <= c_zg
+
+    # 2. has_bottom_div_in_switch: 底背驰点是否在当前向上笔内
+    has_bottom_div_in_switch = False
+    pens_eff = h60.get("pens_effective") or []
+    if len(pens_eff) >= 2:
+        # 最后两笔：前一下笔、当前上笔
+        prev_pen = pens_eff[-2]
+        curr_pen = pens_eff[-1]
+        if prev_pen.get("direction") == "down" and curr_pen.get("direction") == "up":
+            # 检查底背驰点（黄方块位置）是否在当前向上笔的起始范围内
+            # 底背驰箭头通常在向下笔的末端，也是向上笔的起始
+            div_arrows = h60.get("divergence_arrows_down") or []
+            if div_arrows:
+                # 获取最后一个底背驰箭头
+                last_div = div_arrows[-1]
+                div_date = last_div.get("date") if isinstance(last_div, dict) else last_div[0] if isinstance(last_div, (list, tuple)) else None
+                if div_date:
+                    # 检查背驰点是否在向上笔的时间范围内
+                    pen_start = curr_pen.get("start_date")
+                    pen_end = curr_pen.get("end_date")
+                    if pen_start and pen_end:
+                        has_bottom_div_in_switch = pen_start <= div_date <= pen_end
+
+    # 3. boll_buy: BOLL站回中轨（与前端逻辑对齐）
+    boll_buy = False
+    if len(bars) >= 2:
+        last_bar = bars[-1]
+        prev_bar = bars[-2]
+        last_boll = last_bar.get("boll") or {}
+        prev_boll = prev_bar.get("boll") or {}
+        if last_boll.get("middle") and prev_boll.get("middle"):
+            last_close = float(last_bar.get("close") or 0)
+            prev_close = float(prev_bar.get("close") or 0)
+            last_middle = float(last_boll.get("middle") or 0)
+            prev_middle = float(prev_boll.get("middle") or 0)
+            last_lower = float(last_boll.get("lower") or 0)
+            prev_lower = float(prev_boll.get("lower") or 0)
+            # 站回中轨：当前收盘 > 中轨，且（前收盘 <= 前中轨 或 前低 <= 前下轨*1.01）
+            boll_buy = (
+                last_close > last_middle
+                and (prev_close <= prev_middle or (prev_bar.get("low") and float(prev_bar.get("low")) <= prev_lower * 1.01))
+            )
+
+    return in_c_central, has_bottom_div_in_switch, boll_buy
 
 
 @dataclass
@@ -531,6 +609,10 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
     chart_bottom = chart_tail_bottom_fractal_ok(h60)
     blue_ok = bool(strict_tri and chart_bottom)
     full_ok = bool(zone_ok and pen_down and macd_ok and blue_ok)
+
+    # 计算剩余3个买点条件（与前端 HourlyBuyConditionFlags 对齐）
+    in_c_central, has_bottom_div_in_switch, boll_buy = _compute_hourly_buy_conditions(h60, bars, p)
+
     return DefenseRow(
         code=code,
         name=name,
@@ -545,6 +627,9 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
         macd_momentum_ok=macd_ok,
         blue_triangle_strict=blue_ok,
         full_trigger=full_ok,
+        in_c_central=in_c_central,
+        has_bottom_div_in_switch=has_bottom_div_in_switch,
+        boll_buy=boll_buy,
     )
 
 
