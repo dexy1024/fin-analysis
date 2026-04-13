@@ -384,90 +384,6 @@ function emptyChartErrMap(): Record<ChartTabKey, string | null> {
   return o
 }
 
-const SS_RADAR_TRIG = 'finRadarTrigV1'
-const SS_HOURLY_SIG = 'finHourlySigV1'
-
-function radarTrigKey(generatedAt: string, code: string): string {
-  return `${generatedAt}::::${code}`
-}
-
-function readTrigSeen(): Record<string, true> {
-  try {
-    const raw = sessionStorage.getItem(SS_RADAR_TRIG)
-    if (!raw) return {}
-    const o = JSON.parse(raw) as Record<string, unknown>
-    const out: Record<string, true> = {}
-    for (const k of Object.keys(o)) {
-      if (o[k]) out[k] = true
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
-function writeTrigSeen(seen: Record<string, true>): void {
-  try {
-    sessionStorage.setItem(SS_RADAR_TRIG, JSON.stringify(seen))
-  } catch {
-    /* 无痕模式等 */
-  }
-}
-
-function hourlySigKey(code: string, lastBar: string, kind: 'buy' | 'sell'): string {
-  return `${code.trim()}::::${lastBar.trim()}::::${kind}`
-}
-
-function readHourlySigSeen(): Record<string, true> {
-  try {
-    const raw = sessionStorage.getItem(SS_HOURLY_SIG)
-    if (!raw) return {}
-    const o = JSON.parse(raw) as Record<string, unknown>
-    const out: Record<string, true> = {}
-    for (const k of Object.keys(o)) {
-      if (o[k]) out[k] = true
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
-function writeHourlySigSeen(seen: Record<string, true>): void {
-  try {
-    sessionStorage.setItem(SS_HOURLY_SIG, JSON.stringify(seen))
-  } catch {
-    /* 无痕模式等 */
-  }
-}
-
-/** 仅梅花2test（889999）：full_trigger 跑马灯 + 首次 `window.alert`（实盘 full_trigger 不提示，与 Tab 橙色一致） */
-function alertRadarFullTriggers(data: DefenseRadarSummaryResponse): string | null {
-  const genAt =
-    typeof data.generated_at === 'string' && data.generated_at.trim() ? data.generated_at.trim() : '_'
-  const hits = (data.symbols ?? []).filter(
-    (s) => s.full_trigger === true && String(s.code ?? '').trim() === '889999',
-  )
-  if (hits.length === 0) return null
-
-  const seen = readTrigSeen()
-  const fresh = hits.filter((s) => {
-    const code = String(s.code ?? '').trim()
-    if (!code) return false
-    return !seen[radarTrigKey(genAt, code)]
-  })
-  if (fresh.length === 0) return null
-
-  const next: Record<string, true> = { ...seen }
-  for (const s of fresh) {
-    const code = String(s.code ?? '').trim()
-    if (code) next[radarTrigKey(genAt, code)] = true
-  }
-  writeTrigSeen(next)
-
-  return `【四条件扳机】${fresh.map((s) => `${s.name}（${s.code}）`).join(' · ')}`
-}
-
 function App() {
   const [dailyTab, setDailyTab] = useState<DailyTab>('index')
   const [indexKline, setIndexKline] = useState<IndexKlineResponse | null>(null)
@@ -490,10 +406,6 @@ function App() {
   )
   /** 摘要生成时间 ISO，便于与磁盘 json 对照 */
   const [defenseSummaryGeneratedAt, setDefenseSummaryGeneratedAt] = useState<string | null>(null)
-  /** 仅 889999 mock：顶栏跑马灯 + 首次弹窗 */
-  const [fullTriggerBanner, setFullTriggerBanner] = useState<string | null>(null)
-  /** 60m 买/卖条件（与右侧面板同源）触发时的跑马灯；按标的+末根时间+买/卖类型 session 去重 */
-  const [hourlySignalMarquee, setHourlySignalMarquee] = useState<string | null>(null)
 
   const loadDefenseSummary = useCallback(async () => {
     try {
@@ -524,11 +436,6 @@ function App() {
           ? data.generated_at.trim()
           : null,
       )
-      const banner = alertRadarFullTriggers(data)
-      setFullTriggerBanner(banner)
-      if (banner) {
-        window.alert(banner)
-      }
     } catch (err) {
       console.warn('双防线摘要拉取失败，非核心 Tab 将隐藏：', err)
       setDefenseCodeToAlert(new Map())
@@ -536,7 +443,6 @@ function App() {
       setDefenseAlertTextByCode(new Map())
       setMeihuaMockFullTriggerTab(false)
       setDefenseSummaryGeneratedAt(null)
-      setFullTriggerBanner(null)
     }
   }, [])
 
@@ -673,60 +579,6 @@ function App() {
     void fetchDailyForTab(dailyTab)
   }, [dailyTab, chartDaily, fetchDailyForTab])
 
-  /** 60m 买/卖与右侧面板同源；已加载日线+60m 的品种均参与扫描；sessionStorage 按 code+末根时间+买/卖去重 */
-  useEffect(() => {
-    type Cand = { code: string; label: string; h60: IndexKlineResponse; daily: IndexKlineResponse }
-    const cands: Cand[] = []
-    if (indexKline60 && indexKline && indexKline60.data.length >= 3) {
-      cands.push({
-        code: String(indexKline60.symbol ?? '').trim() || 'sh000001',
-        label: '上证指数',
-        h60: indexKline60,
-        daily: indexKline,
-      })
-    }
-    for (const t of CHART_TABS) {
-      const h = chart60[t.key]
-      const d = chartDaily[t.key]
-      if (h && d && h.data.length >= 3) {
-        cands.push({
-          code: String(h.symbol ?? '').trim() || t.code,
-          label: t.tabLabel,
-          h60: h,
-          daily: d,
-        })
-      }
-    }
-    const seen = readHourlySigSeen()
-    const next: Record<string, true> = { ...seen }
-    const parts: string[] = []
-    for (const c of cands) {
-      const { dailyAZd, dailyCZd } = dailyAZdCzdFromResponse(c.daily)
-      const st = computeHourlyBuySellState(c.h60, dailyAZd, dailyCZd)
-      const lastBar = c.h60.data[c.h60.data.length - 1]?.date ?? ''
-      if (!lastBar) continue
-      if (st.sellSignal) {
-        const k = hourlySigKey(c.code, lastBar, 'sell')
-        if (!next[k]) {
-          next[k] = true
-          const rs = st.signalMarker?.reasons.join('；') ?? ''
-          parts.push(`【60m卖】${c.label}（${c.code}）@${lastBar}${rs ? ` · ${rs}` : ''}`)
-        }
-      } else if (st.buySignal) {
-        const k = hourlySigKey(c.code, lastBar, 'buy')
-        if (!next[k]) {
-          next[k] = true
-          const rs = st.signalMarker?.reasons.join('；') ?? ''
-          parts.push(`【60m买】${c.label}（${c.code}）@${lastBar}${rs ? ` · ${rs}` : ''}`)
-        }
-      }
-    }
-    if (parts.length > 0) {
-      writeHourlySigSeen(next)
-      setHourlySignalMarquee(parts.join(' ｜ '))
-    }
-  }, [indexKline60, indexKline, chart60, chartDaily])
-
   const indexDailyCentrals = indexKline?.centrals?.length
     ? sortCentralsChronologically(indexKline.centrals)
     : []
@@ -762,44 +614,6 @@ function App() {
       className="app"
       style={{ width: '98vw', maxWidth: 'none', margin: 0, minHeight: '100vh' }}
     >
-      {fullTriggerBanner ? (
-        <div className="radar-full-trigger-banner" role="alert">
-          <div className="radar-marquee-outer">
-            <div className="radar-marquee-track">
-              <span className="radar-marquee-segment">{fullTriggerBanner}</span>
-              <span className="radar-marquee-segment" aria-hidden="true">
-                {fullTriggerBanner}
-              </span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="radar-full-trigger-banner-close"
-            onClick={() => setFullTriggerBanner(null)}
-          >
-            关闭
-          </button>
-        </div>
-      ) : null}
-      {hourlySignalMarquee ? (
-        <div className="hourly-signal-marquee-banner" role="status">
-          <div className="radar-marquee-outer">
-            <div className="radar-marquee-track">
-              <span className="radar-marquee-segment">{hourlySignalMarquee}</span>
-              <span className="radar-marquee-segment" aria-hidden="true">
-                {hourlySignalMarquee}
-              </span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="radar-full-trigger-banner-close"
-            onClick={() => setHourlySignalMarquee(null)}
-          >
-            关闭
-          </button>
-        </div>
-      ) : null}
       <main className="app-main">
         <section className="card" style={{ width: '100%', maxWidth: 'none' }}>
           <h2 className="section-title">
