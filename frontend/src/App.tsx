@@ -391,8 +391,20 @@ function App() {
   )
   /** 摘要生成时间 ISO，便于与磁盘 json 对照 */
   const [defenseSummaryGeneratedAt, setDefenseSummaryGeneratedAt] = useState<string | null>(null)
-  /** 盘中新增显示过的非常驻标的：本会话内保持显示，不自动隐藏 */
-  const [stickyVisibleTabKeys, setStickyVisibleTabKeys] = useState<Set<ChartTabKey>>(new Set())
+  /** 盘中新增显示过的非常驻标的：持久化到 localStorage，刷新页面也不消失，直到用户手动移除 */
+  const STICKY_TABS_STORAGE_KEY = 'fin-analysis-sticky-tabs-v1'
+  const [stickyVisibleTabKeys, setStickyVisibleTabKeys] = useState<Set<ChartTabKey>>(() => {
+    try {
+      const raw = localStorage.getItem(STICKY_TABS_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as ChartTabKey[]
+        return new Set(parsed)
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return new Set()
+  })
 
   const loadDefenseSummary = useCallback(async () => {
     try {
@@ -487,6 +499,16 @@ function App() {
       return next
     })
   }, [baseVisibleChartTabs])
+
+  // 持久化 stickyVisibleTabKeys 到 localStorage
+  useEffect(() => {
+    try {
+      const arr = Array.from(stickyVisibleTabKeys)
+      localStorage.setItem(STICKY_TABS_STORAGE_KEY, JSON.stringify(arr))
+    } catch {
+      // ignore storage errors
+    }
+  }, [stickyVisibleTabKeys])
 
   /**
    * 60m：默认 refresh=false，只读后端本地 CSV/缓存；与 kline_scheduler 槽位同步后的数据一致。
