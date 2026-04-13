@@ -648,22 +648,46 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
 
     p = float(bars[-1]["close"])
     alert = _classify(p, c_zd, a_zd)
-    # 四条件串联过滤（全部为真才 full_trigger / Tab 橙色 / 前端弹窗）：
-    # 1 空间：现价在第一或极限防线 ±1% 缓冲带
-    zone_ok = _price_in_tier1_or_ultimate_zone(p, c_zd, a_zd)
-    # 2 方向：60m 有效笔最后一笔为向下（红色一笔下）
-    pen_label = _effective_60m_pen_label(h60)
-    pen_down = pen_label == "向下"
-    # 3 动能：两段向下笔绿柱面积缩小，或末段绿柱连续缩短（必选）
-    macd_ok = macd_condition3_radar_ok(h60)
-    # 4 蓝三角：合并后末三根严格底分型 + K3 收盘 > K2 低（末根即走完的 K3）+ 与图 fractals 末段底分型一致
-    strict_tri = strict_blue_triangle_last_three_raw(bars)
-    chart_bottom = chart_tail_bottom_fractal_ok(h60)
-    blue_ok = bool(strict_tri and chart_bottom)
-    full_ok = bool(zone_ok and pen_down and macd_ok and blue_ok)
 
-    # 计算剩余3个买点条件（与前端 HourlyBuyConditionFlags 对齐）
+    # ========== 7个买点条件（与前端 HourlyBuyConditionFlags 对齐）==========
+    # 1. radar_zone_ok（原：±1%缓冲带）-> 改为：keepDailySupport（现价 >= MIN(C-ZD, A-ZD)）
+    absolute_bottom = min(c_zd, a_zd) if c_zd and a_zd else None
+    radar_zone_ok = absolute_bottom is not None and p >= absolute_bottom
+
+    # 2. pen_60m_down（原：末笔向下）-> 改为：switchedDownToUp（前一下笔、当前上笔）
+    pens_eff = h60.get("pens_effective") or []
+    switched_down_to_up = (
+        len(pens_eff) >= 2
+        and pens_eff[-2].get("direction") == "down"
+        and pens_eff[-1].get("direction") == "up"
+    )
+    pen_60m_down = switched_down_to_up  # 字段名保留，逻辑改为「前下+当前上」
+    pen_label = _effective_60m_pen_label(h60)
+
+    # 3. macd_momentum_ok：保持现有逻辑（两段向下笔绿柱面积缩小）
+    macd_ok = macd_condition3_radar_ok(h60)
+
+    # 4. blue_triangle_strict（原：末三K底分型）-> 改为：hasBottomFractalInSwitch（当前向上笔内有底分型）
+    fractals = h60.get("fractals") or []
+    last_up_pen = pens_eff[-1] if switched_down_to_up else None
+    blue_ok = False
+    if last_up_pen:
+        blue_ok = any(
+            f.get("type") == "bottom"
+            and last_up_pen.get("start_date") <= f.get("date") <= last_up_pen.get("end_date")
+            for f in fractals
+        )
+
+    # 5-7. 其余3个条件
     in_c_central, has_bottom_div_in_switch, boll_buy = _compute_hourly_buy_conditions(h60, bars, p)
+
+    # 四条件串联过滤（全部为真才 full_trigger / Tab 橙色）——保留原口径用于触发信号
+    zone_ok_legacy = _price_in_tier1_or_ultimate_zone(p, c_zd, a_zd)
+    pen_down_legacy = pen_label == "向下"
+    strict_tri_legacy = strict_blue_triangle_last_three_raw(bars)
+    chart_bottom_legacy = chart_tail_bottom_fractal_ok(h60)
+    blue_ok_legacy = bool(strict_tri_legacy and chart_bottom_legacy)
+    full_ok = bool(zone_ok_legacy and pen_down_legacy and macd_ok and blue_ok_legacy)
 
     return DefenseRow(
         code=code,
@@ -674,8 +698,8 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
         last_price=round(p, 4),
         error=None,
         pen_60m=pen_label,
-        radar_zone_ok=zone_ok,
-        pen_60m_down=pen_down,
+        radar_zone_ok=radar_zone_ok,
+        pen_60m_down=pen_60m_down,
         macd_momentum_ok=macd_ok,
         blue_triangle_strict=blue_ok,
         full_trigger=full_ok,
