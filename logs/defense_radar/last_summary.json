@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-11T20:09:36",
+  "generated_at": "2026-04-13T11:46:23",
   "symbols": [
     {
       "code": "510300",
@@ -28,10 +28,10 @@
     {
       "code": "588000",
       "name": "科创50ETF",
-      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
+      "alert": "现价高于第一防线伏击上沿，未进入伏击区",
+      "has_alert": false,
       "pen_60m": "向上",
-      "radar_zone_ok": true,
+      "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
@@ -88,10 +88,10 @@
     {
       "code": "515790",
       "name": "光伏ETF",
-      "alert": "【终极警报】退守极限防线！进入伏击圈！盯60分钟蓝三角！",
-      "has_alert": true,
+      "alert": "观望，等待飞刀继续下落...",
+      "has_alert": false,
       "pen_60m": "向上",
-      "radar_zone_ok": true,
+      "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
@@ -112,10 +112,10 @@
     {
       "code": "513360",
       "name": "教育ETF",
-      "alert": "现价高于第一防线伏击上沿，未进入伏击区",
-      "has_alert": false,
+      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
+      "has_alert": true,
       "pen_60m": "向上",
-      "radar_zone_ok": false,
+      "radar_zone_ok": true,
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
@@ -138,11 +138,11 @@
       "name": "老板电器",
       "alert": "现价高于第一防线伏击上沿，未进入伏击区",
       "has_alert": false,
-      "pen_60m": "向下",
+      "pen_60m": "向上",
       "radar_zone_ok": false,
-      "pen_60m_down": true,
-      "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "pen_60m_down": false,
+      "macd_momentum_ok": false,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -150,9 +150,9 @@
       "name": "美的集团",
       "alert": "现价高于第一防线伏击上沿，未进入伏击区",
       "has_alert": false,
-      "pen_60m": "向下",
+      "pen_60m": "向上",
       "radar_zone_ok": false,
-      "pen_60m_down": true,
+      "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
       "full_trigger": false
@@ -160,10 +160,10 @@
     {
       "code": "000429",
       "name": "粤高速",
-      "alert": "观望，等待飞刀继续下落...",
-      "has_alert": false,
+      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
+      "has_alert": true,
       "pen_60m": "向上",
-      "radar_zone_ok": false,
+      "radar_zone_ok": true,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
@@ -177,7 +177,7 @@
       "pen_60m": "向上",
       "radar_zone_ok": true,
       "pen_60m_down": false,
-      "macd_momentum_ok": true,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     },
@@ -190,7 +190,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -202,7 +202,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -214,7 +214,7 @@
       "radar_zone_ok": true,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -232,10 +232,10 @@
     {
       "code": "600660",
       "name": "福耀玻璃",
-      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
+      "alert": "现价高于第一防线伏击上沿，未进入伏击区",
+      "has_alert": false,
       "pen_60m": "向上",
-      "radar_zone_ok": true,
+      "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
       "blue_triangle_strict": false,
@@ -250,7 +250,7 @@
       "radar_zone_ok": true,
       "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -268,7 +268,7 @@
     {
       "code": "601919",
       "name": "中远海控",
-      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
+      "alert": "【终极警报】退守极限防线！进入伏击圈！盯60分钟蓝三角！",
       "has_alert": true,
       "pen_60m": "向上",
       "radar_zone_ok": true,
@@ -282,12 +282,12 @@
       "name": "梅花生物",
       "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向下",
+      "pen_60m": "向上",
       "radar_zone_ok": true,
-      "pen_60m_down": true,
+      "pen_60m_down": false,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
-      "full_trigger": true
+      "blue_triangle_strict": false,
+      "full_trigger": false
     },
     {
       "code": "601166",
@@ -310,8 +310,8 @@
       "radar_zone_ok": true,
       "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
-      "full_trigger": true
+      "blue_triangle_strict": false,
+      "full_trigger": false
     },
     {
       "code": "600887",
@@ -346,7 +346,7 @@
       "radar_zone_ok": false,
       "pen_60m_down": false,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false
     },
     {
@@ -354,21 +354,21 @@
       "name": "中国石油",
       "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向上",
+      "pen_60m": "向下",
       "radar_zone_ok": true,
-      "pen_60m_down": false,
+      "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": false,
-      "full_trigger": false
+      "blue_triangle_strict": true,
+      "full_trigger": true
     },
     {
       "code": "601766",
       "name": "中国中车",
       "alert": "现价高于第一防线伏击上沿，未进入伏击区",
       "has_alert": false,
-      "pen_60m": "向下",
+      "pen_60m": "向上",
       "radar_zone_ok": false,
-      "pen_60m_down": true,
+      "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
       "full_trigger": false
@@ -376,10 +376,10 @@
     {
       "code": "600096",
       "name": "云天化",
-      "alert": "观望，等待飞刀继续下落...",
-      "has_alert": false,
+      "alert": "【终极警报】退守极限防线！进入伏击圈！盯60分钟蓝三角！",
+      "has_alert": true,
       "pen_60m": "向上",
-      "radar_zone_ok": false,
+      "radar_zone_ok": true,
       "pen_60m_down": false,
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
@@ -390,11 +390,11 @@
       "name": "平安银行",
       "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向上",
+      "pen_60m": "向下",
       "radar_zone_ok": true,
-      "pen_60m_down": false,
-      "macd_momentum_ok": true,
-      "blue_triangle_strict": false,
+      "pen_60m_down": true,
+      "macd_momentum_ok": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -406,31 +406,31 @@
       "radar_zone_ok": true,
       "pen_60m_down": true,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
-      "full_trigger": true
+      "blue_triangle_strict": false,
+      "full_trigger": false
     },
     {
       "code": "002230",
       "name": "科大讯飞",
       "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
       "has_alert": true,
-      "pen_60m": "向上",
+      "pen_60m": "向下",
       "radar_zone_ok": true,
-      "pen_60m_down": false,
+      "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
       "code": "002714",
       "name": "牧原股份",
-      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
-      "pen_60m": "向上",
-      "radar_zone_ok": true,
-      "pen_60m_down": false,
+      "alert": "现价高于第一防线伏击上沿，未进入伏击区",
+      "has_alert": false,
+      "pen_60m": "向下",
+      "radar_zone_ok": false,
+      "pen_60m_down": true,
       "macd_momentum_ok": false,
-      "blue_triangle_strict": false,
+      "blue_triangle_strict": true,
       "full_trigger": false
     },
     {
@@ -448,12 +448,12 @@
     {
       "code": "889999",
       "name": "梅花2test",
-      "alert": "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！",
-      "has_alert": true,
-      "pen_60m": "向下",
-      "radar_zone_ok": true,
-      "pen_60m_down": true,
-      "macd_momentum_ok": true,
+      "alert": "数据异常：未获取到 sz889999 的新浪日线数据",
+      "has_alert": false,
+      "pen_60m": "",
+      "radar_zone_ok": false,
+      "pen_60m_down": false,
+      "macd_momentum_ok": false,
       "blue_triangle_strict": false,
       "full_trigger": false
     }
