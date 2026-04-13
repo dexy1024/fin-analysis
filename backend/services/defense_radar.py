@@ -179,43 +179,30 @@ def _classify(
     value_a: float,
 ) -> str:
     """
-    与用户伪代码一致：
-    Support_High = MAX(C-ZD, A-ZD), Support_Low = MIN(...)；
-    伏击圈为各自 ±1%。
+    绝对防线逻辑：
+    absolute_bottom = MIN(C-ZD, A-ZD)
+    - 现价 >= absolute_bottom * 1.01：未跌破绝对防线（高于缓冲区）
+    - absolute_bottom <= 现价 < absolute_bottom * 1.01：进入绝对防线伏击圈
+    - 现价 < absolute_bottom：跌破绝对防线（破位禁买）
     """
-    support_high = max(value_c, value_a)
-    support_low = min(value_c, value_a)
-    z1_upper = support_high * 1.01
-    z1_lower = support_high * 0.99
-    z2_upper = support_low * 1.01
-    z2_lower = support_low * 0.99
+    absolute_bottom = min(value_c, value_a)
+    buffer_upper = absolute_bottom * 1.01  # 缓冲带上沿
 
-    if z1_lower <= p <= z1_upper:
-        return "【一级警报】进入第一防线伏击圈！立刻打开60分钟图盯蓝三角！"
-    if p < z1_lower and p > z2_upper:
-        return "观望，等待飞刀继续下落..."
-    if z2_lower <= p <= z2_upper:
-        return "【终极警报】退守极限防线！进入伏击圈！盯60分钟蓝三角！"
-    if p < z2_lower:
-        return "【红色警报】双防线严重破位！该标的已废，绝对禁买！"
-    if p > z1_upper:
-        return "现价高于第一防线伏击上沿，未进入伏击区"
-    return "其他区间（请人工核对价位与中枢）"
+    if p < absolute_bottom:
+        return "【红色警报】已跌破绝对防线 MIN(C-ZD, A-ZD)！该标的已废，绝对禁买！"
+    if absolute_bottom <= p <= buffer_upper:
+        return "【一级警报】进入绝对防线伏击圈！立刻打开60分钟图盯蓝三角！"
+    return "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点"
 
 
 def _price_in_tier1_or_ultimate_zone(p: float, value_c: float, value_a: float) -> bool:
     """
-    条件 1：现价落在第一防线 ±1% 或极限防线 ±1%（不含观望带、不含红色破位、不含高于上沿）。
+    条件 1：现价未跌破绝对防线 MIN(C-ZD, A-ZD) 且在其 ±1% 缓冲带内（进入伏击圈）。
     """
-    support_high = max(value_c, value_a)
-    support_low = min(value_c, value_a)
-    z1_upper = support_high * 1.01
-    z1_lower = support_high * 0.99
-    z2_upper = support_low * 1.01
-    z2_lower = support_low * 0.99
-    in_z1 = z1_lower <= p <= z1_upper
-    in_z2 = z2_lower <= p <= z2_upper
-    return bool(in_z1 or in_z2)
+    absolute_bottom = min(value_c, value_a)
+    buffer_upper = absolute_bottom * 1.01
+    # 在绝对防线之上，且在缓冲带内（不含破位）
+    return bool(absolute_bottom <= p <= buffer_upper)
 
 
 def chart_tail_bottom_fractal_ok(h60: Dict[str, Any]) -> bool:

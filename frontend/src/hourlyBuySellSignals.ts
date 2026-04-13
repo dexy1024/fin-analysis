@@ -84,7 +84,7 @@ const BUY_CHECKLIST_LABELS: [
   keyof HourlyBuyConditionFlags,
   string,
 ][] = [
-  ['keepDailySupport', '【日线】未跌破 C-ZD 与 A-ZD'],
+  ['keepDailySupport', '【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)'],
   ['inCCentral', '【60m】现价在 C 中枢内（ZD～ZG）'],
   ['switchedDownToUp', '【60m】有效笔：前一下笔、当前上笔'],
   ['hasBottomFractalInSwitch', '【60m】当前向上笔内有底分型'],
@@ -143,8 +143,9 @@ export function computeHourlyBuySellState(
     cZd != null && cZg != null && Number.isFinite(cZd) && Number.isFinite(cZg)
       ? last.close >= cZd && last.close <= cZg
       : false
-  const keepDailySupport =
-    dailyCZd != null && dailyAZd != null ? last.close >= dailyCZd && last.close >= dailyAZd : false
+  // 绝对防线逻辑：现价 >= MIN(C-ZD, A-ZD)
+  const absoluteBottom = dailyCZd != null && dailyAZd != null ? Math.min(dailyCZd, dailyAZd) : null
+  const keepDailySupport = absoluteBottom != null ? last.close >= absoluteBottom : false
 
   const pensEff = indexKline.pens_effective ?? []
   const divergenceArrows = divergenceArrowPointsFromDownPens(data, pensEff)
@@ -202,7 +203,7 @@ export function computeHourlyBuySellState(
   }
 
   const buyReasons: string[] = []
-  if (keepDailySupport) buyReasons.push('【日线】未跌破 C-ZD 与 A-ZD')
+  if (keepDailySupport) buyReasons.push('【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)')
   if (inCCentral) buyReasons.push('【60m】现价在 C 中枢内（ZD～ZG）')
   if (switchedDownToUp) buyReasons.push('【60m】有效笔：前一下笔、当前上笔')
   if (hasBottomFractalInSwitch) buyReasons.push('【60m】当前向上笔内有底分型')
@@ -218,7 +219,8 @@ export function computeHourlyBuySellState(
     macdBuy &&
     bollBuy
 
-  const dailyBreak = (dailyCZd != null && last.close < dailyCZd) || (dailyAZd != null && last.close < dailyAZd)
+  // 卖出条件：跌破绝对防线 MIN(C-ZD, A-ZD)
+  const dailyBreak = absoluteBottom != null && last.close < absoluteBottom
   const macdSell =
     m0 != null &&
     m1 != null &&
@@ -241,7 +243,7 @@ export function computeHourlyBuySellState(
 
   const bollSell = bollSellMiddle || bollSellLower
   const sellReasons: string[] = []
-  if (dailyBreak) sellReasons.push('日线跌破C-ZD/A-ZD')
+  if (dailyBreak) sellReasons.push('日线跌破绝对防线 MIN(C-ZD, A-ZD)')
   if (switchedUpToDown) sellReasons.push('向上笔转向下笔')
   if (hasTopFractal && hasTopDivNow) sellReasons.push('顶分型+顶背驰')
   if (macdSell) sellReasons.push('MACD转弱')
