@@ -492,20 +492,18 @@ function App() {
         const pen = defensePen60mByCode.get(String(tab.code)) ?? ''
         const condition1 = hasAlert && pen === '向下'
 
-        // 逻辑2：7个买点条件中满足5个或以上
+        // 逻辑2：7个买点条件全部满足
         const buyConds = defenseBuyConditionsByCode.get(String(tab.code))
         let condition2 = false
         if (buyConds) {
-          const metCount = [
-            buyConds.radarZoneOk,
-            buyConds.pen60mDown,
-            buyConds.macdMomentumOk,
-            buyConds.blueTriangleStrict,
-            buyConds.inCCentral,
-            buyConds.hasBottomDivInSwitch,
-            buyConds.bollBuy,
-          ].filter(Boolean).length
-          condition2 = metCount >= 5
+          condition2 =
+            buyConds.radarZoneOk &&
+            buyConds.pen60mDown &&
+            buyConds.macdMomentumOk &&
+            buyConds.blueTriangleStrict &&
+            buyConds.inCCentral &&
+            buyConds.hasBottomDivInSwitch &&
+            buyConds.bollBuy
         }
 
         return condition1 || condition2
