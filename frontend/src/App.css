@@ -76,6 +76,36 @@
   background: rgba(234, 88, 12, 0.28);
 }
 
+/* Tab 关闭按钮 */
+.tab-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-left: 0.5rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: #94a3b8;
+  border-radius: 50%;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.tab-close-btn:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.daily-tab-active .tab-close-btn {
+  color: #cbd5e1;
+}
+
+.daily-tab-active .tab-close-btn:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.2);
+}
+
 .card {
   width: 100%;
   max-width: none;

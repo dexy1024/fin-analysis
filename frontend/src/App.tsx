@@ -745,6 +745,27 @@ function App() {
                 onClick={() => setDailyTab(tab.key)}
               >
                 {tab.tabLabel}
+                {/* 非常驻 Tab 显示关闭按钮 */}
+                {!ALWAYS_VISIBLE_TAB_KEYS.has(tab.key) && (
+                  <span
+                    className="tab-close-btn"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setStickyVisibleTabKeys((prev) => {
+                        const next = new Set(prev)
+                        next.delete(tab.key)
+                        return next
+                      })
+                      // 如果当前选中的是要关闭的 Tab，切换到上证指数
+                      if (dailyTab === tab.key) {
+                        setDailyTab('index')
+                      }
+                    }}
+                    title="隐藏此标签"
+                  >
+                    ×
+                  </span>
+                )}
               </button>
             ))}
           </div>
