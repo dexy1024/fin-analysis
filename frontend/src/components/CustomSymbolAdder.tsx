@@ -8,11 +8,21 @@ interface CustomSymbolAdderProps {
 
 async function fetchStockName(code: string): Promise<string | null> {
   try {
-    const resp = await fetch(`/api/stock/name?code=${encodeURIComponent(code)}`)
-    if (!resp.ok) return null
-    const data = await resp.json()
+    const url = `/api/stock/name?code=${encodeURIComponent(code)}`
+    console.log('[fetchStockName] 请求URL:', url)
+    const resp = await fetch(url)
+    console.log('[fetchStockName] 响应状态:', resp.status, resp.ok)
+    if (!resp.ok) {
+      console.log('[fetchStockName] 响应失败:', resp.statusText)
+      return null
+    }
+    const text = await resp.text()
+    console.log('[fetchStockName] 原始响应:', text)
+    const data = JSON.parse(text)
+    console.log('[fetchStockName] 解析后数据:', data)
     return data.name || null
-  } catch {
+  } catch (err) {
+    console.error('[fetchStockName] 错误:', err)
     return null
   }
 }
@@ -28,10 +38,12 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
   // 自动获取股票名称
   const autoFetchName = useCallback(async (inputCode: string) => {
     const normalizedCode = inputCode.trim()
+    console.log('[CustomSymbolAdder] 开始获取名称:', normalizedCode)
     if (!normalizedCode) return
     
     // 验证格式
     if (!/^[\d]{6}$/.test(normalizedCode) && !/^sh\d{6}$/i.test(normalizedCode) && !/^sz\d{6}$/i.test(normalizedCode)) {
+      console.log('[CustomSymbolAdder] 格式验证失败:', normalizedCode)
       return
     }
     
@@ -39,15 +51,18 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
     setNameFetchStatus('loading')
     try {
       const fetchedName = await fetchStockName(normalizedCode)
+      console.log('[CustomSymbolAdder] 获取到名称:', fetchedName)
       if (fetchedName) {
         setName(fetchedName)
         setNameFetchStatus('success')
+        console.log('[CustomSymbolAdder] 名称已设置:', fetchedName)
       } else {
         setName('') // 清空以便用户手动输入
         setNameFetchStatus('error')
+        console.log('[CustomSymbolAdder] 未获取到名称')
       }
     } catch (err) {
-      console.error('获取名称失败:', err)
+      console.error('[CustomSymbolAdder] 获取名称失败:', err)
       setName('') // 出错时清空
       setNameFetchStatus('error')
     } finally {
@@ -129,9 +144,13 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
             className="name-input"
             maxLength={10}
             disabled={isLoadingName}
+            readOnly={nameFetchStatus === 'success'}
             style={{
               borderColor: nameFetchStatus === 'success' ? '#4caf50' : undefined,
-              transition: 'border-color 0.3s'
+              backgroundColor: nameFetchStatus === 'success' ? 'rgba(76, 175, 80, 0.1)' : undefined,
+              transition: 'all 0.3s',
+              color: nameFetchStatus === 'success' ? '#4caf50' : undefined,
+              fontWeight: nameFetchStatus === 'success' ? 'bold' : undefined
             }}
           />
           <button type="submit" className="add-btn" disabled={isLoadingName}>添加</button>

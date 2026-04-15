@@ -66,7 +66,7 @@ backend_log="${LOG_DIR}/backend_${timestamp}.log"
 frontend_log="${LOG_DIR}/frontend_${timestamp}.log"
 
 echo "Starting backend on port ${BACKEND_PORT} (python: ${PYTHON_FOR_BACKEND})..."
-nohup bash -lc "cd \"${BACKEND_DIR}\" && \"${PYTHON_FOR_BACKEND}\" -m uvicorn main:app --host 127.0.0.1 --port ${BACKEND_PORT}" >"${backend_log}" 2>&1 &
+nohup bash -lc "cd \"${BACKEND_DIR}\" && \"${PYTHON_FOR_BACKEND}\" -m uvicorn main:app --host 127.0.0.1 --port ${BACKEND_PORT} --log-level info" >"${backend_log}" 2>&1 &
 backend_pid=$!
 
 echo "Starting frontend on port ${FRONTEND_PORT}..."
