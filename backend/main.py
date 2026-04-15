@@ -6,9 +6,18 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from services.defense_radar import get_defense_radar_summary_for_api, run_defense_radar
+import akshare as ak
+
+from services.defense_radar import get_defense_radar_summary_for_api, run_defense_radar, DEFENSE_RADAR_WATCHLIST
 from services.indicators import get_history_indicators, get_index_kline, get_latest_indicators
 from services.kline_scheduler import setup_kline_scheduler, shutdown_kline_scheduler
+
+# 配置日志输出（确保调度等 INFO 级别日志可见）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 
 @asynccontextmanager
@@ -132,4 +141,73 @@ def defense_radar_diagnosis(
 @app.get("/")
 async def root():
     return {"message": "A股指标查询服务运行中"}
+
+
+# 股票名称缓存
+_stock_name_cache: dict[str, str] = {}
+
+
+def _build_stock_name_cache():
+    """构建股票名称缓存（A股 + ETF）"""
+    global _stock_name_cache
+    if _stock_name_cache:
+        return
+    
+    # 从 watchlist 预加载已知名称
+    for code, name in DEFENSE_RADAR_WATCHLIST:
+        _stock_name_cache[code.lower()] = name
+    
+    try:
+        # A股
+        df_a = ak.stock_zh_a_spot_em()
+        for _, row in df_a.iterrows():
+            code = str(row.get("代码", "")).strip()
+            name = str(row.get("名称", "")).strip()
+            if code and name:
+                _stock_name_cache[code.lower()] = name
+    except Exception as e:
+        logging.warning("构建A股名称缓存失败: %s", e)
+    
+    try:
+        # ETF
+        df_etf = ak.fund_etf_spot_em()
+        for _, row in df_etf.iterrows():
+            code = str(row.get("代码", "")).strip()
+            name = str(row.get("名称", "")).strip()
+            if code and name:
+                _stock_name_cache[code.lower()] = name
+    except Exception as e:
+        logging.warning("构建ETF名称缓存失败: %s", e)
+
+
+@app.get("/api/stock/name")
+async def stock_name(
+    code: str = Query(..., description="股票代码，例如 600000、000001、510300"),
+):
+    """根据股票代码获取股票名称"""
+    normalized_code = code.strip().lower()
+    
+    # 处理 sh/sz 前缀
+    if normalized_code.startswith("sh") or normalized_code.startswith("sz"):
+        normalized_code = normalized_code[2:]
+    
+    if not normalized_code:
+        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    
+    # 先查缓存
+    _build_stock_name_cache()
+    if normalized_code in _stock_name_cache:
+        return {"code": code.strip(), "name": _stock_name_cache[normalized_code]}
+    
+    # 港股特殊处理
+    if normalized_code.startswith("hk"):
+        hk_code = normalized_code[2:]
+        # 从 watchlist 查找
+        for wcode, wname in DEFENSE_RADAR_WATCHLIST:
+            if wcode.lower() == normalized_code:
+                return {"code": code.strip(), "name": wname}
+        return {"code": code.strip(), "name": f"港股{hk_code}"}
+    
+    # 未找到
+    raise HTTPException(status_code=404, detail=f"未找到股票代码 {code} 对应的名称")
 
