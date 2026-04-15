@@ -4,6 +4,8 @@ import { classifyDefenseAlert, type DefenseAlertKind } from './DefenseAlertBrief
 import { DailyChanChart } from './DailyChanChart'
 import { HourlyChanChart } from './HourlyChanChart'
 import { fetchDefenseRadarSummary, fetchIndexKline, type IndexKlineResponse } from './api/stock'
+import { useCustomSymbols } from './hooks/useCustomSymbols'
+import { CustomSymbolAdder } from './components/CustomSymbolAdder'
 
 /** 与 DailyChanChart 一致：按中枢起始日（再按结束日）排序，首段为 A、末段为 C */
 function sortCentralsChronologically(
@@ -61,6 +63,8 @@ type ChartTabKey =
   | 's002230'
   | 's002714'
   | 'hk01810'
+  // 动态自定义标的 key 格式：custom_{code}
+  | `custom_${string}`
 
 const CHART_TABS: {
   key: ChartTabKey
@@ -338,47 +342,86 @@ const CHART_TABS: {
 ]
 
 /**
- * 顶栏始终展示（不按双防线摘要隐藏）：
- * 四只核心 ETF（上证指数按钮本就独立常驻）
+ * 基础始终展示列表（四只核心 ETF）
+ * 自定义标的也会加入常驻显示
  */
-const ALWAYS_VISIBLE_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
+const BASE_ALWAYS_VISIBLE_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
   'etf300',
   'etf588000',
   'etf159915',
   'etf513130',
 ])
 
+/** 生成包含自定义标的的始终显示集合 */
+function getAlwaysVisibleTabKeys(customSymbolCodes: string[]): ReadonlySet<ChartTabKey> {
+  const customKeys = customSymbolCodes.map(code => `custom_${code}` as ChartTabKey)
+  return new Set([...BASE_ALWAYS_VISIBLE_TAB_KEYS, ...customKeys])
+}
+
 /** 顶栏候选：除港股小米外全部；非 ALWAYS_VISIBLE 品种须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
 const CHART_TABS_FOR_NAV = CHART_TABS.filter((t) => t.key !== 'hk01810')
 
+/** 根据自定义标的生成完整的 CHART_TABS（包含基础列表和自定义标的） */
+function getFullChartTabs(customSymbols: Array<{ code: string; name: string }>) {
+  const customTabs = customSymbols.map((sym) => {
+    const key = `custom_${sym.code}` as ChartTabKey
+    return {
+      key,
+      code: sym.code,
+      tabLabel: `${sym.name}（${sym.code}）`,
+      seriesName: sym.name,
+      seriesName60: `${sym.name}·60m`,
+    }
+  })
+  return [...CHART_TABS, ...customTabs]
+}
+
 type DailyTab = 'index' | ChartTabKey
 
-function emptyChartKlineMap(): Record<ChartTabKey, IndexKlineResponse | null> {
+function emptyChartKlineMap(customSymbols: Array<{ code: string }> = []): Record<ChartTabKey, IndexKlineResponse | null> {
   const o = {} as Record<ChartTabKey, IndexKlineResponse | null>
   for (const t of CHART_TABS) {
     o[t.key] = null
   }
+  // 添加自定义标的
+  for (const sym of customSymbols) {
+    const key = `custom_${sym.code}` as ChartTabKey
+    o[key] = null
+  }
   return o
 }
 
-function emptyChartErrMap(): Record<ChartTabKey, string | null> {
+function emptyChartErrMap(customSymbols: Array<{ code: string }> = []): Record<ChartTabKey, string | null> {
   const o = {} as Record<ChartTabKey, string | null>
   for (const t of CHART_TABS) {
     o[t.key] = null
+  }
+  // 添加自定义标的
+  for (const sym of customSymbols) {
+    const key = `custom_${sym.code}` as ChartTabKey
+    o[key] = null
   }
   return o
 }
 
 function App() {
+  // 自定义标的管理
+  const { customSymbols, isLoaded: customSymbolsLoaded, addSymbol, removeSymbol } = useCustomSymbols()
+
+  // 生成完整的 Tabs 列表（包含自定义标的）
+  const fullChartTabs = useMemo(() => getFullChartTabs(customSymbols), [customSymbols])
+  const chartTabsForNav = useMemo(() => fullChartTabs.filter((t) => t.key !== 'hk01810'), [fullChartTabs])
+  const alwaysVisibleTabKeys = useMemo(() => getAlwaysVisibleTabKeys(customSymbols.map(s => s.code)), [customSymbols])
+
   const [dailyTab, setDailyTab] = useState<DailyTab>('index')
   const [indexKline, setIndexKline] = useState<IndexKlineResponse | null>(null)
   const [indexKline60, setIndexKline60] = useState<IndexKlineResponse | null>(null)
-  const [chartDaily, setChartDaily] = useState(emptyChartKlineMap)
-  const [chart60, setChart60] = useState(emptyChartKlineMap)
+  const [chartDaily, setChartDaily] = useState(() => emptyChartKlineMap(customSymbols))
+  const [chart60, setChart60] = useState(() => emptyChartKlineMap(customSymbols))
   const [indexDailyError, setIndexDailyError] = useState<string | null>(null)
   const [index60Error, setIndex60Error] = useState<string | null>(null)
-  const [chartDailyErr, setChartDailyErr] = useState(emptyChartErrMap)
-  const [chart60Err, setChart60Err] = useState(emptyChartErrMap)
+  const [chartDailyErr, setChartDailyErr] = useState(() => emptyChartErrMap(customSymbols))
+  const [chart60Err, setChart60Err] = useState(() => emptyChartErrMap(customSymbols))
   /** code -> 是否一级/终极/红色警报（null 表示摘要未加载） */
   const [defenseCodeToAlert, setDefenseCodeToAlert] = useState<Map<string, boolean> | null>(null)
   /** code -> 雷达摘要中的 60 分钟笔向（向上/向下/空）；与 defenseCodeToAlert 同次拉取 */
@@ -479,13 +522,13 @@ function App() {
   }, [])
 
   const baseVisibleChartTabs = useMemo(() => {
-    const tabOrder = new Map(CHART_TABS_FOR_NAV.map((t, i) => [t.key, i] as const))
-    let list: typeof CHART_TABS_FOR_NAV
+    const tabOrder = new Map(chartTabsForNav.map((t, i) => [t.key, i] as const))
+    let list: typeof chartTabsForNav
     if (defenseCodeToAlert === null || defensePen60mByCode === null) {
-      list = CHART_TABS_FOR_NAV.filter((t) => ALWAYS_VISIBLE_TAB_KEYS.has(t.key))
+      list = chartTabsForNav.filter((t) => alwaysVisibleTabKeys.has(t.key))
     } else {
-      list = CHART_TABS_FOR_NAV.filter((tab) => {
-        if (ALWAYS_VISIBLE_TAB_KEYS.has(tab.key)) return true
+      list = chartTabsForNav.filter((tab) => {
+        if (alwaysVisibleTabKeys.has(tab.key)) return true
 
         // 逻辑1：原有逻辑（has_alert + 60分钟笔向下）
         const hasAlert = defenseCodeToAlert.get(String(tab.code)) === true
@@ -511,16 +554,16 @@ function App() {
     }
     // 始终展示的 Tab 排在最前（避免换行后误以为「消失」）
     return [...list].sort((a, b) => {
-      const pa = ALWAYS_VISIBLE_TAB_KEYS.has(a.key) ? 0 : 1
-      const pb = ALWAYS_VISIBLE_TAB_KEYS.has(b.key) ? 0 : 1
+      const pa = alwaysVisibleTabKeys.has(a.key) ? 0 : 1
+      const pb = alwaysVisibleTabKeys.has(b.key) ? 0 : 1
       if (pa !== pb) return pa - pb
       return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
     })
-  }, [defenseCodeToAlert, defensePen60mByCode, defenseBuyConditionsByCode])
+  }, [chartTabsForNav, alwaysVisibleTabKeys, defenseCodeToAlert, defensePen60mByCode, defenseBuyConditionsByCode])
 
   const visibleChartTabs = useMemo(() => {
-    const byKey = new Map(CHART_TABS_FOR_NAV.map((t) => [t.key, t] as const))
-    const tabOrder = new Map(CHART_TABS_FOR_NAV.map((t, i) => [t.key, i] as const))
+    const byKey = new Map(chartTabsForNav.map((t) => [t.key, t] as const))
+    const tabOrder = new Map(chartTabsForNav.map((t, i) => [t.key, i] as const))
     const merged = new Map(baseVisibleChartTabs.map((t) => [t.key, t] as const))
     for (const key of stickyVisibleTabKeys) {
       const tab = byKey.get(key)
@@ -528,26 +571,26 @@ function App() {
     }
     const list = [...merged.values()]
     return list.sort((a, b) => {
-      const pa = ALWAYS_VISIBLE_TAB_KEYS.has(a.key) ? 0 : 1
-      const pb = ALWAYS_VISIBLE_TAB_KEYS.has(b.key) ? 0 : 1
+      const pa = alwaysVisibleTabKeys.has(a.key) ? 0 : 1
+      const pb = alwaysVisibleTabKeys.has(b.key) ? 0 : 1
       if (pa !== pb) return pa - pb
       return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
     })
-  }, [baseVisibleChartTabs, stickyVisibleTabKeys])
+  }, [chartTabsForNav, alwaysVisibleTabKeys, baseVisibleChartTabs, stickyVisibleTabKeys])
 
   useEffect(() => {
     // 新触发显示条件的非常驻标的，加入“保持显示”集合
     setStickyVisibleTabKeys((prev) => {
       const next = new Set(prev)
       for (const t of baseVisibleChartTabs) {
-        if (!ALWAYS_VISIBLE_TAB_KEYS.has(t.key)) {
+        if (!alwaysVisibleTabKeys.has(t.key)) {
           next.add(t.key)
         }
       }
       if (next.size === prev.size) return prev
       return next
     })
-  }, [baseVisibleChartTabs])
+  }, [baseVisibleChartTabs, alwaysVisibleTabKeys])
 
   // 持久化 stickyVisibleTabKeys 到 localStorage
   useEffect(() => {
@@ -580,7 +623,7 @@ function App() {
 
   /** 切 tab 时按需拉对应日线，避免首次全量并发导致卡顿 */
   const fetchDailyForTab = useCallback(async (tabKey: ChartTabKey) => {
-    const tab = CHART_TABS.find((t) => t.key === tabKey)
+    const tab = fullChartTabs.find((t) => t.key === tabKey)
     if (!tab || tab.key === 'hk01810') return
     try {
       const daily = await fetchIndexKline(tab.code, 'daily', '2024-12-01')
@@ -592,12 +635,12 @@ function App() {
         [tab.key]: err instanceof Error ? err.message : '未知错误',
       }))
     }
-  }, [])
+  }, [fullChartTabs])
 
   /** 拉取单个 tab 的 60 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch60ForTab = useCallback(async (tabKey: ChartTabKey) => {
     const h60Start = startDateDaysAgo(90)
-    const tab = CHART_TABS.find((t) => t.key === tabKey)
+    const tab = fullChartTabs.find((t) => t.key === tabKey)
     if (!tab) return
     try {
       const h60 = await fetch60Local(tab.code, h60Start)
@@ -609,7 +652,7 @@ function App() {
         [tab.key]: err instanceof Error ? err.message : '60分钟数据拉取失败',
       }))
     }
-  }, [fetch60Local])
+  }, [fullChartTabs, fetch60Local])
 
   /** 仅拉上证 60m（本地）；首屏用，不依赖 dailyTab，避免切 Tab 时整页重复请求上证 */
   const refreshIndex60Only = useCallback(async () => {
@@ -695,7 +738,7 @@ function App() {
     return classifyDefenseAlert(last, indexDailyCZd, indexDailyAZd)
   }, [indexKline, indexDailyCZd, indexDailyAZd])
 
-  const activeChart = CHART_TABS.find((t) => t.key === dailyTab)
+  const activeChart = fullChartTabs.find((t) => t.key === dailyTab)
   const activeChartDaily = activeChart ? chartDaily[activeChart.key] : null
   const chartDailyCentrals =
     activeChartDaily?.centrals?.length && activeChart
@@ -746,7 +789,7 @@ function App() {
               >
                 {tab.tabLabel}
                 {/* 非常驻 Tab 显示关闭按钮 */}
-                {!ALWAYS_VISIBLE_TAB_KEYS.has(tab.key) && (
+                {!alwaysVisibleTabKeys.has(tab.key) && (
                   <span
                     className="tab-close-btn"
                     onClick={(e) => {
@@ -768,6 +811,30 @@ function App() {
                 )}
               </button>
             ))}
+          </div>
+
+          {/* 自定义标的添加器 */}
+          <div className="custom-symbol-section">
+            <CustomSymbolAdder
+              onAdd={(code, name) => {
+                const result = addSymbol(code, name)
+                if (result) {
+                  // 添加成功后自动切换到新添加的标的
+                  const key = `custom_${code}` as ChartTabKey
+                  setDailyTab(key)
+                }
+                return result
+              }}
+              onRemove={(code) => {
+                removeSymbol(code)
+                const key = `custom_${code}` as ChartTabKey
+                // 如果当前选中的是要删除的标的，切换到上证指数
+                if (dailyTab === key) {
+                  setDailyTab('index')
+                }
+              }}
+              customSymbols={customSymbols}
+            />
           </div>
 
           {dailyTab === 'index' && (

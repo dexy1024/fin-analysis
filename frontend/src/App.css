@@ -623,3 +623,131 @@
     padding: 1.25rem 1rem;
   }
 }
+
+/* 自定义标的添加器样式 */
+.custom-symbol-section {
+  margin: 0.75rem 0 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 0.5rem;
+  border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.custom-symbol-adder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.adder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.code-input,
+.name-input {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  border-radius: 0.35rem;
+  background: rgba(30, 41, 59, 0.8);
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.code-input {
+  width: 160px;
+}
+
+.name-input {
+  width: 120px;
+}
+
+.code-input::placeholder,
+.name-input::placeholder {
+  color: #64748b;
+}
+
+.code-input:focus,
+.name-input:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+
+.add-btn {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #38bdf8;
+  border-radius: 0.35rem;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.add-btn:hover {
+  background: rgba(56, 189, 248, 0.25);
+}
+
+.error-msg {
+  font-size: 0.75rem;
+  color: #ef4444;
+}
+
+.success-msg {
+  font-size: 0.75rem;
+  color: #22c55e;
+}
+
+.custom-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.list-label {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.custom-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 0.3rem;
+  color: #38bdf8;
+  font-size: 0.78rem;
+}
+
+.remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-left: 0.2rem;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.remove-btn:hover {
+  color: #ef4444;
+}
