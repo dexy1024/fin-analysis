@@ -23,6 +23,7 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [isLoadingName, setIsLoadingName] = useState(false)
+  const [nameFetchStatus, setNameFetchStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
 
   // 自动获取股票名称
   const autoFetchName = useCallback(async (inputCode: string) => {
@@ -35,11 +36,20 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
     }
     
     setIsLoadingName(true)
+    setNameFetchStatus('loading')
     try {
       const fetchedName = await fetchStockName(normalizedCode)
       if (fetchedName) {
         setName(fetchedName)
+        setNameFetchStatus('success')
+      } else {
+        setName('') // 清空以便用户手动输入
+        setNameFetchStatus('error')
       }
+    } catch (err) {
+      console.error('获取名称失败:', err)
+      setName('') // 出错时清空
+      setNameFetchStatus('error')
     } finally {
       setIsLoadingName(false)
     }
@@ -48,6 +58,12 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
   const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newCode = e.target.value
     setCode(newCode)
+    
+    // 当输入改变时重置名称状态
+    if (newCode.trim().length < 6) {
+      setNameFetchStatus('idle')
+      setName('')
+    }
     
     // 当输入6位数字时自动获取名称
     if (/^[\d]{6}$/.test(newCode.trim())) {
@@ -74,9 +90,10 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
 
     const result = onAdd(normalizedCode, name.trim() || normalizedCode)
     if (result) {
-      setSuccess(`已添加 ${normalizedCode}`)
+      setSuccess(`已添加 ${name.trim() || normalizedCode} (${normalizedCode})`)
       setCode('')
       setName('')
+      setNameFetchStatus('idle')
       setTimeout(() => setSuccess(''), 2000)
     } else {
       setError('该股票已在列表中')
@@ -97,12 +114,25 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
           />
           <input
             type="text"
-            placeholder={isLoadingName ? "获取名称中..." : "名称（可选）"}
+            placeholder={
+              nameFetchStatus === 'loading' 
+                ? "🔍 获取名称中..." 
+                : nameFetchStatus === 'success' 
+                  ? "✓ 名称已自动填充" 
+                  : "名称（可选）"
+            }
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value)
+              setNameFetchStatus('idle')
+            }}
             className="name-input"
             maxLength={10}
             disabled={isLoadingName}
+            style={{
+              borderColor: nameFetchStatus === 'success' ? '#4caf50' : undefined,
+              transition: 'border-color 0.3s'
+            }}
           />
           <button type="submit" className="add-btn" disabled={isLoadingName}>添加</button>
         </div>
