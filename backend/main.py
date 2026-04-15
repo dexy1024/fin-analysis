@@ -1,12 +1,12 @@
+import json
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-import akshare as ak
 
 from services.defense_radar import get_defense_radar_summary_for_api, run_defense_radar, DEFENSE_RADAR_WATCHLIST
 from services.indicators import get_history_indicators, get_index_kline, get_latest_indicators
@@ -143,12 +143,12 @@ async def root():
     return {"message": "A股指标查询服务运行中"}
 
 
-# 股票名称缓存
+# 股票名称缓存（从 last_summary.json 加载）
 _stock_name_cache: dict[str, str] = {}
 
 
 def _build_stock_name_cache():
-    """构建股票名称缓存（A股 + ETF）"""
+    """构建股票名称缓存（从 last_summary.json + watchlist）"""
     global _stock_name_cache
     if _stock_name_cache:
         return
@@ -157,34 +157,29 @@ def _build_stock_name_cache():
     for code, name in DEFENSE_RADAR_WATCHLIST:
         _stock_name_cache[code.lower()] = name
     
+    # 从 last_summary.json 加载名称
     try:
-        # A股
-        df_a = ak.stock_zh_a_spot_em()
-        for _, row in df_a.iterrows():
-            code = str(row.get("代码", "")).strip()
-            name = str(row.get("名称", "")).strip()
-            if code and name:
-                _stock_name_cache[code.lower()] = name
+        summary_path = Path(__file__).resolve().parents[1] / "logs" / "defense_radar" / "last_summary.json"
+        if summary_path.exists():
+            with open(summary_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for sym in data.get("symbols", []):
+                    sym_code = str(sym.get("code", "")).strip()
+                    sym_name = str(sym.get("name", "")).strip()
+                    if sym_code and sym_name:
+                        _stock_name_cache[sym_code.lower()] = sym_name
+            logging.info("股票名称缓存已加载: %d 个", len(_stock_name_cache))
+        else:
+            logging.warning("last_summary.json 不存在，仅使用 watchlist 缓存")
     except Exception as e:
-        logging.warning("构建A股名称缓存失败: %s", e)
-    
-    try:
-        # ETF
-        df_etf = ak.fund_etf_spot_em()
-        for _, row in df_etf.iterrows():
-            code = str(row.get("代码", "")).strip()
-            name = str(row.get("名称", "")).strip()
-            if code and name:
-                _stock_name_cache[code.lower()] = name
-    except Exception as e:
-        logging.warning("构建ETF名称缓存失败: %s", e)
+        logging.warning("从 last_summary.json 加载名称缓存失败: %s", e)
 
 
 @app.get("/api/stock/name")
 async def stock_name(
     code: str = Query(..., description="股票代码，例如 600000、000001、510300"),
 ):
-    """根据股票代码获取股票名称"""
+    """根据股票代码获取股票名称（从本地 last_summary.json 读取）"""
     normalized_code = code.strip().lower()
     
     # 处理 sh/sz 前缀
