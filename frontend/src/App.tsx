@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { classifyDefenseAlert, type DefenseAlertKind } from './DefenseAlertBrief'
 import { DailyChanChart } from './DailyChanChart'
@@ -461,6 +461,21 @@ function App() {
     return new Set()
   })
 
+  /** 用户手动关闭的 Tab（通过点击「×」）：用于从 baseVisibleChartTabs 中排除条件触发的 Tab */
+  const CLOSED_TABS_STORAGE_KEY = 'fin-analysis-closed-tabs-v1'
+  const [closedTabKeys, setClosedTabKeys] = useState<Set<ChartTabKey>>(() => {
+    try {
+      const raw = localStorage.getItem(CLOSED_TABS_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as ChartTabKey[]
+        return new Set(parsed)
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return new Set()
+  })
+
   const loadDefenseSummary = useCallback(async () => {
     try {
       const data = await fetchDefenseRadarSummary()
@@ -530,6 +545,9 @@ function App() {
       list = chartTabsForNav.filter((tab) => {
         if (alwaysVisibleTabKeys.has(tab.key)) return true
 
+        // 如果用户手动关闭了此 Tab，不通过条件触发显示（常驻 Tab 除外）
+        if (closedTabKeys.has(tab.key)) return false
+
         // 逻辑1：原有逻辑（has_alert + 60分钟笔向下）
         const hasAlert = defenseCodeToAlert.get(String(tab.code)) === true
         const pen = defensePen60mByCode.get(String(tab.code)) ?? ''
@@ -559,7 +577,7 @@ function App() {
       if (pa !== pb) return pa - pb
       return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
     })
-  }, [chartTabsForNav, alwaysVisibleTabKeys, defenseCodeToAlert, defensePen60mByCode, defenseBuyConditionsByCode])
+  }, [chartTabsForNav, alwaysVisibleTabKeys, defenseCodeToAlert, defensePen60mByCode, defenseBuyConditionsByCode, closedTabKeys])
 
   const visibleChartTabs = useMemo(() => {
     const byKey = new Map(chartTabsForNav.map((t) => [t.key, t] as const))
@@ -578,18 +596,41 @@ function App() {
     })
   }, [chartTabsForNav, alwaysVisibleTabKeys, baseVisibleChartTabs, stickyVisibleTabKeys])
 
+    // 用于检测新触发条件的 Tab（不依赖 closedTabKeys，避免循环）
+  const prevBaseVisibleRef = useRef<Set<ChartTabKey>>(new Set())
+
   useEffect(() => {
-    // 新触发显示条件的非常驻标的，加入“保持显示”集合
-    setStickyVisibleTabKeys((prev) => {
-      const next = new Set(prev)
-      for (const t of baseVisibleChartTabs) {
-        if (!alwaysVisibleTabKeys.has(t.key)) {
-          next.add(t.key)
-        }
+    const currentKeys = new Set(baseVisibleChartTabs.map(t => t.key))
+    const prevKeys = prevBaseVisibleRef.current
+
+    // 检测新出现的 Tab（本次在 baseVisibleChartTabs 但之前不在）
+    const newlyVisibleKeys: ChartTabKey[] = []
+    for (const t of baseVisibleChartTabs) {
+      if (!prevKeys.has(t.key) && !alwaysVisibleTabKeys.has(t.key)) {
+        newlyVisibleKeys.push(t.key)
       }
-      if (next.size === prev.size) return prev
-      return next
-    })
+    }
+
+    // 更新 ref 供下次比较
+    prevBaseVisibleRef.current = currentKeys
+
+    // 如果有新触发的 Tab，从 closedTabKeys 中移除（允许再次显示），并加入 sticky
+    if (newlyVisibleKeys.length > 0) {
+      setClosedTabKeys((prev) => {
+        const next = new Set(prev)
+        for (const key of newlyVisibleKeys) {
+          next.delete(key)
+        }
+        return next
+      })
+      setStickyVisibleTabKeys((prev) => {
+        const next = new Set(prev)
+        for (const key of newlyVisibleKeys) {
+          next.add(key)
+        }
+        return next
+      })
+    }
   }, [baseVisibleChartTabs, alwaysVisibleTabKeys])
 
   // 持久化 stickyVisibleTabKeys 到 localStorage
@@ -601,6 +642,16 @@ function App() {
       // ignore storage errors
     }
   }, [stickyVisibleTabKeys])
+
+  // 持久化 closedTabKeys 到 localStorage
+  useEffect(() => {
+    try {
+      const arr = Array.from(closedTabKeys)
+      localStorage.setItem(CLOSED_TABS_STORAGE_KEY, JSON.stringify(arr))
+    } catch {
+      // ignore storage errors
+    }
+  }, [closedTabKeys])
 
   /**
    * 60m：默认 refresh=false，只读后端本地 CSV/缓存；与 kline_scheduler 槽位同步后的数据一致。
@@ -794,11 +845,14 @@ function App() {
                     className="tab-close-btn"
                     onClick={(e) => {
                       e.stopPropagation()
+                      // 从 sticky 集合中删除
                       setStickyVisibleTabKeys((prev) => {
                         const next = new Set(prev)
                         next.delete(tab.key)
                         return next
                       })
+                      // 添加到关闭集合，防止条件触发再次显示
+                      setClosedTabKeys((prev) => new Set([...prev, tab.key]))
                       // 如果当前选中的是要关闭的 Tab，切换到上证指数
                       if (dailyTab === tab.key) {
                         setDailyTab('index')
