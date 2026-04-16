@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime, timedelta, time as time_of_day
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from services.defense_radar import DEFENSE_RADAR_WATCHLIST, run_defense_radar
@@ -38,6 +38,16 @@ _KLINE_SLOTS: tuple[tuple[int, int, bool], ...] = (
 
 _stop_event = threading.Event()
 _worker_thread: Optional[threading.Thread] = None
+
+# WebSocket 广播回调函数（由 main.py 设置）
+_ws_broadcast_callback: Optional[Callable[[bool, str], None]] = None
+
+
+def set_ws_broadcast_callback(callback: Callable[[bool, str], None]) -> None:
+    """设置 WebSocket 广播回调函数"""
+    global _ws_broadcast_callback
+    _ws_broadcast_callback = callback
+    logging.info("kline_scheduler: WebSocket 广播回调已设置")
 
 
 def _h60_start_date() -> str:
@@ -84,6 +94,7 @@ def _sync_all_60m() -> None:
 
 def run_scheduled_slot(include_daily: bool) -> None:
     """单次槽位任务：可选全量日线同步 → 全量 60m → 双防线雷达（读本地，不写网）。"""
+    timestamp = datetime.now(TZ_SH).isoformat()
     logging.info("kline_scheduler: 槽位开始 include_daily=%s", include_daily)
     if include_daily:
         _sync_all_daily()
@@ -91,6 +102,13 @@ def run_scheduled_slot(include_daily: bool) -> None:
     try:
         path = run_defense_radar(refresh=False)
         logging.info("kline_scheduler: 双防线雷达已写入 %s", path)
+        # 调度完成后广播 WebSocket 消息
+        if _ws_broadcast_callback:
+            try:
+                _ws_broadcast_callback(include_daily, timestamp)
+                logging.info("kline_scheduler: WebSocket 广播已发送")
+            except Exception as e:
+                logging.warning("kline_scheduler: WebSocket 广播失败: %s", e)
     except Exception:  # noqa: BLE001
         logging.exception("kline_scheduler: 双防线雷达失败")
 

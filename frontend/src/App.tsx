@@ -408,8 +408,68 @@ function App() {
   // 自定义标的管理
   const { customSymbols, isLoaded: customSymbolsLoaded, addSymbol, removeSymbol } = useCustomSymbols()
 
+  // WebSocket 连接状态
+  const [wsConnected, setWsConnected] = useState(false)
+  const wsRef = useRef<WebSocket | null>(null)
+
   // 生成完整的 Tabs 列表（包含自定义标的）
   const fullChartTabs = useMemo(() => getFullChartTabs(customSymbols), [customSymbols])
+
+  // WebSocket 连接：实时接收雷达数据更新通知
+  useEffect(() => {
+    const wsUrl = `ws://${window.location.host}/ws`
+    console.log('[WebSocket] 正在连接:', wsUrl)
+    
+    const ws = new WebSocket(wsUrl)
+    wsRef.current = ws
+
+    ws.onopen = () => {
+      console.log('[WebSocket] 已连接')
+      setWsConnected(true)
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data)
+        console.log('[WebSocket] 收到消息:', message)
+        
+        if (message.type === 'radar_updated') {
+          console.log('[WebSocket] 雷达数据已更新，重新加载...')
+          // 重新加载雷达摘要数据
+          void loadDefenseSummary()
+          // 可选：显示通知
+          // alert('双防线雷达数据已更新')
+        }
+      } catch (err) {
+        console.error('[WebSocket] 消息解析失败:', err)
+      }
+    }
+
+    ws.onclose = () => {
+      console.log('[WebSocket] 连接已关闭')
+      setWsConnected(false)
+      // 5秒后尝试重连
+      setTimeout(() => {
+        console.log('[WebSocket] 尝试重连...')
+      }, 5000)
+    }
+
+    ws.onerror = (error) => {
+      console.error('[WebSocket] 连接错误:', error)
+    }
+
+    // 定期发送 ping 保持连接
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send('ping')
+      }
+    }, 30000)
+
+    return () => {
+      clearInterval(pingInterval)
+      ws.close()
+    }
+  }, [])
   const chartTabsForNav = useMemo(() => fullChartTabs.filter((t) => t.key !== 'hk01810'), [fullChartTabs])
   const alwaysVisibleTabKeys = useMemo(() => getAlwaysVisibleTabKeys(customSymbols.map(s => s.code)), [customSymbols])
 
