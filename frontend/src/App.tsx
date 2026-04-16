@@ -408,9 +408,8 @@ function App() {
   // 自定义标的管理
   const { customSymbols, isLoaded: customSymbolsLoaded, addSymbol, removeSymbol } = useCustomSymbols()
 
-  // WebSocket 连接状态
-  const [wsConnected, setWsConnected] = useState(false)
-  const wsRef = useRef<WebSocket | null>(null)
+  // 长轮询：定时检查雷达数据更新
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // 生成完整的 Tabs 列表（包含自定义标的）
   const fullChartTabs = useMemo(() => getFullChartTabs(customSymbols), [customSymbols])
@@ -544,88 +543,47 @@ function App() {
   const loadDefenseSummaryRef = useRef(loadDefenseSummary)
   loadDefenseSummaryRef.current = loadDefenseSummary
 
-  // WebSocket 连接：实时接收雷达数据更新通知
+  // 长轮询：每隔30秒检查雷达数据是否有更新
   useEffect(() => {
-    // 如果已经有连接，不再创建新连接
-    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
-      console.log('[WebSocket] 已有连接，跳过')
-      return
-    }
+    let isActive = true
+    let lastKnownGeneratedAt = defenseSummaryGeneratedAt
 
-    let reconnectTimeout: NodeJS.Timeout | null = null
-    let pingInterval: NodeJS.Timeout | null = null
-    let isActive = true // 标记组件是否仍挂载
-
-    const connect = () => {
+    const checkForUpdates = async () => {
       if (!isActive) return
-
-      // 直接连接后端 WebSocket，不经过 Vite 代理
-      const wsUrl = 'ws://127.0.0.1:8000/ws'
-      console.log('[WebSocket] 正在连接:', wsUrl)
       
-      const ws = new WebSocket(wsUrl)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        if (!isActive) {
-          ws.close()
-          return
-        }
-        console.log('[WebSocket] 已连接')
-        setWsConnected(true)
-      }
-
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data)
-          console.log('[WebSocket] 收到消息:', message)
-          
-          if (message.type === 'radar_updated') {
-            console.log('[WebSocket] 雷达数据已更新，重新加载...')
-            void loadDefenseSummaryRef.current()
-          }
-        } catch (err) {
-          console.error('[WebSocket] 消息解析失败:', err)
-        }
-      }
-
-      ws.onclose = () => {
-        console.log('[WebSocket] 连接已关闭')
-        setWsConnected(false)
-        wsRef.current = null
+      try {
+        // 轻量级请求：只获取摘要的 generated_at 字段
+        const res = await fetch('/api/diagnosis/defense-radar/summary')
+        if (!res.ok) return
         
-        // 如果组件仍挂载，5秒后重连
-        if (isActive) {
-          reconnectTimeout = setTimeout(() => {
-            console.log('[WebSocket] 尝试重连...')
-            connect()
-          }, 5000)
+        const data = (await res.json()) as { generated_at?: string }
+        const currentGeneratedAt = data.generated_at
+        
+        // 如果 generated_at 变化了，说明有新数据
+        if (currentGeneratedAt && currentGeneratedAt !== lastKnownGeneratedAt) {
+          console.log('[Polling] 检测到雷达数据更新:', currentGeneratedAt)
+          lastKnownGeneratedAt = currentGeneratedAt
+          // 重新加载完整数据
+          void loadDefenseSummaryRef.current()
         }
+      } catch (err) {
+        console.error('[Polling] 检查更新失败:', err)
       }
-
-      ws.onerror = (error) => {
-        console.error('[WebSocket] 连接错误:', error)
-      }
-
-      // 定期发送 ping 保持连接
-      pingInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send('ping')
-        }
-      }, 30000)
     }
 
-    connect()
+    // 每5分钟检查一次
+    pollingIntervalRef.current = setInterval(() => {
+      void checkForUpdates()
+    }, 300000)
 
     return () => {
       isActive = false
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-      if (pingInterval) clearInterval(pingInterval)
-      // 不要立即关闭连接，让重连逻辑自己处理
-      wsRef.current?.close()
-      wsRef.current = null
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current)
+        pollingIntervalRef.current = null
+      }
     }
-  }, []) // 空依赖数组，只在组件挂载时执行一次
+  }, [defenseSummaryGeneratedAt])
 
   const baseVisibleChartTabs = useMemo(() => {
     const tabOrder = new Map(chartTabsForNav.map((t, i) => [t.key, i] as const))

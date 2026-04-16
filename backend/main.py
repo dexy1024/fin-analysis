@@ -1,66 +1,53 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from services.defense_radar import get_defense_radar_summary_for_api, run_defense_radar, DEFENSE_RADAR_WATCHLIST
 from services.indicators import get_history_indicators, get_index_kline, get_latest_indicators
-from services.kline_scheduler import setup_kline_scheduler, shutdown_kline_scheduler, set_ws_broadcast_callback
+from services.kline_scheduler import setup_kline_scheduler, shutdown_kline_scheduler, set_sse_callback
 
-# WebSocket 连接管理器
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
+# SSE 客户端队列 - 存储 asyncio.Queue 对象
+_sse_clients: list = []
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.add(websocket)
-        logging.info("WebSocket 客户端已连接，当前连接数: %d", len(self.active_connections))
 
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.discard(websocket)
-        logging.info("WebSocket 客户端已断开，当前连接数: %d", len(self.active_connections))
-
-    async def broadcast(self, message: dict):
-        """广播消息给所有连接的客户端"""
-        disconnected = set()
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                disconnected.add(connection)
-        # 清理断开的连接
-        for conn in disconnected:
-            self.active_connections.discard(conn)
-
-# 全局连接管理器实例
-manager = ConnectionManager()
-
-# 调度完成广播回调（供 kline_scheduler 调用）
-def notify_scheduler_completed(include_daily: bool, timestamp: str):
-    """调度执行完成后广播通知（在线程中调用）"""
+def notify_sse_clients(include_daily: bool, timestamp: str):
+    """调度完成后通知所有 SSE 客户端（在线程中调用）"""
     import asyncio
-    try:
-        # 尝试获取事件循环（如果已经在异步环境中）
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果 loop 在运行，创建 task
-            asyncio.create_task(
-                manager.broadcast({
-                    "type": "radar_updated",
-                    "timestamp": timestamp,
-                    "include_daily": include_daily,
-                    "message": "双防线雷达数据已更新"
-                })
-            )
-    except Exception as e:
-        logging.warning("WebSocket 广播失败: %s", e)
+    
+    message = {
+        "type": "radar_updated",
+        "timestamp": timestamp,
+        "include_daily": include_daily,
+        "message": "双防线雷达数据已更新"
+    }
+    
+    # 将消息添加到所有客户端队列（在线程中安全地操作队列）
+    disconnected = []
+    for client in _sse_clients:
+        try:
+            # 使用 call_soon_threadsafe 在线程中安全地调度异步操作
+            if hasattr(client, '_loop'):
+                client._loop.call_soon_threadsafe(client.put_nowait, message)
+            else:
+                client.put_nowait(message)
+        except Exception as e:
+            logging.debug("SSE: 客户端队列写入失败: %s", e)
+            disconnected.append(client)
+    
+    # 清理失效的客户端
+    for client in disconnected:
+        if client in _sse_clients:
+            _sse_clients.remove(client)
+    
+    logging.info("SSE: 已通知 %d 个客户端", len(_sse_clients))
 
 # 配置日志输出（确保调度等 INFO 级别日志可见）
 logging.basicConfig(
@@ -73,8 +60,8 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        # 设置 WebSocket 广播回调
-        set_ws_broadcast_callback(notify_scheduler_completed)
+        # 设置 SSE 广播回调
+        set_sse_callback(notify_sse_clients)
         setup_kline_scheduler()
     except Exception:  # noqa: BLE001
         logging.exception("后台 K 线定时任务启动失败（进程仍可服务 API）")
@@ -195,22 +182,46 @@ async def root():
     return {"message": "A股指标查询服务运行中"}
 
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 连接：实时推送雷达数据更新"""
-    await manager.connect(websocket)
-    try:
-        while True:
-            # 保持连接，等待客户端消息（可选）
-            data = await websocket.receive_text()
-            # 可以处理客户端心跳等消息
-            if data == "ping":
-                await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-    except Exception as e:
-        logging.warning("WebSocket 异常: %s", e)
-        manager.disconnect(websocket)
+@app.get("/api/sse/radar-updates")
+async def sse_radar_updates():
+    """SSE 端点：实时推送雷达数据更新"""
+    from asyncio import Queue
+    
+    client_queue = Queue()
+    # 保存当前事件循环，供线程回调使用
+    client_queue._loop = asyncio.get_event_loop()
+    _sse_clients.append(client_queue)
+    
+    async def event_generator():
+        # 发送初始连接成功消息
+        yield f"data: {json.dumps({'type': 'connected', 'message': 'SSE连接已建立'})}\n\n"
+        
+        try:
+            while True:
+                # 等待消息（最多30秒，保持连接活跃）
+                try:
+                    message = await asyncio.wait_for(client_queue.get(), timeout=30)
+                    yield f"data: {json.dumps(message)}\n\n"
+                except asyncio.TimeoutError:
+                    # 发送心跳保持连接
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        except asyncio.CancelledError:
+            logging.info("SSE: 客户端连接取消")
+        except Exception as e:
+            logging.warning("SSE 客户端异常: %s", e)
+        finally:
+            # 客户端断开，从列表中移除
+            if client_queue in _sse_clients:
+                _sse_clients.remove(client_queue)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 # 股票名称缓存（从 last_summary.json 加载）

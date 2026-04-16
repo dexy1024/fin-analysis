@@ -39,15 +39,15 @@ _KLINE_SLOTS: tuple[tuple[int, int, bool], ...] = (
 _stop_event = threading.Event()
 _worker_thread: Optional[threading.Thread] = None
 
-# WebSocket 广播回调函数（由 main.py 设置）
-_ws_broadcast_callback: Optional[Callable[[bool, str], None]] = None
+# SSE 广播回调函数（由 main.py 设置）
+_sse_callback: Optional[Callable[[bool, str], None]] = None
 
 
-def set_ws_broadcast_callback(callback: Callable[[bool, str], None]) -> None:
-    """设置 WebSocket 广播回调函数"""
-    global _ws_broadcast_callback
-    _ws_broadcast_callback = callback
-    logging.info("kline_scheduler: WebSocket 广播回调已设置")
+def set_sse_callback(callback: Callable[[bool, str], None]) -> None:
+    """设置 SSE 广播回调函数"""
+    global _sse_callback
+    _sse_callback = callback
+    logging.info("kline_scheduler: SSE 广播回调已设置")
 
 
 def _h60_start_date() -> str:
@@ -102,13 +102,13 @@ def run_scheduled_slot(include_daily: bool) -> None:
     try:
         path = run_defense_radar(refresh=False)
         logging.info("kline_scheduler: 双防线雷达已写入 %s", path)
-        # 调度完成后广播 WebSocket 消息
-        if _ws_broadcast_callback:
+        # 调度完成后广播 SSE 消息
+        if _sse_callback:
             try:
-                _ws_broadcast_callback(include_daily, timestamp)
-                logging.info("kline_scheduler: WebSocket 广播已发送")
+                _sse_callback(include_daily, timestamp)
+                logging.info("kline_scheduler: SSE 广播已发送")
             except Exception as e:
-                logging.warning("kline_scheduler: WebSocket 广播失败: %s", e)
+                logging.warning("kline_scheduler: SSE 广播失败: %s", e)
     except Exception:  # noqa: BLE001
         logging.exception("kline_scheduler: 双防线雷达失败")
 
