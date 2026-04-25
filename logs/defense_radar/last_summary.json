@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-25T10:46:59",
+  "generated_at": "2026-04-25T11:33:03",
   "symbols": [
     {
       "code": "510300",
@@ -814,6 +814,36 @@
     {
       "code": "600276",
       "name": "恒瑞医药",
+      "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
+      "has_alert": false,
+      "pen_60m": "向上",
+      "radar_zone_ok": true,
+      "pen_60m_down": true,
+      "macd_momentum_ok": false,
+      "blue_triangle_strict": true,
+      "full_trigger": false,
+      "in_c_central": true,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
+    },
+    {
+      "code": "515050",
+      "name": "通信ETF",
+      "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
+      "has_alert": false,
+      "pen_60m": "向下",
+      "radar_zone_ok": true,
+      "pen_60m_down": false,
+      "macd_momentum_ok": false,
+      "blue_triangle_strict": false,
+      "full_trigger": false,
+      "in_c_central": false,
+      "has_bottom_div_in_switch": false,
+      "boll_buy": false
+    },
+    {
+      "code": "600177",
+      "name": "雅戈尔",
       "alert": "【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)，等待更优入场点",
       "has_alert": false,
       "pen_60m": "向上",
