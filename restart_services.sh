@@ -53,17 +53,54 @@ pick_python_with_uvicorn() {
 
 PYTHON_FOR_BACKEND="$(pick_python_with_uvicorn)"
 
-echo "Stopping existing services on ports ${BACKEND_PORT}/${FRONTEND_PORT}..."
-# 杀死占用端口的进程
-lsof -ti:${BACKEND_PORT} | xargs kill -9 2>/dev/null || true
-lsof -ti:${FRONTEND_PORT} | xargs kill -9 2>/dev/null || true
-# 额外清理 vite 和 uvicorn 进程
-pkill -9 -f "vite" 2>/dev/null || true
-pkill -9 -f "uvicorn.*main:app.*${BACKEND_PORT}" 2>/dev/null || true
-pkill -9 -f "gunicorn.*main:app.*${BACKEND_PORT}" 2>/dev/null || true
-pkill -9 -f "node.*frontend" 2>/dev/null || true
+# 优雅关闭进程：先 SIGTERM(-15)，超时后再 SIGKILL(-9)
+graceful_kill_port() {
+  local port=$1
+  local pids
+  pids=$(lsof -ti:${port} 2>/dev/null)
+  if [ -n "${pids}" ]; then
+    echo "Sending SIGTERM to processes on port ${port}: ${pids}"
+    echo "${pids}" | xargs kill -15 2>/dev/null || true
+    # 等待最多 5 秒让进程优雅退出
+    for i in 1 2 3 4 5; do
+      sleep 1
+      pids=$(lsof -ti:${port} 2>/dev/null)
+      if [ -z "${pids}" ]; then
+        echo "Port ${port} cleared gracefully"
+        return 0
+      fi
+    done
+    # 仍有残留，强制 SIGKILL
+    echo "Force killing remaining processes on port ${port}: ${pids}"
+    echo "${pids}" | xargs kill -9 2>/dev/null || true
+  fi
+}
 
-sleep 2
+graceful_kill_pattern() {
+  local pattern=$1
+  local pids
+  pids=$(pgrep -f "${pattern}" 2>/dev/null)
+  if [ -n "${pids}" ]; then
+    echo "${pids}" | xargs kill -15 2>/dev/null || true
+    sleep 2
+    pids=$(pgrep -f "${pattern}" 2>/dev/null)
+    if [ -n "${pids}" ]; then
+      echo "${pids}" | xargs kill -9 2>/dev/null || true
+    fi
+  fi
+}
+
+echo "Stopping existing services on ports ${BACKEND_PORT}/${FRONTEND_PORT}..."
+# 优雅关闭占用端口的进程
+graceful_kill_port ${BACKEND_PORT}
+graceful_kill_port ${FRONTEND_PORT}
+# 额外清理（使用包含项目路径的精确匹配，避免误杀其他项目）
+graceful_kill_pattern "vite.*${FRONTEND_DIR}"
+graceful_kill_pattern "uvicorn.*main:app.*${BACKEND_PORT}"
+graceful_kill_pattern "gunicorn.*main:app.*${BACKEND_PORT}"
+graceful_kill_pattern "node.*${FRONTEND_DIR}"
+
+sleep 1
 
 # 确认端口已释放
 for port in ${BACKEND_PORT} ${FRONTEND_PORT}; do
