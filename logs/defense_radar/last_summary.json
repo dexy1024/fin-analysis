@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-24T17:48:22",
+  "generated_at": "2026-04-25T10:46:59",
   "symbols": [
     {
       "code": "510300",
@@ -492,7 +492,7 @@
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
       "full_trigger": false,
-      "in_c_central": true,
+      "in_c_central": false,
       "has_bottom_div_in_switch": false,
       "boll_buy": false
     },
@@ -561,11 +561,11 @@
       "name": "小米集团",
       "alert": "【红色警报】已跌破绝对防线 MIN(C-ZD, A-ZD)！该标的已废，绝对禁买！",
       "has_alert": true,
-      "pen_60m": "向上",
+      "pen_60m": "向下",
       "radar_zone_ok": false,
-      "pen_60m_down": true,
+      "pen_60m_down": false,
       "macd_momentum_ok": true,
-      "blue_triangle_strict": true,
+      "blue_triangle_strict": false,
       "full_trigger": false,
       "in_c_central": true,
       "has_bottom_div_in_switch": false,
@@ -657,7 +657,7 @@
       "macd_momentum_ok": true,
       "blue_triangle_strict": false,
       "full_trigger": false,
-      "in_c_central": false,
+      "in_c_central": true,
       "has_bottom_div_in_switch": false,
       "boll_buy": false
     },

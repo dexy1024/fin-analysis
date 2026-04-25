@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-24T16:33:06",
+  "generated_at": "2026-04-25T10:47:15",
   "buy_codes": [
     "588200",
     "688041"
@@ -17,8 +17,118 @@
       "third_sell": false
     },
     {
+      "code": "600660",
+      "name": "福耀玻璃",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "000895",
+      "name": "双汇发展",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
       "code": "600276",
       "name": "恒瑞医药",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "000001",
+      "name": "平安银行",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "000333",
+      "name": "美的集团",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "601728",
+      "name": "中国电信",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "000651",
+      "name": "格力电器",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "002415",
+      "name": "海康威视",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "601138",
+      "name": "工业富联",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "600900",
+      "name": "长江电力",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "000423",
+      "name": "东阿阿胶",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "513130",
+      "name": "恒生科技ETF",
       "first_buy": false,
       "second_buy": false,
       "third_buy": false,
@@ -57,26 +167,6 @@
       "third_sell": false
     },
     {
-      "code": "513130",
-      "name": "恒生科技ETF",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "159992",
-      "name": "创新药ETF",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
       "code": "515790",
       "name": "光伏ETF",
       "first_buy": false,
@@ -99,96 +189,6 @@
     {
       "code": "513360",
       "name": "教育ETF",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "601138",
-      "name": "工业富联",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "600660",
-      "name": "福耀玻璃",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "600900",
-      "name": "长江电力",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "000333",
-      "name": "美的集团",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "000651",
-      "name": "格力电器",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "002415",
-      "name": "海康威视",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "000895",
-      "name": "双汇发展",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "000423",
-      "name": "东阿阿胶",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "000001",
-      "name": "平安银行",
       "first_buy": false,
       "second_buy": false,
       "third_buy": false,
@@ -277,6 +277,16 @@
       "third_sell": false
     },
     {
+      "code": "159992",
+      "name": "创新药ETF",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
       "code": "002475",
       "name": "立讯精密",
       "first_buy": false,
@@ -289,16 +299,6 @@
     {
       "code": "600938",
       "name": "中国海油",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "hk00175",
-      "name": "吉利汽车",
       "first_buy": false,
       "second_buy": false,
       "third_buy": false,
@@ -389,6 +389,16 @@
     {
       "code": "002230",
       "name": "科大讯飞",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk00175",
+      "name": "吉利汽车",
       "first_buy": false,
       "second_buy": false,
       "third_buy": false,
