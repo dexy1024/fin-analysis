@@ -445,6 +445,37 @@ export async function fetchBuySellSignals(): Promise<BuySellSignalsResponse> {
   return (await resp.json()) as BuySellSignalsResponse
 }
 
+/** 标的配置项 */
+export interface SymbolConfigItem {
+  code: string
+  name: string
+}
+
+/** 标的配置响应 */
+export interface SymbolsConfigResponse {
+  core: SymbolConfigItem[]
+  custom: SymbolConfigItem[]
+  total_count: number
+}
+
+/** 获取系统标的配置（核心列表 + 用户自定义列表） */
+export async function fetchSymbolsConfig(): Promise<SymbolsConfigResponse> {
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/config/symbols`, { cache: 'no-store' })
+  if (!resp.ok) {
+    let msg = '标的配置请求失败'
+    try {
+      const data = (await resp.json()) as { detail?: string }
+      if (data.detail) {
+        msg = data.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(msg)
+  }
+  return (await resp.json()) as SymbolsConfigResponse
+}
+
 /** SSE 端点：实时推送雷达更新与止损告警 */
 export function createSseConnection(
   onMessage: (data: Record<string, unknown>) => void,

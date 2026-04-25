@@ -9,29 +9,15 @@ import {
   fetchDefenseRadarSummary,
   fetchIndexKline,
   fetchObservation,
+  fetchSymbolsConfig,
   fetchWatchlist,
   type IndexKlineResponse,
   type WatchlistItem,
 } from './api/stock'
-import { useCustomSymbols } from './hooks/useCustomSymbols'
 import { CustomSymbolAdder } from './components/CustomSymbolAdder'
-
-/** 与 DailyChanChart 一致：按中枢起始日（再按结束日）排序，首段为 A、末段为 C */
-function sortCentralsChronologically(
-  raw: NonNullable<IndexKlineResponse['centrals']>,
-): NonNullable<IndexKlineResponse['centrals']> {
-  return [...raw].sort((a, b) => {
-    const byStart = a.start_date.localeCompare(b.start_date)
-    if (byStart !== 0) return byStart
-    return a.end_date.localeCompare(b.end_date)
-  })
-}
-
-function startDateDaysAgo(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - days)
-  return d.toISOString().slice(0, 10)
-}
+import { useCustomSymbols } from './hooks/useCustomSymbols'
+import { sortCentralsChronologically } from './utils/chanUtils'
+import { startDateDaysAgo } from './utils/dateUtils'
 
 type ChartTabKey =
   | 'etf300'
@@ -677,6 +663,37 @@ function App() {
         }
       } catch {
         // ignore
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 拉取后端标的配置并校验前后端一致性
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const config = await fetchSymbolsConfig()
+        if (cancelled) return
+        // 校验前端 CHART_TABS 与后端核心列表是否一致
+        const frontendCodes = new Set(CHART_TABS.map((t) => t.code))
+        const backendCoreCodes = new Set(config.core.map((s) => s.code))
+        const missingInFrontend = [...backendCoreCodes].filter((c) => !frontendCodes.has(c))
+        const missingInBackend = [...frontendCodes].filter((c) => !backendCoreCodes.has(c))
+        if (missingInFrontend.length > 0) {
+          console.warn('[ConfigSync] 后端有但前端缺少的标的:', missingInFrontend)
+        }
+        if (missingInBackend.length > 0) {
+          console.warn('[ConfigSync] 前端有但后端缺少的标的:', missingInBackend)
+        }
+        if (missingInFrontend.length === 0 && missingInBackend.length === 0) {
+          console.info('[ConfigSync] 前后端标的配置一致，共', config.core.length, '个核心标的')
+        }
+      } catch (err) {
+        console.warn('[ConfigSync] 拉取后端标的配置失败:', err)
       }
     }
     void load()
