@@ -210,6 +210,360 @@ def _detect_15m_top_divergence(data: List[Dict[str, Any]], pens_effective: List[
 
 
 # ---------------------------------------------------------------------------
+# 15分钟趋势背驰显式检测（含跨级别联立校验）
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+
+@dataclass
+class TrendDivergenceResult:
+    """15分钟趋势背驰检测结果"""
+    has_signal: bool = False
+    divergence_type: str = ""  # "trend" 或 "pan"
+    div_date: str = ""
+    div_price: float = 0.0
+    b_area: float = 0.0
+    c_area: float = 0.0
+    area_ratio: float = 0.0
+    hub_count: int = 0
+    hub_b_low: float = 0.0
+    current_low: float = 0.0
+    reasons: str = ""
+
+
+@dataclass
+class LevelAlignmentResult:
+    """跨级别联立校验结果：15分钟背驰 ↔ 60分钟笔完成状态"""
+    is_aligned: bool = False
+    reason: str = ""
+    h60_pen_state: str = ""  # "down_complete", "up_ongoing", "down_ongoing", "up_complete"
+
+
+def _find_downward_hubs(
+    centrals: List[Dict[str, Any]],
+    pens_effective: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    识别向下中枢（进入段为向下笔 + 内部三笔不完全同向）。
+
+    ⚠️ 重要：_build_centrals 使用的是 pens_effective，所以 segment_indices
+    对应的是 pens_effective 的索引，而非原始 pens。
+    """
+    downward_hubs = []
+    for central in centrals:
+        idxs = central.get("segment_indices", [])
+        if len(idxs) != 3:
+            continue
+        p1 = pens_effective[idxs[0]] if idxs[0] < len(pens_effective) else None
+        p2 = pens_effective[idxs[1]] if idxs[1] < len(pens_effective) else None
+        p3 = pens_effective[idxs[2]] if idxs[2] < len(pens_effective) else None
+        if p1 is None or p2 is None or p3 is None:
+            continue
+        if p1.get("direction") != "down":
+            continue
+        dirs = [p1.get("direction"), p2.get("direction"), p3.get("direction")]
+        if len(set(dirs)) == 1:
+            continue
+        downward_hubs.append({
+            "start_date": central.get("start_date"),
+            "end_date": central.get("end_date"),
+            "zg": central.get("zg"),
+            "zd": central.get("zd"),
+        })
+    downward_hubs.sort(key=lambda x: x["start_date"])
+    return downward_hubs
+
+
+def _macd_green_area(
+    data: List[Dict[str, Any]],
+    start_date: str,
+    end_date: str,
+) -> float:
+    """计算指定区间MACD绿柱总面积"""
+    area = 0.0
+    in_range = False
+    for item in data:
+        date = item.get("date", "")
+        if date == start_date:
+            in_range = True
+        if in_range:
+            macd = item.get("macd", {}).get("macd", 0)
+            if macd is not None and macd < 0:
+                area += abs(macd)
+        if date == end_date:
+            break
+    return area
+
+
+def _macd_retraced_zero(
+    data: List[Dict[str, Any]],
+    start_date: str,
+    end_date: str,
+) -> bool:
+    """检查区间MACD是否回抽零轴（DIF>=0 或 MACD柱>=0）"""
+    in_range = False
+    for item in data:
+        date = item.get("date", "")
+        if date == start_date:
+            in_range = True
+        if in_range:
+            macd = item.get("macd", {})
+            m = macd.get("macd", 0)
+            dif = macd.get("dif", 0)
+            if m is not None and m >= 0:
+                return True
+            if dif is not None and dif >= 0:
+                return True
+        if date == end_date:
+            break
+    return False
+
+
+def _has_bottom_fractal_at_date(
+    fractals: List[Dict[str, Any]],
+    date: str,
+) -> bool:
+    """检查指定日期是否有底分型"""
+    return any(
+        f.get("type") == "bottom" and f.get("date") == date
+        for f in fractals
+    )
+
+
+def _detect_15m_trend_bottom_divergence(
+    data: List[Dict[str, Any]],
+    centrals: List[Dict[str, Any]],
+    pens_effective: List[Dict[str, Any]],
+    fractals: List[Dict[str, Any]],
+) -> TrendDivergenceResult:
+    """
+    15分钟趋势底背驰显式检测。
+
+    趋势背驰定义（a+A+b+B+c 结构）：
+    1. 至少2个向下中枢（A、B中枢）
+    2. B中枢构建期间MACD回抽零轴
+    3. c段向下笔创新低（跌破B中枢低点ZD）
+    4. c段MACD绿柱面积 < b段面积（背驰）
+    5. c段终点出现底分型
+
+    盘整背驰定义（a+A+b 结构）：
+    1. 仅1个向下中枢（A中枢）
+    2. b段向下笔跌破A中枢低点
+    3. b段MACD面积 < a段面积
+    4. b段终点底分型
+    """
+    empty = TrendDivergenceResult()
+
+    if not data or len(data) < 10 or not centrals or not pens_effective:
+        return empty
+
+    # 1. 识别向下中枢（segment_indices 对应 pens_effective）
+    downward_hubs = _find_downward_hubs(centrals, pens_effective)
+    if not downward_hubs:
+        return empty
+
+    # 获取所有向下笔（按时间排序）——使用 pens_effective
+    down_pens = [p for p in pens_effective if p.get("direction") == "down"]
+    down_pens.sort(key=lambda x: x.get("start_date", ""))
+    if len(down_pens) < 2:
+        return empty
+
+    # ============================================================
+    # 分支A：趋势背驰（>=2个向下中枢）
+    # ============================================================
+    if len(downward_hubs) >= 2:
+        hub_a = downward_hubs[-2]
+        hub_b = downward_hubs[-1]
+
+        # 找到B中枢后的向下笔（c段）：结束在B中枢之后 + 创新低
+        hub_b_end = hub_b["end_date"]
+        hub_b_low = float(hub_b["zd"] or 0)
+        c_pen = None
+        for pen in reversed(down_pens):
+            pen_end = pen.get("end_date")
+            pen_low = min(pen.get("start_price", 0), pen.get("end_price", 0))
+            if pen_end and hub_b_end and pen_end > hub_b_end and pen_low < hub_b_low:
+                c_pen = pen
+                break
+
+        if c_pen:
+            # 找到b段：在A中枢结束后、B中枢开始前（或内）、c段前的向下笔
+            hub_a_end = hub_a["end_date"]
+            b_pen = None
+            for pen in reversed(down_pens):
+                pen_end = pen.get("end_date")
+                if (pen_end and hub_a_end and pen_end > hub_a_end
+                        and pen_end < c_pen.get("start_date", "")):
+                    b_pen = pen
+                    break
+
+            if b_pen:
+                # c段创新低检查
+                c_low = min(c_pen.get("start_price", 0), c_pen.get("end_price", 0))
+                if c_low < hub_b_low:
+                    # MACD回抽零轴
+                    macd_ok = _macd_retraced_zero(data, hub_b["start_date"], hub_b["end_date"])
+
+                    # 计算面积
+                    b_area = _macd_green_area(data, b_pen.get("start_date", ""), b_pen.get("end_date", ""))
+                    c_area = _macd_green_area(data, c_pen.get("start_date", ""), c_pen.get("end_date", ""))
+
+                    if macd_ok and b_area > 0 and c_area > 0 and c_area < b_area:
+                        # 底分型确认
+                        c_end_date = c_pen.get("end_date", "")
+                        if _has_bottom_fractal_at_date(fractals, c_end_date):
+                            return TrendDivergenceResult(
+                                has_signal=True,
+                                divergence_type="trend",
+                                div_date=c_end_date,
+                                div_price=c_pen.get("end_price", 0),
+                                b_area=b_area,
+                                c_area=c_area,
+                                area_ratio=c_area / b_area,
+                                hub_count=len(downward_hubs),
+                                hub_b_low=hub_b_low,
+                                current_low=c_low,
+                                reasons=(
+                                    f"趋势背驰: c段面积({c_area:.3f}) < b段面积({b_area:.3f}), "
+                                    f"c_low={c_low:.2f} < hub_b_low={hub_b_low:.2f}"
+                                ),
+                            )
+
+    # ============================================================
+    # 分支B：盘整背驰（仅1个向下中枢）
+    # ============================================================
+    if len(downward_hubs) >= 1:
+        hub_a = downward_hubs[-1]
+        hub_a_end = hub_a["end_date"]
+        hub_a_low = float(hub_a["zd"] or 0)
+
+        # 找到中枢后的向下笔（b段）
+        b_pen = None
+        for pen in reversed(down_pens):
+            pen_end = pen.get("end_date")
+            pen_low = min(pen.get("start_price", 0), pen.get("end_price", 0))
+            if pen_end and hub_a_end and pen_end > hub_a_end and pen_low < hub_a_low:
+                b_pen = pen
+                break
+
+        if b_pen:
+            # 找到进入段a：中枢前的向下笔
+            hub_a_start = hub_a["start_date"]
+            a_pen = None
+            for pen in reversed(down_pens):
+                pen_end = pen.get("end_date")
+                if pen_end and pen_end < hub_a_start:
+                    a_pen = pen
+                    break
+
+            if a_pen:
+                a_area = _macd_green_area(data, a_pen.get("start_date", ""), a_pen.get("end_date", ""))
+                b_area = _macd_green_area(data, b_pen.get("start_date", ""), b_pen.get("end_date", ""))
+
+                if a_area > 0 and b_area > 0 and b_area < a_area:
+                    b_end_date = b_pen.get("end_date", "")
+                    if _has_bottom_fractal_at_date(fractals, b_end_date):
+                        return TrendDivergenceResult(
+                            has_signal=True,
+                            divergence_type="pan",
+                            div_date=b_end_date,
+                            div_price=b_pen.get("end_price", 0),
+                            b_area=b_area,
+                            c_area=a_area,  # 这里a_area对应进入段
+                            area_ratio=b_area / a_area,
+                            hub_count=len(downward_hubs),
+                            hub_b_low=hub_a_low,
+                            current_low=min(b_pen.get("start_price", 0), b_pen.get("end_price", 0)),
+                            reasons=(
+                                f"盘整背驰: b段面积({b_area:.3f}) < a段面积({a_area:.3f}), "
+                                f"b_low={min(b_pen.get('start_price',0), b_pen.get('end_price',0)):.2f} < hub_low={hub_a_low:.2f}"
+                            ),
+                        )
+
+    return empty
+
+
+def _check_level_alignment_15m_to_60m(
+    trend_div: TrendDivergenceResult,
+    h60_pens_effective: List[Dict[str, Any]],
+) -> LevelAlignmentResult:
+    """
+    跨级别联立校验：15分钟趋势背驰时，60分钟笔必须处于完成节点。
+
+    缠论原理：
+    - 15分钟一个走势类型的结束（趋势背驰） ↔ 60分钟一笔的完成
+    - 如果15分钟出现底背驰，60分钟的向下笔必须已经结束，且最好已开始向上笔
+
+    校验规则：
+    1. 15分钟无底背驰 → 无需校验，返回 aligned=True
+    2. 15分钟有底背驰 + 60分钟最后两笔为"前下后上" → aligned=True（完全同步）
+    3. 15分钟有底背驰 + 60分钟最后一笔为向下且刚结束 → aligned=True（笔刚完成）
+    4. 15分钟有底背驰 + 60分钟最后一笔为向下进行中 → aligned=False（级别不同步！）
+    5. 15分钟有底背驰 + 60分钟最后一笔为向上但已开始很久 → 警告（可能错过最佳买点）
+    """
+    if not trend_div.has_signal:
+        return LevelAlignmentResult(
+            is_aligned=True,
+            reason="15分钟无背驰，无需校验级别联立",
+            h60_pen_state="unknown",
+        )
+
+    if not h60_pens_effective or len(h60_pens_effective) < 2:
+        return LevelAlignmentResult(
+            is_aligned=False,
+            reason="60分钟笔数据不足，无法校验级别联立",
+            h60_pen_state="unknown",
+        )
+
+    prev_pen = h60_pens_effective[-2]
+    curr_pen = h60_pens_effective[-1]
+    prev_dir = prev_pen.get("direction", "")
+    curr_dir = curr_pen.get("direction", "")
+
+    # 完全同步：60分钟前下后上
+    if prev_dir == "down" and curr_dir == "up":
+        return LevelAlignmentResult(
+            is_aligned=True,
+            reason="✅ 级别完全同步：15分钟底背驰 ↔ 60分钟向下笔已完成、向上笔已开始",
+            h60_pen_state="down_complete",
+        )
+
+    # 60分钟最后一笔向下：需要判断是否已结束
+    if curr_dir == "down":
+        # 15分钟背驰点日期
+        div_date = trend_div.div_date
+        curr_end = curr_pen.get("end_date", "")
+        # 如果15分钟背驰点在60分钟向下笔结束之后（或相同），说明60分钟笔已结束
+        if div_date and curr_end and div_date >= curr_end:
+            return LevelAlignmentResult(
+                is_aligned=True,
+                reason="✅ 级别同步：15分钟底背驰点落在60分钟向下笔结束之后（笔已完成）",
+                h60_pen_state="down_complete",
+            )
+        return LevelAlignmentResult(
+            is_aligned=False,
+            reason="❌ 级别不同步！15分钟底背驰但60分钟向下笔仍在进行中（未结束）",
+            h60_pen_state="down_ongoing",
+        )
+
+    # 60分钟最后一笔向上，但前笔也是向上（无向下笔过渡）
+    if curr_dir == "up" and prev_dir == "up":
+        return LevelAlignmentResult(
+            is_aligned=False,
+            reason="⚠️ 级别可能不同步：60分钟连续向上笔，无向下笔完成记录",
+            h60_pen_state="up_ongoing_no_retracement",
+        )
+
+    # 其他情况
+    return LevelAlignmentResult(
+        is_aligned=False,
+        reason=f"⚠️ 级别状态不明：60分钟笔状态为 前笔={prev_dir}, 当前={curr_dir}",
+        h60_pen_state=f"{prev_dir}_{curr_dir}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # 60分钟买点/卖点条件计算
 # ---------------------------------------------------------------------------
 
@@ -464,6 +818,9 @@ def _classify_symbol_state(
     # 15分钟分析
     h15_bottom_div = False
     h15_top_div = False
+    h15_trend_div: TrendDivergenceResult = TrendDivergenceResult()
+    h15_level_alignment: LevelAlignmentResult = LevelAlignmentResult()
+
     if h15_result and h15_result.get("data") and h15_result.get("pens_effective"):
         h15_bottom_div = _detect_15m_bottom_divergence(
             h15_result["data"], h15_result["pens_effective"]
@@ -471,6 +828,19 @@ def _classify_symbol_state(
         h15_top_div = _detect_15m_top_divergence(
             h15_result["data"], h15_result["pens_effective"]
         )
+
+        # 显式趋势背驰检测（含中枢识别）
+        # ⚠️ 必须传入 pens_effective，因为 centrals.segment_indices 对应的是 pens_effective
+        h15_trend_div = _detect_15m_trend_bottom_divergence(
+            h15_result["data"],
+            h15_result.get("centrals", []),
+            h15_result.get("pens_effective", []),
+            h15_result.get("fractals", []),
+        )
+
+        # 跨级别联立校验：15分钟背驰 ↔ 60分钟笔完成状态
+        h60_pens_eff = h60_result.get("pens_effective", []) if h60_result else []
+        h15_level_alignment = _check_level_alignment_15m_to_60m(h15_trend_div, h60_pens_eff)
 
     is_holding = code in holding_codes
 
@@ -520,7 +890,14 @@ def _classify_symbol_state(
         state = "IGNORE"
         reason = "大盘警戒，禁止开新仓"
     # === 优先级 7：大盘 SAFE + 强势区 + 60m买点 + 15m底背驰 -> BUY ===
-    elif (
+    # 支持两种15分钟微观信号：
+    #   A) 传统盘整背驰（h15_bottom_div）
+    #   B) 显式趋势背驰（h15_trend_div.has_signal）+ 级别联立校验通过
+    h15_micro_buy = h15_bottom_div or (
+        h15_trend_div.has_signal and h15_level_alignment.is_aligned
+    )
+
+    if (
         market_state == "MARKET_SAFE"
         and daily_close is not None
         and daily_czd is not None
@@ -529,10 +906,15 @@ def _classify_symbol_state(
         and h60_conditions["switched_down_to_up"]
         and h60_conditions["has_bottom_div_in_switch"]
         and h60_conditions["macd_buy"]
-        and h15_bottom_div
+        and h15_micro_buy
     ):
         state = "BUY"
-        reason = "多级别共振底背驰"
+        if h15_trend_div.has_signal and h15_trend_div.divergence_type == "trend":
+            reason = f"多级别共振趋势背驰(面积比{h15_trend_div.area_ratio:.2f})"
+        elif h15_trend_div.has_signal and h15_trend_div.divergence_type == "pan":
+            reason = f"多级别共振盘整背驰(面积比{h15_trend_div.area_ratio:.2f})"
+        else:
+            reason = "多级别共振底背驰"
     else:
         state = "IGNORE"
         reason = "中枢震荡，无买卖点"
@@ -546,6 +928,8 @@ def _classify_symbol_state(
         "h60_conditions": h60_conditions,
         "h15_bottom_div": h15_bottom_div,
         "h15_top_div": h15_top_div,
+        "h15_trend_div": h15_trend_div,
+        "h15_level_alignment": h15_level_alignment,
         "is_holding": is_holding,
     }
 
@@ -567,6 +951,8 @@ def _build_radar_checklist(analysis: Dict[str, Any]) -> Dict[str, Any]:
     h60_conditions = analysis.get("h60_conditions", {})
     h15_bottom_div = analysis.get("h15_bottom_div", False)
     h15_top_div = analysis.get("h15_top_div", False)
+    h15_trend_div = analysis.get("h15_trend_div", TrendDivergenceResult())
+    h15_level_alignment = analysis.get("h15_level_alignment", LevelAlignmentResult())
 
     # 宏观(日线)
     if daily_close is not None and daily_czd is not None and daily_azd is not None:
@@ -595,9 +981,17 @@ def _build_radar_checklist(analysis: Dict[str, Any]) -> Dict[str, Any]:
         battle_text = "中枢震荡，无明确方向"
 
     # 微观(15分钟)
-    if h15_bottom_div:
+    if h15_trend_div.has_signal:
         micro_ok = True
-        micro_text = "MACD 底背驰确认"
+        div_type = "趋势背驰" if h15_trend_div.divergence_type == "trend" else "盘整背驰"
+        ratio_text = f"(面积比{h15_trend_div.area_ratio:.2f})"
+        if h15_level_alignment.is_aligned:
+            micro_text = f"15分钟{div_type}确认{ratio_text} | {h15_level_alignment.reason}"
+        else:
+            micro_text = f"15分钟{div_type}确认{ratio_text} | ⚠️ {h15_level_alignment.reason}"
+    elif h15_bottom_div:
+        micro_ok = True
+        micro_text = "MACD 底背驰确认（传统盘整背驰）"
     elif h15_top_div:
         micro_ok = True
         micro_text = "MACD 顶背驰确认"

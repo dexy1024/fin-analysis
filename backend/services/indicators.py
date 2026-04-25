@@ -150,10 +150,12 @@ def _kline_cache_get(key: tuple[str, str, str, str]) -> Dict[str, Any] | None:
     item = _KLINE_RESP_CACHE.get(key)
     if item is None:
         return None
-    ts, _src_mtime, data = item
+    ts, src_mtime, data = item
     if time.time() - ts > _KLINE_RESP_CACHE_TTL_SECONDS:
         _KLINE_RESP_CACHE.pop(key, None)
         return None
+    # LRU：更新访问时间戳，使最近使用的条目在淘汰时保留
+    _KLINE_RESP_CACHE[key] = (time.time(), src_mtime, data)
     return copy.deepcopy(data)
 
 
@@ -240,7 +242,7 @@ def _with_retry(fetch_fn, *, retries: int = 3, sleep_sec: float = 0.8):
     for i in range(retries):
         try:
             return fetch_fn()
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ConnectionError, TimeoutError) as exc:
             last_exc = exc
             if i < retries - 1:
                 time.sleep(sleep_sec * (i + 1))
@@ -532,17 +534,19 @@ def _to_sina_symbol(symbol: str, src: str, api_sym: str) -> str:
     raise ValueError("不支持的 symbol")
 
 
-def _fetch_hk_60m_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+def _fetch_hk_min_from_akshare(
+    symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp, period: str = "60"
+) -> pd.DataFrame:
     """
-    使用 AKShare 获取港股 60 分钟数据。
+    使用 AKShare 获取港股分钟数据。
     symbol: 5位数字代码，如 '01810'
+    period: '1'/'5'/'15'/'30'/'60'，默认 '60'
     """
-    logging.info("使用 AKShare stock_hk_hist_min_em 获取港股 %s 60分钟数据", symbol)
-    
-    # 使用 stock_hk_hist_min_em 接口获取60分钟数据
-    df = ak.stock_hk_hist_min_em(symbol=symbol, period='60')
+    logging.info("使用 AKShare stock_hk_hist_min_em 获取港股 %s %s分钟数据", symbol, period)
+
+    df = ak.stock_hk_hist_min_em(symbol=symbol, period=period)
     if df is None or df.empty:
-        raise ValueError(f"AKShare 未返回 {symbol} 的港股60分钟数据")
+        raise ValueError(f"AKShare 未返回 {symbol} 的港股{period}分钟数据")
     
     # 统一列名
     rename_map = {
@@ -557,7 +561,7 @@ def _fetch_hk_60m_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.T
     
     required_cols = {"date", "open", "high", "low", "close", "volume"}
     if not required_cols.issubset(df.columns):
-        raise ValueError(f"AKShare 港股60分钟数据缺少必要字段，实际列: {list(df.columns)}")
+        raise ValueError(f"AKShare 港股{period}分钟数据缺少必要字段，实际列: {list(df.columns)}")
     
     # 转换时间
     df["date"] = pd.to_datetime(df["date"])
@@ -576,19 +580,27 @@ def _fetch_hk_60m_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.T
     if df.empty:
         raise ValueError(f"{symbol} AKShare 港股60分钟数据在指定日期范围内为空")
     
-    logging.info("AKShare 港股 %s 60分钟数据获取完成，共 %d 条", symbol, len(df))
+    logging.info("AKShare 港股 %s %s分钟数据获取完成，共 %d 条", symbol, period, len(df))
     return df
 
 
-def _fetch_hk_60m_from_yfinance(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+def _fetch_hk_60m_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """向后兼容包装器，固定获取 60 分钟数据。"""
+    return _fetch_hk_min_from_akshare(symbol, start_ts, end_ts, period="60")
+
+
+def _fetch_hk_min_from_yfinance(
+    symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp, interval: str = "60m"
+) -> pd.DataFrame:
     """
-    使用 yfinance 获取港股 60 分钟数据。
+    使用 yfinance 获取港股分钟数据。
     symbol: 5位数字代码，如 '01810'
-    
+    interval: yfinance 间隔，如 '15m'/'30m'/'60m'/'1h'，默认 '60m'
+
     yfinance 港股代码格式: 1810.HK（去掉前导零，但保留至少4位）
-    注意: yfinance 60分钟数据最多支持约730天
+    注意: yfinance 分钟数据最多支持约730天
     """
-    logging.info("使用 yfinance 获取港股 %s 60分钟数据", symbol)
+    logging.info("使用 yfinance 获取港股 %s %s数据", symbol, interval)
     
     # yfinance 港股代码格式：去掉前导零，但保留至少4位
     # 如 01810 -> 1810.HK, 00175 -> 0175.HK
@@ -603,10 +615,10 @@ def _fetch_hk_60m_from_yfinance(symbol: str, start_ts: pd.Timestamp, end_ts: pd.
         ticker = yf.Ticker(yf_symbol)
         
         # 获取数据
-        df = ticker.history(start=start_ts.strftime('%Y-%m-%d'), interval='60m')
+        df = ticker.history(start=start_ts.strftime('%Y-%m-%d'), interval=interval)
         
         if df is None or df.empty:
-            raise ValueError(f"yfinance 未返回 {symbol} 的港股60分钟数据")
+            raise ValueError(f"yfinance 未返回 {symbol} 的港股{interval}数据")
         
         # 统一列名（yfinance 返回的是首字母大写）
         df = df.rename(columns={
@@ -635,12 +647,17 @@ def _fetch_hk_60m_from_yfinance(symbol: str, start_ts: pd.Timestamp, end_ts: pd.
         if df.empty:
             raise ValueError(f"{symbol} yfinance 港股60分钟数据在指定日期范围内为空")
         
-        logging.info("yfinance 港股 %s 60分钟数据获取完成，共 %d 条", symbol, len(df))
+        logging.info("yfinance 港股 %s %s数据获取完成，共 %d 条", symbol, interval, len(df))
         return df[['date', 'open', 'high', 'low', 'close', 'volume']]
-        
+
     except Exception as e:
-        logging.error("yfinance 获取港股 %s 60分钟数据失败: %s", symbol, e)
+        logging.error("yfinance 获取港股 %s %s数据失败: %s", symbol, interval, e)
         raise
+
+
+def _fetch_hk_60m_from_yfinance(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """向后兼容包装器，固定获取 60 分钟数据。"""
+    return _fetch_hk_min_from_yfinance(symbol, start_ts, end_ts, interval="60m")
 
 
 def _normalize_symbol(code: str) -> str:
@@ -1793,10 +1810,10 @@ def get_index_kline(
             if src == "hk":
                 # 港股15分钟：优先使用 AKShare，失败后回退 yfinance
                 try:
-                    return _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
+                    return _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
                 except Exception:
                     logging.exception("AKShare 港股15分钟失败，回退 yfinance: %s", api_sym)
-                    return _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
+                    return _fetch_hk_min_from_yfinance(api_sym, start_ts, end_ts, interval="15m")
             raise ValueError("不支持的 symbol")
 
         # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上
@@ -1846,6 +1863,11 @@ def get_index_kline(
 
     if df.empty:
         raise ValueError("指定日期区间内没有指数K线数据")
+
+    # 缠论计算仅需最近258根K线，超过则截断以保持计算聚焦和性能
+    KLINE_CALC_LIMIT = 258
+    if len(df) > KLINE_CALC_LIMIT:
+        df = df.iloc[-KLINE_CALC_LIMIT:].reset_index(drop=True)
 
     rows: List[Dict[str, Any]] = []
     for _, row in df.iterrows():

@@ -32,6 +32,9 @@ from services.position_manager import check_stop_loss, get_holdings, sell_all
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
+# 调度任务中可预期的业务异常（网络、数据、IO问题），捕获后记录日志即可，不应导致调度线程崩溃
+_SCHEDULER_EXPECTED_EXCEPTIONS = (ValueError, OSError, TypeError, KeyError, RuntimeError)
+
 
 def _daily_start_date() -> str:
     return (datetime.now(TZ_SH) - timedelta(days=380)).strftime("%Y-%m-%d")
@@ -72,7 +75,7 @@ def _write_status_file() -> None:
                 },
                 f,
             )
-    except Exception:  # noqa: BLE001
+    except (OSError, TypeError):
         pass
 
 
@@ -81,7 +84,7 @@ def _read_status_file() -> dict:
     try:
         with open(_STATUS_FILE, "r") as f:
             return json.load(f)
-    except Exception:  # noqa: BLE001
+    except (OSError, json.JSONDecodeError, TypeError):
         return {
             "alive": False,
             "healthy": False,
@@ -139,7 +142,7 @@ def _sync_all_daily() -> None:
                 period="daily",
                 refresh=True,
             )
-        except Exception:  # noqa: BLE001
+        except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 日线同步失败 %s", sym)
 
 
@@ -155,7 +158,7 @@ def _sync_all_60m() -> None:
                 period="60",
                 refresh=True,
             )
-        except Exception:  # noqa: BLE001
+        except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 60m 同步失败 %s", sym)
 
 
@@ -171,7 +174,7 @@ def _sync_all_15m() -> None:
                 period="15",
                 refresh=True,
             )
-        except Exception:  # noqa: BLE001
+        except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 15m 同步失败 %s", sym)
 
 
@@ -204,7 +207,7 @@ def _check_positions_stop_loss() -> None:
                     "kline_scheduler: 止损触发 %s %s @ %.2f, 原因: %s",
                     pos.code, pos.name, last_price, stop_result["reason"]
                 )
-        except Exception:  # noqa: BLE001
+        except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 止损检查失败 %s", pos.code)
 
 
@@ -221,21 +224,21 @@ def run_scheduled_slot(include_daily: bool) -> None:
     try:
         path = run_defense_radar(refresh=False)
         logging.info("kline_scheduler: 双防线雷达已写入 %s", path)
-    except Exception:  # noqa: BLE001
+    except _SCHEDULER_EXPECTED_EXCEPTIONS:
         logging.exception("kline_scheduler: 双防线雷达失败")
 
     # 计算 watchlist + observation 的破位状态
     try:
         broken_path = compute_and_save_broken_symbols()
         logging.info("kline_scheduler: 破位状态已写入 %s", broken_path)
-    except Exception:  # noqa: BLE001
+    except _SCHEDULER_EXPECTED_EXCEPTIONS:
         logging.exception("kline_scheduler: 破位状态计算失败")
 
     # 计算 watchlist + observation 的买卖信号
     try:
         buy_sell_path = compute_and_save_buy_sell_signals()
         logging.info("kline_scheduler: 买卖信号已写入 %s", buy_sell_path)
-    except Exception:  # noqa: BLE001
+    except _SCHEDULER_EXPECTED_EXCEPTIONS:
         logging.exception("kline_scheduler: 买卖信号计算失败")
 
     # 作战指令引擎（无头决策报告生成）
@@ -243,7 +246,7 @@ def run_scheduled_slot(include_daily: bool) -> None:
         from services.trade_command_engine import run_trade_command_engine
         report_path = run_trade_command_engine()
         logging.info("kline_scheduler: 作战指令报告已生成 %s", report_path)
-    except Exception:  # noqa: BLE001
+    except _SCHEDULER_EXPECTED_EXCEPTIONS:
         logging.exception("kline_scheduler: 作战指令引擎失败")
 
     # 调度完成后广播 SSE 消息
@@ -251,7 +254,7 @@ def run_scheduled_slot(include_daily: bool) -> None:
         if _sse_callback:
             _sse_callback(include_daily, timestamp)
             logging.info("kline_scheduler: SSE 广播已发送")
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         logging.warning("kline_scheduler: SSE 广播失败: %s", e)
 
 
@@ -307,7 +310,7 @@ def _scheduler_worker_loop() -> None:
             "kline_scheduler: 下次调度时间 %s (%.0f秒后), type=%s, include_daily=%s",
             when.isoformat(), wait_sec, slot_type, include_daily,
         )
-    except Exception:  # noqa: BLE001
+    except (TypeError, ValueError, RuntimeError, OSError):
         logging.exception("kline_scheduler: 计算下一槽位失败，60s 后重试")
         if _stop_event.wait(timeout=60.0):
             return
@@ -353,7 +356,7 @@ def _scheduler_worker_loop() -> None:
             _last_slot_time = datetime.now(TZ_SH)
             _slot_execution_count += 1
         logging.info("kline_scheduler: 槽位任务执行完成，继续下一次循环")
-    except Exception:  # noqa: BLE001
+    except _SCHEDULER_EXPECTED_EXCEPTIONS:
         logging.exception("kline_scheduler: 槽位执行失败")
 
 
@@ -363,7 +366,8 @@ def _scheduler_worker() -> None:
     while not _stop_event.is_set():
         try:
             _scheduler_worker_loop()
-        except Exception:  # noqa: BLE001
+        except Exception:
+            # 此处捕获所有异常是调度线程的保活机制：任何未预料到的异常都不应杀死后台调度线程
             logging.exception("kline_scheduler: 工作线程遭遇致命异常，5秒后重启循环")
             global _last_heartbeat
             _last_heartbeat = time.time()
@@ -401,7 +405,7 @@ def _check_and_run_missed_slot() -> None:
                 _last_slot_time = datetime.now(TZ_SH)
                 _slot_execution_count += 1
             logging.info("kline_scheduler: 补跑槽位完成")
-        except Exception:  # noqa: BLE001
+        except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 补跑槽位失败")
     else:
         logging.info("kline_scheduler: 上一个槽位 %s 已过去%.0f秒，无需补跑", last_slot.isoformat(), elapsed)
@@ -485,7 +489,15 @@ def setup_kline_scheduler() -> None:
 
 
 def shutdown_kline_scheduler() -> None:
+    global _scheduler_lock_fd
     _stop_event.set()
     t = _worker_thread
     if t is not None and t.is_alive():
         t.join(timeout=8.0)
+    # 释放多 worker 去重文件锁，避免 fd 泄漏
+    if _scheduler_lock_fd is not None:
+        try:
+            _scheduler_lock_fd.close()
+        except OSError:
+            pass
+        _scheduler_lock_fd = None

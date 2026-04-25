@@ -126,7 +126,7 @@ def load_last_summary_json(radar_dir: Optional[Path] = None) -> Optional[Dict[st
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except (OSError, json.JSONDecodeError, TypeError):
         logging.warning("defense_radar: 读取 %s 失败", path)
         return None
     if not isinstance(data, dict) or not isinstance(data.get("symbols"), list):
@@ -160,7 +160,7 @@ def get_defense_radar_summary_for_api(*, refresh: bool = False) -> Dict[str, Any
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / LAST_SUMMARY_JSON
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except Exception:  # noqa: BLE001
+    except (OSError, TypeError):
         logging.exception("defense_radar: 写入 %s 失败", LAST_SUMMARY_JSON)
     return payload
 
@@ -618,7 +618,7 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             period="daily",
             refresh=refresh,
         )
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, OSError, TypeError, KeyError, RuntimeError) as exc:
         logging.exception("defense_radar: 拉取日线失败 %s", code)
         return DefenseRow(
             code=code,
@@ -653,7 +653,7 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             period="60",
             refresh=refresh,
         )
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, OSError, TypeError, KeyError, RuntimeError) as exc:
         logging.exception("defense_radar: 读取60分钟失败 %s", code)
         return DefenseRow(
             code=code,
@@ -793,7 +793,7 @@ def run_defense_radar(
     gen_iso = datetime.now().replace(microsecond=0).isoformat()
     try:
         write_last_summary_json(out_dir, rows_out, gen_iso)
-    except Exception:  # noqa: BLE001
+    except (OSError, TypeError):
         logging.exception("defense_radar: 写入 %s 失败", LAST_SUMMARY_JSON)
 
     logging.info("defense_radar: 已写入 %s（共 %s 行）", path, len(rows_out))
@@ -817,7 +817,7 @@ def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
             for item in data.get("holdings", []):
                 if isinstance(item, dict) and item.get("code"):
                     symbols.append((str(item["code"]).strip(), str(item.get("name", "")).strip()))
-        except Exception:  # noqa: BLE001
+        except (OSError, json.JSONDecodeError, TypeError):
             logging.warning("defense_radar: 读取 watchlist.json 失败")
 
     observation_path = root / "backend" / "data" / "observation.json"
@@ -831,7 +831,7 @@ def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
                     # 去重：已存在于 watchlist 的跳过
                     if not any(c == code for c, _ in symbols):
                         symbols.append((code, name))
-        except Exception:  # noqa: BLE001
+        except (OSError, json.JSONDecodeError, TypeError):
             logging.warning("defense_radar: 读取 observation.json 失败")
 
     return symbols
@@ -857,7 +857,7 @@ def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float]
             period="daily",
             refresh=False,
         )
-    except Exception:  # noqa: BLE001
+    except (ValueError, OSError, TypeError, KeyError, RuntimeError):
         logging.warning("defense_radar: 日线数据获取失败 %s", sym)
         return False, None, None, None
 
@@ -876,7 +876,7 @@ def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float]
             period="60",
             refresh=False,
         )
-    except Exception:  # noqa: BLE001
+    except (ValueError, OSError, TypeError, KeyError, RuntimeError):
         logging.warning("defense_radar: 60分钟数据获取失败 %s", sym)
         return False, a_zd, c_zd, None
 
@@ -947,7 +947,7 @@ def load_broken_symbols_json(radar_dir: Optional[Path] = None) -> Optional[Dict[
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except (OSError, json.JSONDecodeError, TypeError):
         logging.warning("defense_radar: 读取 %s 失败", path)
         return None
 

@@ -78,7 +78,7 @@ def calculate_macd_green_area(
 
 def find_downward_hubs(
     centrals: List[dict],
-    pens: List[dict],
+    pens_effective: List[dict],
 ) -> List[dict]:
     """
     识别向下的中枢（A、B中枢）
@@ -88,9 +88,12 @@ def find_downward_hubs(
     - 中枢由连续的三笔重叠构成（segment_indices 有且仅有3个索引）
     - 中枢内部笔方向不完全相同（避免出现三笔同向的异常中枢）
 
+    ⚠️ 重要：_build_centrals 使用的是 pens_effective，所以 segment_indices
+    对应的是 pens_effective 的索引，而非原始 pens。
+
     Args:
         centrals: 中枢列表
-        pens: 笔列表
+        pens_effective: 有效笔列表（segment_indices 的索引目标）
 
     Returns:
         向下中枢列表（按时间排序）
@@ -103,9 +106,9 @@ def find_downward_hubs(
         if len(idxs) != 3:
             continue
 
-        p1 = pens[idxs[0]] if idxs[0] < len(pens) else None
-        p2 = pens[idxs[1]] if idxs[1] < len(pens) else None
-        p3 = pens[idxs[2]] if idxs[2] < len(pens) else None
+        p1 = pens_effective[idxs[0]] if idxs[0] < len(pens_effective) else None
+        p2 = pens_effective[idxs[1]] if idxs[1] < len(pens_effective) else None
+        p3 = pens_effective[idxs[2]] if idxs[2] < len(pens_effective) else None
         if p1 is None or p2 is None or p3 is None:
             continue
 
@@ -360,24 +363,25 @@ def detect_first_buy_point(
         
         data = result.get("data", [])
         centrals = result.get("centrals", [])
-        pens = result.get("pens", [])
-        
-        if not data or not centrals or not pens:
+        # ⚠️ segment_indices 对应的是 pens_effective，必须使用 pens_effective
+        pens_effective = result.get("pens_effective", [])
+
+        if not data or not centrals or not pens_effective:
             logging.warning(f"[{code}] 数据不足，无法检测一买")
             return None
-        
+
         # 1. 识别向下中枢（至少2个）
-        downward_hubs = find_downward_hubs(centrals, pens)
+        downward_hubs = find_downward_hubs(centrals, pens_effective)
         if len(downward_hubs) < 2:
             logging.debug(f"[{code}] 向下中枢数量不足: {len(downward_hubs)}")
             return None
-        
+
         # 取最后两个向下中枢作为A、B中枢
         hub_a = downward_hubs[-2]  # A中枢
         hub_b = downward_hubs[-1]  # B中枢
-        
-        # 2. 获取向下笔
-        down_pens = find_down_pens(pens)
+
+        # 2. 获取向下笔（基于 pens_effective）
+        down_pens = find_down_pens(pens_effective)
         if len(down_pens) < 2:
             logging.debug(f"[{code}] 向下笔数量不足")
             return None
