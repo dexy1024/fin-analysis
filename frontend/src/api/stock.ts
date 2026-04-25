@@ -70,7 +70,7 @@ export interface IndexKlineResponse {
   symbol: string
   start_date: string
   end_date: string
-  period: 'daily' | '60'
+  period: 'daily' | '60' | '15'
   /** 指数/ETF 为 none；普通 A 股与港股日 K/60m 为前复权 qfq */
   adjust: 'none' | 'qfq'
   data: IndexKlinePoint[]
@@ -184,7 +184,7 @@ export async function fetchStockHistoryIndicators(
 
 export async function fetchIndexKline(
   symbol = 'sh000001',
-  period: 'daily' | '60' = 'daily',
+  period: 'daily' | '60' | '15' = 'daily',
   startDate = '2024-12-01',
   endDate?: string,
   refresh = false,
@@ -196,7 +196,7 @@ export async function fetchIndexKline(
   if (refresh) {
     params.set('refresh', 'true')
   }
-  const resp = await fetchWithRetry(`${API_BASE_URL}/api/index/kline?${params.toString()}`)
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/index/kline?${params.toString()}`, { cache: 'no-store' })
 
   if (!resp.ok) {
     let msg = '请求失败'
@@ -300,5 +300,168 @@ export async function runDefenseRadarDiagnosis(refresh = false): Promise<{ ok: b
     throw new Error(msg)
   }
   return (await resp.json()) as { ok: boolean; path: string }
+}
+
+// ==================== 持仓管理 ====================
+
+export interface Position {
+  code: string
+  name: string
+  signal_type: string
+  buy_date: string
+  buy_price: number
+  amount: number
+  tactical_stop: number
+  strategic_stop: number
+}
+
+export interface PositionsResponse {
+  count: number
+  positions: Position[]
+}
+
+/** 获取当前持仓列表 */
+export async function fetchPositions(): Promise<PositionsResponse> {
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/positions`, { cache: 'no-store' })
+  if (!resp.ok) {
+    let msg = '持仓请求失败'
+    try {
+      const data = (await resp.json()) as { detail?: string }
+      if (data.detail) {
+        msg = data.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(msg)
+  }
+  return (await resp.json()) as PositionsResponse
+}
+
+/** 用户持仓/自选列表 */
+export interface WatchlistItem {
+  code: string
+  name: string
+  cost?: number
+  shares?: number
+  note?: string
+}
+
+export interface WatchlistResponse {
+  holdings: WatchlistItem[]
+}
+
+/** 读取用户持仓/自选列表 */
+export async function fetchWatchlist(): Promise<WatchlistResponse> {
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/watchlist`, { cache: 'no-store' })
+  if (!resp.ok) {
+    return { holdings: [] }
+  }
+  return (await resp.json()) as WatchlistResponse
+}
+
+/** 用户观察/自选列表（与持仓区分，仅用于前端显示） */
+export interface ObservationResponse {
+  observations: WatchlistItem[]
+}
+
+/** 读取用户观察/自选列表 */
+export async function fetchObservation(): Promise<ObservationResponse> {
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/observation`, { cache: 'no-store' })
+  if (!resp.ok) {
+    return { observations: [] }
+  }
+  return (await resp.json()) as ObservationResponse
+}
+
+/** 破位状态详情 */
+export interface BrokenSymbolDetail {
+  code: string
+  name: string
+  is_broken: boolean
+  a_zd: number | null
+  c_zd: number | null
+  last_price: number | null
+}
+
+export interface BrokenSymbolsResponse {
+  generated_at: string | null
+  broken_codes: string[]
+  details: BrokenSymbolDetail[]
+}
+
+/** 获取 watchlist + observation 的破位状态汇总（由定时调度预计算） */
+export async function fetchBrokenSymbols(): Promise<BrokenSymbolsResponse> {
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/broken-symbols`, { cache: 'no-store' })
+  if (!resp.ok) {
+    let msg = '破位状态请求失败'
+    try {
+      const data = (await resp.json()) as { detail?: string }
+      if (data.detail) {
+        msg = data.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(msg)
+  }
+  return (await resp.json()) as BrokenSymbolsResponse
+}
+
+/** 买卖信号状态详情 */
+export interface BuySellSignalDetail {
+  code: string
+  name: string
+  first_buy: boolean
+  second_buy: boolean
+  third_buy: boolean
+  first_sell: boolean
+  second_sell: boolean
+  third_sell: boolean
+}
+
+export interface BuySellSignalsResponse {
+  generated_at: string | null
+  buy_codes: string[]
+  sell_codes: string[]
+  details: BuySellSignalDetail[]
+}
+
+/** 获取 watchlist + observation 的买卖信号汇总（由定时调度预计算） */
+export async function fetchBuySellSignals(): Promise<BuySellSignalsResponse> {
+  const resp = await fetchWithRetry(`${API_BASE_URL}/api/buy-sell-signals`, { cache: 'no-store' })
+  if (!resp.ok) {
+    let msg = '买卖信号请求失败'
+    try {
+      const data = (await resp.json()) as { detail?: string }
+      if (data.detail) {
+        msg = data.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(msg)
+  }
+  return (await resp.json()) as BuySellSignalsResponse
+}
+
+/** SSE 端点：实时推送雷达更新与止损告警 */
+export function createSseConnection(
+  onMessage: (data: Record<string, unknown>) => void,
+  onError?: (err: Event) => void,
+): EventSource {
+  const es = new EventSource(`${API_BASE_URL}/api/sse/radar-updates`)
+  es.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      onMessage(data)
+    } catch {
+      // ignore parse errors
+    }
+  }
+  if (onError) {
+    es.onerror = onError
+  }
+  return es
 }
 

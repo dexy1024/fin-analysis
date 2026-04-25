@@ -35,6 +35,15 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
   const [isLoadingName, setIsLoadingName] = useState(false)
   const [nameFetchStatus, setNameFetchStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
 
+  // 验证股票代码格式
+  const isValidCode = (code: string): boolean => {
+    // 支持：6位数字（A股/ETF）、sh/sz+6位数字（指数）、hk+5位数字（港股）
+    return /^[\d]{6}$/.test(code) || 
+           /^sh\d{6}$/i.test(code) || 
+           /^sz\d{6}$/i.test(code) ||
+           /^hk\d{5}$/i.test(code)
+  }
+
   // 自动获取股票名称
   const autoFetchName = useCallback(async (inputCode: string) => {
     const normalizedCode = inputCode.trim()
@@ -42,7 +51,7 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
     if (!normalizedCode) return
     
     // 验证格式
-    if (!/^[\d]{6}$/.test(normalizedCode) && !/^sh\d{6}$/i.test(normalizedCode) && !/^sz\d{6}$/i.test(normalizedCode)) {
+    if (!isValidCode(normalizedCode)) {
       console.log('[CustomSymbolAdder] 格式验证失败:', normalizedCode)
       return
     }
@@ -75,14 +84,15 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
     setCode(newCode)
     
     // 当输入改变时重置名称状态
-    if (newCode.trim().length < 6) {
+    const trimmed = newCode.trim()
+    if (trimmed.length < 5) {
       setNameFetchStatus('idle')
       setName('')
     }
     
-    // 当输入6位数字时自动获取名称
-    if (/^[\d]{6}$/.test(newCode.trim())) {
-      autoFetchName(newCode.trim())
+    // 当输入6位数字（A股）或hk+5位数字（港股）时自动获取名称
+    if (/^[\d]{6}$/.test(trimmed) || /^hk\d{5}$/i.test(trimmed)) {
+      autoFetchName(trimmed)
     }
   }
 
@@ -98,8 +108,8 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
     }
 
     // 验证股票代码格式
-    if (!/^[\d]{6}$/.test(normalizedCode) && !/^sh\d{6}$/i.test(normalizedCode) && !/^sz\d{6}$/i.test(normalizedCode)) {
-      setError('股票代码格式错误，请输入6位数字（如：601138）')
+    if (!isValidCode(normalizedCode)) {
+      setError('股票代码格式错误，支持：6位数字（如：601138）、hk+5位数字（如：hk01810）')
       return
     }
 
@@ -121,11 +131,11 @@ export function CustomSymbolAdder({ onAdd, onRemove, customSymbols }: CustomSymb
         <div className="input-row">
           <input
             type="text"
-            placeholder="股票代码（如：601138）"
+            placeholder="代码（如：601138、hk01810）"
             value={code}
             onChange={handleCodeChange}
             className="code-input"
-            maxLength={8}
+            maxLength={9}
           />
           <input
             type="text"

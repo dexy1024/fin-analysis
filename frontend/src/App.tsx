@@ -3,7 +3,16 @@ import './App.css'
 import { classifyDefenseAlert, type DefenseAlertKind } from './DefenseAlertBrief'
 import { DailyChanChart } from './DailyChanChart'
 import { HourlyChanChart } from './HourlyChanChart'
-import { fetchDefenseRadarSummary, fetchIndexKline, type IndexKlineResponse } from './api/stock'
+import {
+  fetchBrokenSymbols,
+  fetchBuySellSignals,
+  fetchDefenseRadarSummary,
+  fetchIndexKline,
+  fetchObservation,
+  fetchWatchlist,
+  type IndexKlineResponse,
+  type WatchlistItem,
+} from './api/stock'
 import { useCustomSymbols } from './hooks/useCustomSymbols'
 import { CustomSymbolAdder } from './components/CustomSymbolAdder'
 
@@ -48,6 +57,7 @@ type ChartTabKey =
   | 's300048'
   | 's002415'
   | 's601919'
+  | 's600585'
   | 's600873'
   | 's889999'
   | 's601166'
@@ -63,7 +73,20 @@ type ChartTabKey =
   | 's002230'
   | 's002714'
   | 'hk01810'
-  // 动态自定义标的 key 格式：custom_{code}
+  | 's002602'
+  | 's688981'
+  | 's688041'
+  | 's512690'
+  | 'hk00175'
+  | 'hk03690'
+  | 'hk03896'
+  | 'hk06862'
+  | 's000538'
+  | 's000858'
+  | 's600938'
+  | 's601288'
+  | 's002475'
+  // 动态自定义标的 key 格式：custom_${code}
   | `custom_${string}`
 
 const CHART_TABS: {
@@ -235,6 +258,13 @@ const CHART_TABS: {
     seriesName60: '中远海控·60m',
   },
   {
+    key: 's600585',
+    code: '600585',
+    tabLabel: '海螺水泥（600585）',
+    seriesName: '海螺水泥',
+    seriesName60: '海螺水泥·60m',
+  },
+  {
     key: 's600873',
     code: '600873',
     tabLabel: '梅花生物（600873）',
@@ -339,31 +369,150 @@ const CHART_TABS: {
     seriesName: '小米集团',
     seriesName60: '小米集团·60m',
   },
+  {
+    key: 's002602',
+    code: '002602',
+    tabLabel: '世纪华通（002602）',
+    seriesName: '世纪华通',
+    seriesName60: '世纪华通·60m',
+  },
+  {
+    key: 's688981',
+    code: '688981',
+    tabLabel: '中芯国际（688981）',
+    seriesName: '中芯国际',
+    seriesName60: '中芯国际·60m',
+  },
+  {
+    key: 's688041',
+    code: '688041',
+    tabLabel: '海光信息（688041）',
+    seriesName: '海光信息',
+    seriesName60: '海光信息·60m',
+  },
+  {
+    key: 's512690',
+    code: '512690',
+    tabLabel: '酒ETF（512690）',
+    seriesName: '酒ETF',
+    seriesName60: '酒ETF·60m',
+  },
+  {
+    key: 'hk00175',
+    code: 'hk00175',
+    tabLabel: '吉利汽车（hk00175）',
+    seriesName: '吉利汽车',
+    seriesName60: '吉利汽车·60m',
+  },
+  {
+    key: 'hk03690',
+    code: 'hk03690',
+    tabLabel: '美团（hk03690）',
+    seriesName: '美团',
+    seriesName60: '美团·60m',
+  },
+  {
+    key: 'hk03896',
+    code: 'hk03896',
+    tabLabel: '金山云（hk03896）',
+    seriesName: '金山云',
+    seriesName60: '金山云·60m',
+  },
+  {
+    key: 'hk06862',
+    code: 'hk06862',
+    tabLabel: '海底捞（hk06862）',
+    seriesName: '海底捞',
+    seriesName60: '海底捞·60m',
+  },
+  {
+    key: 's000538',
+    code: '000538',
+    tabLabel: '云南白药（000538）',
+    seriesName: '云南白药',
+    seriesName60: '云南白药·60m',
+  },
+  {
+    key: 's000858',
+    code: '000858',
+    tabLabel: '五粮液（000858）',
+    seriesName: '五粮液',
+    seriesName60: '五粮液·60m',
+  },
+  {
+    key: 's600938',
+    code: '600938',
+    tabLabel: '中国海油（600938）',
+    seriesName: '中国海油',
+    seriesName60: '中国海油·60m',
+  },
+  {
+    key: 's601288',
+    code: '601288',
+    tabLabel: '农业银行（601288）',
+    seriesName: '农业银行',
+    seriesName60: '农业银行·60m',
+  },
+  {
+    key: 's002475',
+    code: '002475',
+    tabLabel: '立讯精密（002475）',
+    seriesName: '立讯精密',
+    seriesName60: '立讯精密·60m',
+  },
 ]
 
 /**
- * 基础始终展示列表（四只核心 ETF）
- * 自定义标的也会加入常驻显示
+ * code 到 CHART_TABS key 的映射，用于将 watchlist/observation 中的 code
+ * 正确映射为 CHART_TABS 中已定义的 key（避免重复生成 custom_${code}）
  */
-const BASE_ALWAYS_VISIBLE_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([
-  'etf300',
-  'etf588000',
-  'etf159915',
-  'etf513130',
-])
+const CODE_TO_CHART_TAB_KEY = new Map<string, ChartTabKey>(
+  CHART_TABS.map(t => [t.code, t.key]),
+)
 
-/** 生成包含自定义标的的始终显示集合 */
-function getAlwaysVisibleTabKeys(customSymbolCodes: string[]): ReadonlySet<ChartTabKey> {
-  const customKeys = customSymbolCodes.map(code => `custom_${code}` as ChartTabKey)
-  return new Set([...BASE_ALWAYS_VISIBLE_TAB_KEYS, ...customKeys])
+/** 基础常驻集合（当前为空，所有标的均按雷达条件触发显示） */
+const BASE_ALWAYS_VISIBLE_TAB_KEYS: ReadonlySet<ChartTabKey> = new Set([])
+
+/** 生成包含自定义标的、持仓标的和观察标的的始终显示集合 */
+function getAlwaysVisibleTabKeys(
+  customSymbolCodes: string[],
+  watchlistCodes: string[] = [],
+  observationCodes: string[] = [],
+): ReadonlySet<ChartTabKey> {
+  const customKeys = customSymbolCodes.map(code => CODE_TO_CHART_TAB_KEY.get(code) ?? `custom_${code}` as ChartTabKey)
+  const watchlistKeys = watchlistCodes.map(code => CODE_TO_CHART_TAB_KEY.get(code) ?? `custom_${code}` as ChartTabKey)
+  const observationKeys = observationCodes.map(code => CODE_TO_CHART_TAB_KEY.get(code) ?? `custom_${code}` as ChartTabKey)
+  return new Set([...BASE_ALWAYS_VISIBLE_TAB_KEYS, ...customKeys, ...watchlistKeys, ...observationKeys])
 }
 
-/** 顶栏候选：除港股小米外全部；非 ALWAYS_VISIBLE 品种须 has_alert 且摘要 pen_60m 为「向下」（「向上」不显示） */
-const CHART_TABS_FOR_NAV = CHART_TABS.filter((t) => t.key !== 'hk01810')
-
-/** 根据自定义标的生成完整的 CHART_TABS（包含基础列表和自定义标的） */
-function getFullChartTabs(customSymbols: Array<{ code: string; name: string }>) {
-  const customTabs = customSymbols.map((sym) => {
+/** 根据自定义标的、持仓标的和观察标的生成完整的 CHART_TABS（包含基础列表和自定义标的） */
+function getFullChartTabs(
+  customSymbols: Array<{ code: string; name: string }>,
+  watchlistSymbols: Array<{ code: string; name: string }> = [],
+  observationSymbols: Array<{ code: string; name: string }> = [],
+) {
+  // 先去重 CHART_TABS 中已有的 code，避免为硬编码标的重复生成 custom_${code} Tab
+  const allCodes = new Set<string>(CHART_TABS.map(t => t.code))
+  const allSymbols: Array<{ code: string; name: string }> = []
+  for (const sym of customSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      allSymbols.push(sym)
+    }
+  }
+  for (const sym of watchlistSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      allSymbols.push(sym)
+    }
+  }
+  for (const sym of observationSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      allSymbols.push(sym)
+    }
+  }
+  const customTabs = allSymbols.map((sym) => {
     const key = `custom_${sym.code}` as ChartTabKey
     return {
       key,
@@ -378,53 +527,88 @@ function getFullChartTabs(customSymbols: Array<{ code: string; name: string }>) 
 
 type DailyTab = 'index' | ChartTabKey
 
-function emptyChartKlineMap(customSymbols: Array<{ code: string }> = []): Record<ChartTabKey, IndexKlineResponse | null> {
+function emptyChartKlineMap(
+  customSymbols: Array<{ code: string }> = [],
+  watchlistSymbols: Array<{ code: string }> = [],
+  observationSymbols: Array<{ code: string }> = [],
+): Record<ChartTabKey, IndexKlineResponse | null> {
   const o = {} as Record<ChartTabKey, IndexKlineResponse | null>
   for (const t of CHART_TABS) {
     o[t.key] = null
   }
-  // 添加自定义标的
+  const allCodes = new Set<string>()
   for (const sym of customSymbols) {
-    const key = `custom_${sym.code}` as ChartTabKey
-    o[key] = null
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      const key = `custom_${sym.code}` as ChartTabKey
+      o[key] = null
+    }
+  }
+  for (const sym of watchlistSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      const key = `custom_${sym.code}` as ChartTabKey
+      o[key] = null
+    }
+  }
+  for (const sym of observationSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      const key = `custom_${sym.code}` as ChartTabKey
+      o[key] = null
+    }
   }
   return o
 }
 
-function emptyChartErrMap(customSymbols: Array<{ code: string }> = []): Record<ChartTabKey, string | null> {
+function emptyChartErrMap(
+  customSymbols: Array<{ code: string }> = [],
+  watchlistSymbols: Array<{ code: string }> = [],
+  observationSymbols: Array<{ code: string }> = [],
+): Record<ChartTabKey, string | null> {
   const o = {} as Record<ChartTabKey, string | null>
   for (const t of CHART_TABS) {
     o[t.key] = null
   }
-  // 添加自定义标的
+  const allCodes = new Set<string>()
   for (const sym of customSymbols) {
-    const key = `custom_${sym.code}` as ChartTabKey
-    o[key] = null
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      const key = `custom_${sym.code}` as ChartTabKey
+      o[key] = null
+    }
+  }
+  for (const sym of watchlistSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      const key = `custom_${sym.code}` as ChartTabKey
+      o[key] = null
+    }
+  }
+  for (const sym of observationSymbols) {
+    if (!allCodes.has(sym.code)) {
+      allCodes.add(sym.code)
+      const key = `custom_${sym.code}` as ChartTabKey
+      o[key] = null
+    }
   }
   return o
 }
 
 function App() {
   // 自定义标的管理
-  const { customSymbols, isLoaded: customSymbolsLoaded, addSymbol, removeSymbol } = useCustomSymbols()
+  const { customSymbols, addSymbol, removeSymbol } = useCustomSymbols()
 
   // 长轮询：定时检查雷达数据更新
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  // 生成完整的 Tabs 列表（包含自定义标的）
-  const fullChartTabs = useMemo(() => getFullChartTabs(customSymbols), [customSymbols])
-  const chartTabsForNav = useMemo(() => fullChartTabs.filter((t) => t.key !== 'hk01810'), [fullChartTabs])
-  const alwaysVisibleTabKeys = useMemo(() => getAlwaysVisibleTabKeys(customSymbols.map(s => s.code)), [customSymbols])
+  const pollingIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [dailyTab, setDailyTab] = useState<DailyTab>('index')
   const [indexKline, setIndexKline] = useState<IndexKlineResponse | null>(null)
   const [indexKline60, setIndexKline60] = useState<IndexKlineResponse | null>(null)
-  const [chartDaily, setChartDaily] = useState(() => emptyChartKlineMap(customSymbols))
-  const [chart60, setChart60] = useState(() => emptyChartKlineMap(customSymbols))
+  const [indexKline15, setIndexKline15] = useState<IndexKlineResponse | null>(null)
   const [indexDailyError, setIndexDailyError] = useState<string | null>(null)
   const [index60Error, setIndex60Error] = useState<string | null>(null)
-  const [chartDailyErr, setChartDailyErr] = useState(() => emptyChartErrMap(customSymbols))
-  const [chart60Err, setChart60Err] = useState(() => emptyChartErrMap(customSymbols))
+  const [index15Error, setIndex15Error] = useState<string | null>(null)
   /** code -> 是否一级/终极/红色警报（null 表示摘要未加载） */
   const [defenseCodeToAlert, setDefenseCodeToAlert] = useState<Map<string, boolean> | null>(null)
   /** code -> 雷达摘要中的 60 分钟笔向（向上/向下/空）；与 defenseCodeToAlert 同次拉取 */
@@ -478,6 +662,151 @@ function App() {
     }
     return new Set()
   })
+
+  /** 用户持仓/自选列表（从 backend/data/watchlist.json 读取） */
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
+
+  // 加载 watchlist
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await fetchWatchlist()
+        if (!cancelled) {
+          setWatchlist(data.holdings)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /** 用户观察/自选列表（从 backend/data/observation.json 读取，仅显示用） */
+  const [observation, setObservation] = useState<WatchlistItem[]>([])
+
+  // 加载 observation
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await fetchObservation()
+        if (!cancelled) {
+          setObservation(data.observations)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 加载破位状态（由后端定时调度预计算，刷新页面后直接显示「破」字）
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await fetchBrokenSymbols()
+        if (!cancelled) {
+          setBrokenCodeSet(new Set(data.broken_codes))
+        }
+      } catch {
+        // ignore：首次启动或文件不存在时静默失败
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 加载买卖信号状态（由后端定时调度预计算，刷新页面后直接显示「买」「卖」字）
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await fetchBuySellSignals()
+        if (!cancelled) {
+          setBuyCodeSet(new Set(data.buy_codes))
+          setSellCodeSet(new Set(data.sell_codes))
+        }
+      } catch {
+        // ignore：首次启动或文件不存在时静默失败
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 生成完整的 Tabs 列表（包含自定义标的、持仓标的和观察标的）
+  const fullChartTabs = useMemo(() => getFullChartTabs(customSymbols, watchlist, observation), [customSymbols, watchlist, observation])
+  const chartTabsForNav = useMemo(() => fullChartTabs, [fullChartTabs])
+
+  const [chartDaily, setChartDaily] = useState(() => emptyChartKlineMap(customSymbols, watchlist, observation))
+  const [chart60, setChart60] = useState(() => emptyChartKlineMap(customSymbols, watchlist, observation))
+  const [chart15, setChart15] = useState(() => emptyChartKlineMap(customSymbols, watchlist, observation))
+  const [chartDailyErr, setChartDailyErr] = useState(() => emptyChartErrMap(customSymbols, watchlist, observation))
+  const [chart60Err, setChart60Err] = useState(() => emptyChartErrMap(customSymbols, watchlist, observation))
+  const [chart15Err, setChart15Err] = useState(() => emptyChartErrMap(customSymbols, watchlist, observation))
+
+  const alwaysVisibleTabKeys = useMemo(
+    () => getAlwaysVisibleTabKeys(
+      customSymbols.map(s => s.code),
+      watchlist.map(w => w.code),
+      observation.map(o => o.code),
+    ),
+    [customSymbols, watchlist, observation],
+  )
+
+  /** 持仓标的 code 集合，用于 Tab 上标记五角星 */
+  const watchlistCodeSet = useMemo(() => new Set(watchlist.map(w => w.code)), [watchlist])
+
+  /** 持仓标的 tab key 集合，用于排序 */
+  const watchlistTabKeys = useMemo(
+    () => new Set(watchlist.map(w => CODE_TO_CHART_TAB_KEY.get(w.code) ?? `custom_${w.code}` as ChartTabKey)),
+    [watchlist],
+  )
+
+  /** 观察标的 tab key 集合，用于排序 */
+  const observationTabKeys = useMemo(
+    () => new Set(observation.map(o => CODE_TO_CHART_TAB_KEY.get(o.code) ?? `custom_${o.code}` as ChartTabKey)),
+    [observation],
+  )
+
+  /** 持仓标的顺序映射（tab key -> 在 watchlist 中的索引），用于按用户配置排序 */
+  const watchlistOrder = useMemo(() => {
+    const m = new Map<ChartTabKey, number>()
+    watchlist.forEach((w, i) => {
+      const key = CODE_TO_CHART_TAB_KEY.get(w.code) ?? `custom_${w.code}` as ChartTabKey
+      m.set(key, i)
+    })
+    return m
+  }, [watchlist])
+
+  /** 观察标的顺序映射（tab key -> 在 observation 中的索引），用于按用户配置排序 */
+  const observationOrder = useMemo(() => {
+    const m = new Map<ChartTabKey, number>()
+    observation.forEach((o, i) => {
+      const key = CODE_TO_CHART_TAB_KEY.get(o.code) ?? `custom_${o.code}` as ChartTabKey
+      m.set(key, i)
+    })
+    return m
+  }, [observation])
+
+  /** 破位标的 code 集合，由后端定时调度预计算 */
+  const [brokenCodeSet, setBrokenCodeSet] = useState<Set<string>>(new Set())
+
+  /** 买/卖信号标的 code 集合，由后端定时调度预计算 */
+  const [buyCodeSet, setBuyCodeSet] = useState<Set<string>>(new Set())
+  const [sellCodeSet, setSellCodeSet] = useState<Set<string>>(new Set())
 
   const loadDefenseSummary = useCallback(async () => {
     try {
@@ -565,6 +894,16 @@ function App() {
           lastKnownGeneratedAt = currentGeneratedAt
           // 重新加载完整数据
           void loadDefenseSummaryRef.current()
+          // 同步刷新 K 线数据，使核心伏击圈现价、图表等随定时调度更新
+          const currentTab = dailyTabRef.current
+          if (currentTab !== 'index') {
+            void fetchDailyForTabRef.current(currentTab)
+            void fetch60ForTabRef.current(currentTab)
+            void fetch15ForTabRef.current(currentTab)
+          }
+          void loadIndexDailyKlineRef.current()
+          void refreshIndex60OnlyRef.current()
+          void refreshIndex15OnlyRef.current()
         }
       } catch (err) {
         console.error('[Polling] 检查更新失败:', err)
@@ -587,100 +926,56 @@ function App() {
 
   const baseVisibleChartTabs = useMemo(() => {
     const tabOrder = new Map(chartTabsForNav.map((t, i) => [t.key, i] as const))
-    let list: typeof chartTabsForNav
-    if (defenseCodeToAlert === null || defensePen60mByCode === null) {
-      list = chartTabsForNav.filter((t) => alwaysVisibleTabKeys.has(t.key))
-    } else {
-      list = chartTabsForNav.filter((tab) => {
-        if (alwaysVisibleTabKeys.has(tab.key)) return true
-
-        // 如果用户手动关闭了此 Tab，不通过条件触发显示（常驻 Tab 除外）
-        if (closedTabKeys.has(tab.key)) return false
-
-        // 逻辑1：原有逻辑（has_alert + 60分钟笔向下）
-        const hasAlert = defenseCodeToAlert.get(String(tab.code)) === true
-        const pen = defensePen60mByCode.get(String(tab.code)) ?? ''
-        const condition1 = hasAlert && pen === '向下'
-
-        // 逻辑2：7个买点条件全部满足
-        const buyConds = defenseBuyConditionsByCode.get(String(tab.code))
-        let condition2 = false
-        if (buyConds) {
-          condition2 =
-            buyConds.radarZoneOk &&
-            buyConds.pen60mDown &&
-            buyConds.macdMomentumOk &&
-            buyConds.blueTriangleStrict &&
-            buyConds.inCCentral &&
-            buyConds.hasBottomDivInSwitch &&
-            buyConds.bollBuy
-        }
-
-        return condition1 || condition2
-      })
-    }
-    // 始终展示的 Tab 排在最前（避免换行后误以为「消失」）
+    const list = chartTabsForNav.filter((t) => alwaysVisibleTabKeys.has(t.key))
+    // 排序：持仓 > 观察/自定义 > 原始顺序；同组内按用户配置文件顺序排列
     return [...list].sort((a, b) => {
-      const pa = alwaysVisibleTabKeys.has(a.key) ? 0 : 1
-      const pb = alwaysVisibleTabKeys.has(b.key) ? 0 : 1
+      const getPriority = (key: ChartTabKey) => {
+        if (watchlistTabKeys.has(key)) return 0
+        if (observationTabKeys.has(key)) return 1
+        return 2
+      }
+      const pa = getPriority(a.key)
+      const pb = getPriority(b.key)
       if (pa !== pb) return pa - pb
-      return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
+      // 同优先级内按 watchlist/observation 配置顺序，否则 fallback 到 CHART_TABS 原始顺序
+      const oa = watchlistOrder.get(a.key) ?? observationOrder.get(a.key) ?? tabOrder.get(a.key) ?? 9999
+      const ob = watchlistOrder.get(b.key) ?? observationOrder.get(b.key) ?? tabOrder.get(b.key) ?? 9999
+      return oa - ob
     })
-  }, [chartTabsForNav, alwaysVisibleTabKeys, defenseCodeToAlert, defensePen60mByCode, defenseBuyConditionsByCode, closedTabKeys])
+  }, [chartTabsForNav, alwaysVisibleTabKeys, watchlistTabKeys, observationTabKeys, watchlistOrder, observationOrder])
 
   const visibleChartTabs = useMemo(() => {
     const byKey = new Map(chartTabsForNav.map((t) => [t.key, t] as const))
     const tabOrder = new Map(chartTabsForNav.map((t, i) => [t.key, i] as const))
     const merged = new Map(baseVisibleChartTabs.map((t) => [t.key, t] as const))
     for (const key of stickyVisibleTabKeys) {
+      // 如果用户手动关闭了此 Tab，不显示
+      if (closedTabKeys.has(key)) continue
       const tab = byKey.get(key)
       if (tab) merged.set(key, tab)
     }
     const list = [...merged.values()]
     return list.sort((a, b) => {
-      const pa = alwaysVisibleTabKeys.has(a.key) ? 0 : 1
-      const pb = alwaysVisibleTabKeys.has(b.key) ? 0 : 1
+      const getPriority = (key: ChartTabKey) => {
+        if (watchlistTabKeys.has(key)) return 0
+        if (observationTabKeys.has(key)) return 1
+        return 2
+      }
+      const pa = getPriority(a.key)
+      const pb = getPriority(b.key)
       if (pa !== pb) return pa - pb
-      return (tabOrder.get(a.key) ?? 0) - (tabOrder.get(b.key) ?? 0)
+      const oa = watchlistOrder.get(a.key) ?? observationOrder.get(a.key) ?? tabOrder.get(a.key) ?? 9999
+      const ob = watchlistOrder.get(b.key) ?? observationOrder.get(b.key) ?? tabOrder.get(b.key) ?? 9999
+      return oa - ob
     })
-  }, [chartTabsForNav, alwaysVisibleTabKeys, baseVisibleChartTabs, stickyVisibleTabKeys])
+  }, [chartTabsForNav, alwaysVisibleTabKeys, watchlistTabKeys, observationTabKeys, watchlistOrder, observationOrder, baseVisibleChartTabs, stickyVisibleTabKeys, closedTabKeys])
 
-    // 用于检测新触发条件的 Tab（不依赖 closedTabKeys，避免循环）
+  // 条件触发显示逻辑已关闭，保留 ref 避免后续代码报错
   const prevBaseVisibleRef = useRef<Set<ChartTabKey>>(new Set())
 
   useEffect(() => {
-    const currentKeys = new Set(baseVisibleChartTabs.map(t => t.key))
-    const prevKeys = prevBaseVisibleRef.current
-
-    // 检测新出现的 Tab（本次在 baseVisibleChartTabs 但之前不在）
-    const newlyVisibleKeys: ChartTabKey[] = []
-    for (const t of baseVisibleChartTabs) {
-      if (!prevKeys.has(t.key) && !alwaysVisibleTabKeys.has(t.key)) {
-        newlyVisibleKeys.push(t.key)
-      }
-    }
-
-    // 更新 ref 供下次比较
-    prevBaseVisibleRef.current = currentKeys
-
-    // 如果有新触发的 Tab，从 closedTabKeys 中移除（允许再次显示），并加入 sticky
-    if (newlyVisibleKeys.length > 0) {
-      setClosedTabKeys((prev) => {
-        const next = new Set(prev)
-        for (const key of newlyVisibleKeys) {
-          next.delete(key)
-        }
-        return next
-      })
-      setStickyVisibleTabKeys((prev) => {
-        const next = new Set(prev)
-        for (const key of newlyVisibleKeys) {
-          next.add(key)
-        }
-        return next
-      })
-    }
-  }, [baseVisibleChartTabs, alwaysVisibleTabKeys])
+    prevBaseVisibleRef.current = new Set(baseVisibleChartTabs.map(t => t.key))
+  }, [baseVisibleChartTabs])
 
   // 持久化 stickyVisibleTabKeys 到 localStorage
   useEffect(() => {
@@ -710,10 +1005,18 @@ function App() {
     return await fetchIndexKline(symbol, '60', startDate, undefined, false)
   }, [])
 
+  /**
+   * 15m：默认 refresh=false，只读后端本地 CSV/缓存；与 kline_scheduler 槽位同步后的数据一致。
+   */
+  const fetch15Local = useCallback(async (symbol: string, startDate: string) => {
+    return await fetchIndexKline(symbol, '15', startDate, undefined, false)
+  }, [])
+
   /** 首屏仅拉上证日线；其它标的改为切 tab 按需加载，避免首次并发过多请求 */
   const loadIndexDailyKline = useCallback(async () => {
     try {
-      const daily = await fetchIndexKline('sh000001', 'daily', '2024-12-01')
+      const dailyStart = startDateDaysAgo(380)
+      const daily = await fetchIndexKline('sh000001', 'daily', dailyStart)
       setIndexKline(daily)
       setIndexDailyError(null)
     } catch (err) {
@@ -724,9 +1027,10 @@ function App() {
   /** 切 tab 时按需拉对应日线，避免首次全量并发导致卡顿 */
   const fetchDailyForTab = useCallback(async (tabKey: ChartTabKey) => {
     const tab = fullChartTabs.find((t) => t.key === tabKey)
-    if (!tab || tab.key === 'hk01810') return
+    if (!tab) return
     try {
-      const daily = await fetchIndexKline(tab.code, 'daily', '2024-12-01')
+      const dailyStart = startDateDaysAgo(380)
+      const daily = await fetchIndexKline(tab.code, 'daily', dailyStart)
       setChartDaily((p) => ({ ...p, [tab.key]: daily }))
       setChartDailyErr((p) => ({ ...p, [tab.key]: null }))
     } catch (err) {
@@ -739,7 +1043,7 @@ function App() {
 
   /** 拉取单个 tab 的 60 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch60ForTab = useCallback(async (tabKey: ChartTabKey) => {
-    const h60Start = startDateDaysAgo(90)
+    const h60Start = startDateDaysAgo(79)
     const tab = fullChartTabs.find((t) => t.key === tabKey)
     if (!tab) return
     try {
@@ -754,9 +1058,26 @@ function App() {
     }
   }, [fullChartTabs, fetch60Local])
 
+  /** 拉取单个 tab 的 15 分钟 K（按需，避免并发请求过多触发网络错误） */
+  const fetch15ForTab = useCallback(async (tabKey: ChartTabKey) => {
+    const h15Start = startDateDaysAgo(35)
+    const tab = fullChartTabs.find((t) => t.key === tabKey)
+    if (!tab) return
+    try {
+      const h15 = await fetch15Local(tab.code, h15Start)
+      setChart15((p) => ({ ...p, [tab.key]: h15 }))
+      setChart15Err((p) => ({ ...p, [tab.key]: null }))
+    } catch (err) {
+      setChart15Err((p) => ({
+        ...p,
+        [tab.key]: err instanceof Error ? err.message : '15分钟数据拉取失败',
+      }))
+    }
+  }, [fullChartTabs, fetch15Local])
+
   /** 仅拉上证 60m（本地）；首屏用，不依赖 dailyTab，避免切 Tab 时整页重复请求上证 */
   const refreshIndex60Only = useCallback(async () => {
-    const h60Start = startDateDaysAgo(90)
+    const h60Start = startDateDaysAgo(79)
     try {
       const h60 = await fetch60Local('sh000001', h60Start)
       setIndexKline60(h60)
@@ -766,6 +1087,18 @@ function App() {
     }
   }, [fetch60Local])
 
+  /** 仅拉上证 15m（本地）；首屏用 */
+  const refreshIndex15Only = useCallback(async () => {
+    const h15Start = startDateDaysAgo(35)
+    try {
+      const h15 = await fetch15Local('sh000001', h15Start)
+      setIndexKline15(h15)
+      setIndex15Error(null)
+    } catch (err) {
+      setIndex15Error(err instanceof Error ? err.message : '15分钟数据拉取失败')
+    }
+  }, [fetch15Local])
+
   /** 上证 60m + 当前激活 tab 的 60m（切回页面等场景） */
   const refresh60MinuteKlines = useCallback(async () => {
     await refreshIndex60Only()
@@ -774,8 +1107,34 @@ function App() {
     }
   }, [dailyTab, fetch60ForTab, refreshIndex60Only])
 
+  /** 上证 15m + 当前激活 tab 的 15m（切回页面等场景） */
+  const refresh15MinuteKlines = useCallback(async () => {
+    await refreshIndex15Only()
+    if (dailyTab !== 'index') {
+      await fetch15ForTab(dailyTab)
+    }
+  }, [dailyTab, fetch15ForTab, refreshIndex15Only])
+
   /** 与 refresh60MinuteKlines 相同；若 effect/别处误写此名，避免 ReferenceError */
   const fetch60SyncThenDisplay = refresh60MinuteKlines
+  /** 与 refresh15MinuteKlines 相同 */
+  const fetch15SyncThenDisplay = refresh15MinuteKlines
+
+  // 使用 ref 存储 K 线刷新函数和当前 tab，供长轮询在检测到更新后同步刷新
+  const dailyTabRef = useRef(dailyTab)
+  dailyTabRef.current = dailyTab
+  const fetchDailyForTabRef = useRef(fetchDailyForTab)
+  fetchDailyForTabRef.current = fetchDailyForTab
+  const fetch60ForTabRef = useRef(fetch60ForTab)
+  fetch60ForTabRef.current = fetch60ForTab
+  const fetch15ForTabRef = useRef(fetch15ForTab)
+  fetch15ForTabRef.current = fetch15ForTab
+  const loadIndexDailyKlineRef = useRef(loadIndexDailyKline)
+  loadIndexDailyKlineRef.current = loadIndexDailyKline
+  const refreshIndex60OnlyRef = useRef(refreshIndex60Only)
+  refreshIndex60OnlyRef.current = refreshIndex60Only
+  const refreshIndex15OnlyRef = useRef(refreshIndex15Only)
+  refreshIndex15OnlyRef.current = refreshIndex15Only
 
   /** 摘要单独拉取，避免与 K 线并行失败时整段受影响；首屏尽快拿到 has_alert */
   useEffect(() => {
@@ -784,20 +1143,21 @@ function App() {
 
   useEffect(() => {
     void (async () => {
-      await Promise.all([loadIndexDailyKline(), refreshIndex60Only()])
+      await Promise.all([loadIndexDailyKline(), refreshIndex60Only(), refreshIndex15Only()])
     })()
-  }, [loadIndexDailyKline, refreshIndex60Only])
+  }, [loadIndexDailyKline, refreshIndex60Only, refreshIndex15Only])
 
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
         void fetch60SyncThenDisplay()
+        void fetch15SyncThenDisplay()
         void loadDefenseSummary()
       }
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [fetch60SyncThenDisplay, loadDefenseSummary])
+  }, [fetch60SyncThenDisplay, fetch15SyncThenDisplay, loadDefenseSummary])
 
   useEffect(() => {
     if (defenseCodeToAlert === null) return
@@ -807,12 +1167,19 @@ function App() {
     }
   }, [dailyTab, defenseCodeToAlert, visibleChartTabs])
 
-  // 切换 tab 时按需补拉当前 tab 的 60m，避免首屏并发全量请求
+  // 切换 tab 时补拉当前 tab 的60m（若预加载已完成则跳过，避免重复请求）
   useEffect(() => {
     if (dailyTab === 'index') return
-    if (chart60[dailyTab]) return
+    if (loadedKeysRef.current.has(dailyTab + '_60m')) return
     void fetch60ForTab(dailyTab)
-  }, [dailyTab, chart60, fetch60ForTab])
+  }, [dailyTab, fetch60ForTab])
+
+  // 切换 tab 时补拉当前 tab 的15m（若预加载已完成则跳过，避免重复请求）
+  useEffect(() => {
+    if (dailyTab === 'index') return
+    if (loadedKeysRef.current.has(dailyTab + '_15m')) return
+    void fetch15ForTab(dailyTab)
+  }, [dailyTab, fetch15ForTab])
 
   // 切换 tab 时按需补拉当前 tab 的日线
   useEffect(() => {
@@ -820,6 +1187,86 @@ function App() {
     if (chartDaily[dailyTab]) return
     void fetchDailyForTab(dailyTab)
   }, [dailyTab, chartDaily, fetchDailyForTab])
+  
+  // 批量预加载 visibleChartTabs 的日线和60m数据（延迟2秒启动，避免阻塞首屏和交互）
+  const loadedKeysRef = useRef(new Set<string>())
+  useEffect(() => {
+    if (watchlist.length === 0 && observation.length === 0) return
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        const dailyStart = startDateDaysAgo(380)
+        const h60Start = startDateDaysAgo(79)
+        const h15Start = startDateDaysAgo(35)
+        // 只预加载当前可见的 tab，避免加载被用户关闭/隐藏的 tab
+        let tabsToLoad = visibleChartTabs.filter(
+          (tab) => !loadedKeysRef.current.has(tab.key + '_daily') || !loadedKeysRef.current.has(tab.key + '_60m') || !loadedKeysRef.current.has(tab.key + '_15m')
+        )
+        // 当前激活 tab 优先加载：排在队列最前面
+        if (dailyTab !== 'index') {
+          const activeIdx = tabsToLoad.findIndex((t) => t.key === dailyTab)
+          if (activeIdx > 0) {
+            const [activeTab] = tabsToLoad.splice(activeIdx, 1)
+            tabsToLoad.unshift(activeTab)
+          }
+        }
+        // 低并发预加载（2个），留出浏览器并发槽位给用户交互请求
+        const CONCURRENCY = 2
+        const queue: Promise<void>[] = []
+        for (const tab of tabsToLoad) {
+          const task = async () => {
+            const promises: Promise<void>[] = []
+            // 日线
+            if (!loadedKeysRef.current.has(tab.key + '_daily')) {
+              loadedKeysRef.current.add(tab.key + '_daily')
+              promises.push(
+                fetchIndexKline(tab.code, 'daily', dailyStart)
+                  .then((daily) => {
+                    setChartDaily((p) => ({ ...p, [tab.key]: daily }))
+                    setChartDailyErr((p) => ({ ...p, [tab.key]: null }))
+                  })
+                  .catch(() => {})
+              )
+            }
+            // 60m（与日线并行加载）
+            if (!loadedKeysRef.current.has(tab.key + '_60m')) {
+              loadedKeysRef.current.add(tab.key + '_60m')
+              promises.push(
+                fetch60Local(tab.code, h60Start)
+                  .then((h60) => {
+                    setChart60((p) => ({ ...p, [tab.key]: h60 }))
+                    setChart60Err((p) => ({ ...p, [tab.key]: null }))
+                  })
+                  .catch(() => {})
+              )
+            }
+            // 15m（与日线并行加载）
+            if (!loadedKeysRef.current.has(tab.key + '_15m')) {
+              loadedKeysRef.current.add(tab.key + '_15m')
+              promises.push(
+                fetch15Local(tab.code, h15Start)
+                  .then((h15) => {
+                    setChart15((p) => ({ ...p, [tab.key]: h15 }))
+                    setChart15Err((p) => ({ ...p, [tab.key]: null }))
+                  })
+                  .catch(() => {})
+              )
+            }
+            await Promise.allSettled(promises)
+          }
+          queue.push(task())
+          if (queue.length >= CONCURRENCY) {
+            await Promise.allSettled(queue)
+            queue.length = 0
+          }
+        }
+        if (queue.length > 0) {
+          await Promise.allSettled(queue)
+        }
+      })()
+    }, 2000)
+    return () => clearTimeout(timer)
+  }, [visibleChartTabs, watchlist, observation, dailyTab, fetch60Local, fetch15Local])
 
   const indexDailyCentrals = indexKline?.centrals?.length
     ? sortCentralsChronologically(indexKline.centrals)
@@ -850,6 +1297,14 @@ function App() {
     chartDailyCentrals.length > 0
       ? Number(chartDailyCentrals[chartDailyCentrals.length - 1].zd)
       : null
+  const chartDailyMacd =
+    activeChartDaily?.data?.length
+      ? activeChartDaily.data[activeChartDaily.data.length - 1].macd
+      : undefined
+  const indexDailyMacd =
+    indexKline?.data?.length
+      ? indexKline.data[indexKline.data.length - 1].macd
+      : undefined
 
   return (
     <div
@@ -877,7 +1332,10 @@ function App() {
             >
               上证指数
             </button>
-            {visibleChartTabs.map((tab) => (
+            {visibleChartTabs.map((tab) => {
+                // 日线破位判断：使用后端定时调度预计算的 broken_symbols.json 结果
+                const isBroken = brokenCodeSet.has(tab.code)
+                return (
               <button
                 key={tab.key}
                 type="button"
@@ -888,6 +1346,30 @@ function App() {
                 onClick={() => setDailyTab(tab.key)}
               >
                 {tab.tabLabel}
+                {watchlistCodeSet.has(tab.code) && (
+                  <span style={{ color: '#fbbf24', marginLeft: '4px', fontSize: '14px' }} title="持仓">★</span>
+                )}
+                {isBroken && (
+                  <span style={{ color: '#ef4444', marginLeft: '3px', fontSize: '11px', fontWeight: 'bold' }} title={`日线破位: 60分钟现价 < MIN(日线A-ZD, 日线C-ZD)`}>破</span>
+                )}
+                {(() => {
+                  const hasBuy = buyCodeSet.has(tab.code)
+                  const hasSell = sellCodeSet.has(tab.code)
+                  if (!hasBuy && !hasSell) return null
+                  return (
+                    <span
+                      style={{
+                        color: hasBuy ? '#22c55e' : '#ef4444',
+                        marginLeft: '3px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                      }}
+                      title={hasBuy ? '缠论买点信号（一买/二买/三买）' : '缠论卖点信号（一卖/二卖/三卖）'}
+                    >
+                      {hasBuy ? '买' : '卖'}
+                    </span>
+                  )
+                })()}
                 {/* 非常驻 Tab 显示关闭按钮 */}
                 {!alwaysVisibleTabKeys.has(tab.key) && (
                   <span
@@ -913,7 +1395,8 @@ function App() {
                   </span>
                 )}
               </button>
-            ))}
+            )
+          })}
           </div>
 
           {/* 自定义标的添加器 */}
@@ -951,6 +1434,7 @@ function App() {
                     seriesName="上证指数"
                     indexAlertKind={indexDefenseKind}
                     isIndexSelf
+                    currentPrice={indexKline60?.data?.length ? indexKline60.data[indexKline60.data.length - 1].close : undefined}
                   />
                 </div>
               )}
@@ -966,6 +1450,24 @@ function App() {
                     seriesName="上证指数·60m"
                     dailyAZd={indexDailyAZd}
                     dailyCZd={indexDailyCZd}
+                    dailyMacd={indexDailyMacd}
+                    buyConditions={undefined}
+                  />
+                </div>
+              )}
+              <h3 className="hourly-section-title">
+                15 分钟缠论（上证指数，近 35 日 15min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+              </h3>
+              {index15Error && <div className="alert alert-error">{index15Error}</div>}
+              {indexKline15 && (
+                <div className="chart-block chart-block-hourly">
+                  <HourlyChanChart
+                    key="hourly-15-index"
+                    data={indexKline15}
+                    seriesName="上证指数·15m"
+                    dailyAZd={indexDailyAZd}
+                    dailyCZd={indexDailyCZd}
+                    dailyMacd={indexDailyMacd}
                     buyConditions={undefined}
                   />
                 </div>
@@ -987,27 +1489,57 @@ function App() {
                     indexAlertKind={indexDefenseKind}
                     radarSummaryAlert={defenseAlertTextByCode.get(String(activeChart.code)) ?? null}
                     radarSummaryGeneratedAt={defenseSummaryGeneratedAt}
+                    currentPrice={chart60[activeChart.key]?.data?.length ? chart60[activeChart.key]!.data[chart60[activeChart.key]!.data.length - 1].close : undefined}
                   />
                 </div>
               )}
-              <h3 className="hourly-section-title">
-                60 分钟缠论（{activeChart.code}，近 90 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
-              </h3>
-              {chart60Err[activeChart.key] && (
-                <div className="alert alert-error">{chart60Err[activeChart.key]}</div>
-              )}
-              {chart60[activeChart.key] && (
-                <div className="chart-block chart-block-hourly">
-                  <HourlyChanChart
-                    key={`hourly-${activeChart.key}`}
-                    data={chart60[activeChart.key]!}
-                    seriesName={activeChart.seriesName60}
-                    dailyAZd={chartDailyAZd}
-                    dailyCZd={chartDailyCZd}
-                    buyConditions={defenseBuyConditionsByCode.get(activeChart.code)}
-                  />
-                </div>
-              )}
+              {(() => {
+                const holding = watchlist.find((w) => w.code === activeChart.code)
+                return (
+                  <>
+                    <h3 className="hourly-section-title">
+                      60 分钟缠论（{activeChart.code}{holding ? ` ★持仓·${holding.name}` : ''}，近 90 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+                    </h3>
+                    {chart60Err[activeChart.key] && (
+                      <div className="alert alert-error">{chart60Err[activeChart.key]}</div>
+                    )}
+                    {chart60[activeChart.key] && (
+                      <div className="chart-block chart-block-hourly">
+                        <HourlyChanChart
+                          key={`hourly-${activeChart.key}`}
+                          data={chart60[activeChart.key]!}
+                          seriesName={activeChart.seriesName60}
+                          dailyAZd={chartDailyAZd}
+                          dailyCZd={chartDailyCZd}
+                          dailyMacd={chartDailyMacd}
+                          buyConditions={defenseBuyConditionsByCode.get(activeChart.code)}
+                          holdingInfo={holding}
+                        />
+                      </div>
+                    )}
+                    <h3 className="hourly-section-title">
+                      15 分钟缠论（{activeChart.code}{holding ? ` ★持仓·${holding.name}` : ''}，近 35 日 15min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+                    </h3>
+                    {chart15Err[activeChart.key] && (
+                      <div className="alert alert-error">{chart15Err[activeChart.key]}</div>
+                    )}
+                    {chart15[activeChart.key] && (
+                      <div className="chart-block chart-block-hourly">
+                        <HourlyChanChart
+                          key={`hourly-15-${activeChart.key}`}
+                          data={chart15[activeChart.key]!}
+                          seriesName={activeChart.seriesName60.replace('60m', '15m')}
+                          dailyAZd={chartDailyAZd}
+                          dailyCZd={chartDailyCZd}
+                          dailyMacd={chartDailyMacd}
+                          buyConditions={undefined}
+                          holdingInfo={holding}
+                        />
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
           )}
         </section>

@@ -1,0 +1,30 @@
+[
+  {
+    "code": "hk06862",
+    "name": "海底捞",
+    "signal_type": "first_buy",
+    "buy_date": "2026-04-23 22:10",
+    "buy_price": 14.350000381469728,
+    "amount": 10000.0,
+    "tactical_stop": 14.350000381469728,
+    "strategic_stop": 14.350000381469728,
+    "status": "holding",
+    "sell_date": null,
+    "sell_price": null,
+    "sell_reason": null
+  },
+  {
+    "code": "159992",
+    "name": "创新药ETF",
+    "signal_type": "first_buy",
+    "buy_date": "2026-04-24 14:02",
+    "buy_price": 0.816,
+    "amount": 10000.0,
+    "tactical_stop": 0.816,
+    "strategic_stop": 0.816,
+    "status": "holding",
+    "sell_date": null,
+    "sell_price": null,
+    "sell_reason": null
+  }
+]

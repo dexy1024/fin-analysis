@@ -1,12 +1,14 @@
 """
-指数 / A 股 / ETF 日线本地缓存。
-数据源统一使用新浪 K 线接口（无 Token，返回 JSON）。
+指数 / A 股 / ETF / 港股 日线本地缓存。
+A股/ETF/指数数据源统一使用新浪 K 线接口（无 Token，返回 JSON）。
+港股数据源使用 AKShare stock_hk_daily 接口。
 """
 from __future__ import annotations
 
 from pathlib import Path
 import time
 
+import akshare as ak
 import pandas as pd
 import requests
 
@@ -141,6 +143,54 @@ def load_index_daily_dataframe(symbol: str, *, force_refresh: bool = False) -> p
     # 严格本地优先：仅在显式 force_refresh 或本地不存在时访问线上
     if force_refresh or df_local is None:
         raw = _fetch_daily_from_sina_symbol(symbol)
+        raw.to_csv(path, index=False)
+        return raw
+
+    assert df_local is not None
+    anchor_ts = pd.to_datetime(INDEX_DAILY_ANCHOR)
+    out = df_local[pd.to_datetime(df_local["date"]) >= anchor_ts].reset_index(drop=True)
+    return out
+
+
+def _hk_daily_cache_path(symbol: str) -> Path:
+    """港股日线本地缓存路径，如 hk01810 -> hk_daily_hk01810.csv"""
+    safe = symbol.replace("/", "_")
+    return CACHE_DIR / f"hk_daily_{safe}.csv"
+
+
+def _fetch_hk_daily_from_akshare_raw(symbol: str) -> pd.DataFrame:
+    """
+    从 AKShare 拉取港股完整日线数据。
+    symbol: 5位数字代码，如 '01810'
+    """
+    df = ak.stock_hk_daily(symbol=symbol)
+    if df is None or df.empty:
+        raise ValueError(f"AKShare 未返回 {symbol} 的港股数据")
+    df["date"] = pd.to_datetime(df["date"])
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["date", "open", "high", "low", "close", "volume"])
+    df = df.sort_values("date").reset_index(drop=True)
+    return df
+
+
+def load_hk_daily_dataframe(symbol: str, *, force_refresh: bool = False) -> pd.DataFrame:
+    """
+    港股日线，自 INDEX_DAILY_ANCHOR 起缓存。
+    严格本地优先：优先读本地 CSV；仅在 force_refresh 或本地不存在时访问 AKShare 并写回。
+    symbol: 带 hk 前缀的代码，如 'hk01810'
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _hk_daily_cache_path(symbol)
+
+    df_local: pd.DataFrame | None = None
+    if path.exists() and not force_refresh:
+        df_local = pd.read_csv(path, parse_dates=["date"])
+
+    # 严格本地优先
+    if force_refresh or df_local is None:
+        api_sym = symbol[2:] if symbol.lower().startswith("hk") else symbol
+        raw = _fetch_hk_daily_from_akshare_raw(api_sym)
         raw.to_csv(path, index=False)
         return raw
 

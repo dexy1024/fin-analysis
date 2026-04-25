@@ -180,40 +180,70 @@ class TestMeihua2testExtendEndTs(unittest.TestCase):
 
 
 class TestMacdMomentum(unittest.TestCase):
-    def test_two_down_pens_smaller_area(self) -> None:
+    """MACD 转强判定：严格基于柱状图动能变化（导数）。"""
+
+    # 场景A（水下底背驰）：绿柱缩短，动能向上
+    def test_green_shortening_underwater_true(self) -> None:
         h60 = {
-            "pens_effective": [
-                {"direction": "up", "start_date": "2026-01-01", "end_date": "2026-01-02"},
-                {
-                    "direction": "down",
-                    "start_date": "2026-01-02",
-                    "end_date": "2026-01-03",
-                },
-                {
-                    "direction": "down",
-                    "start_date": "2026-01-03",
-                    "end_date": "2026-01-04",
-                },
-            ],
             "data": [
                 {"date": "2026-01-02", "macd": {"macd": -10.0}},
                 {"date": "2026-01-03", "macd": {"macd": -10.0}},
                 {"date": "2026-01-04", "macd": {"macd": -1.0}},
             ],
         }
-        ok = macd_momentum_ok_two_down_pens(h60)
-        self.assertTrue(ok)
+        self.assertTrue(macd_momentum_ok_two_down_pens(h60))
 
-    def test_condition3_false_when_no_area_and_no_shortening(self) -> None:
+    # 场景B（水上主升浪）：红柱伸长，动能向上
+    def test_red_lengthening_above_water_true(self) -> None:
         h60 = {
-            "pens_effective": [
-                {"direction": "down", "start_date": "2026-01-01", "end_date": "2026-01-02"},
-                {"direction": "down", "start_date": "2026-01-02", "end_date": "2026-01-04"},
+            "data": [
+                {"date": "2026-01-02", "macd": {"macd": 1.0}},
+                {"date": "2026-01-03", "macd": {"macd": 2.0}},
+                {"date": "2026-01-04", "macd": {"macd": 5.0}},
             ],
+        }
+        self.assertTrue(macd_momentum_ok_two_down_pens(h60))
+
+    # 场景C（水下主跌浪）：绿柱伸长，动能向下
+    def test_green_lengthening_underwater_false(self) -> None:
+        h60 = {
             "data": [
                 {"date": "2026-01-02", "macd": {"macd": -1.0}},
                 {"date": "2026-01-03", "macd": {"macd": -10.0}},
                 {"date": "2026-01-04", "macd": {"macd": -20.0}},
+            ],
+        }
+        self.assertFalse(macd_momentum_ok_two_down_pens(h60))
+
+    # 场景D（水上顶背驰）：红柱缩短，动能向下（修复原Bug）
+    def test_red_shortening_above_water_false(self) -> None:
+        h60 = {
+            "data": [
+                {"date": "2026-01-02", "macd": {"macd": 5.0}},
+                {"date": "2026-01-03", "macd": {"macd": 3.0}},
+                {"date": "2026-01-04", "macd": {"macd": 1.0}},
+            ],
+        }
+        self.assertFalse(macd_momentum_ok_two_down_pens(h60))
+
+    # 绿柱翻红：m0>=0, m1<0，柱值增大，应判定为转强
+    def test_green_to_red_true(self) -> None:
+        h60 = {
+            "data": [
+                {"date": "2026-01-02", "macd": {"macd": -3.0}},
+                {"date": "2026-01-03", "macd": {"macd": -1.0}},
+                {"date": "2026-01-04", "macd": {"macd": 2.0}},
+            ],
+        }
+        self.assertTrue(macd_momentum_ok_two_down_pens(h60))
+
+    # 红柱翻绿：m0<0, m1>0，柱值减小，应判定为转弱
+    def test_red_to_green_false(self) -> None:
+        h60 = {
+            "data": [
+                {"date": "2026-01-02", "macd": {"macd": 3.0}},
+                {"date": "2026-01-03", "macd": {"macd": 1.0}},
+                {"date": "2026-01-04", "macd": {"macd": -2.0}},
             ],
         }
         self.assertFalse(macd_momentum_ok_two_down_pens(h60))

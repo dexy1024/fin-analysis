@@ -1,0 +1,320 @@
+{
+  "generated_at": "2026-04-24T16:32:52",
+  "broken_codes": [
+    "hk01810"
+  ],
+  "details": [
+    {
+      "code": "603317",
+      "name": "天味食品",
+      "is_broken": false,
+      "a_zd": 12.56,
+      "c_zd": 13.17,
+      "last_price": 14.0
+    },
+    {
+      "code": "600276",
+      "name": "恒瑞医药",
+      "is_broken": false,
+      "a_zd": 53.38,
+      "c_zd": 55.0,
+      "last_price": 56.05
+    },
+    {
+      "code": "159915",
+      "name": "创业板ETF",
+      "is_broken": false,
+      "a_zd": 3.253,
+      "c_zd": 3.265,
+      "last_price": 3.674
+    },
+    {
+      "code": "588200",
+      "name": "科创芯片ETF",
+      "is_broken": false,
+      "a_zd": 2.412,
+      "c_zd": 2.65,
+      "last_price": 2.805
+    },
+    {
+      "code": "159755",
+      "name": "电池ETF",
+      "is_broken": false,
+      "a_zd": 1.028,
+      "c_zd": 1.04,
+      "last_price": 1.202
+    },
+    {
+      "code": "513130",
+      "name": "恒生科技ETF",
+      "is_broken": false,
+      "a_zd": 0.608,
+      "c_zd": 0.604,
+      "last_price": 0.616
+    },
+    {
+      "code": "159992",
+      "name": "创新药ETF",
+      "is_broken": false,
+      "a_zd": 0.83,
+      "c_zd": 0.827,
+      "last_price": 0.827
+    },
+    {
+      "code": "515790",
+      "name": "光伏ETF",
+      "is_broken": false,
+      "a_zd": 1.035,
+      "c_zd": 1.068,
+      "last_price": 1.062
+    },
+    {
+      "code": "159899",
+      "name": "软件ETF",
+      "is_broken": false,
+      "a_zd": 0.811,
+      "c_zd": 0.832,
+      "last_price": 0.839
+    },
+    {
+      "code": "513360",
+      "name": "教育ETF",
+      "is_broken": false,
+      "a_zd": 0.492,
+      "c_zd": 0.497,
+      "last_price": 0.5
+    },
+    {
+      "code": "601138",
+      "name": "工业富联",
+      "is_broken": false,
+      "a_zd": 62.7,
+      "c_zd": 63.2,
+      "last_price": 65.01
+    },
+    {
+      "code": "600660",
+      "name": "福耀玻璃",
+      "is_broken": false,
+      "a_zd": 56.89,
+      "c_zd": 56.86,
+      "last_price": 59.03
+    },
+    {
+      "code": "600900",
+      "name": "长江电力",
+      "is_broken": false,
+      "a_zd": 26.44,
+      "c_zd": 26.66,
+      "last_price": 26.81
+    },
+    {
+      "code": "000333",
+      "name": "美的集团",
+      "is_broken": false,
+      "a_zd": 78.18,
+      "c_zd": 78.91,
+      "last_price": 79.66
+    },
+    {
+      "code": "000651",
+      "name": "格力电器",
+      "is_broken": false,
+      "a_zd": 36.83,
+      "c_zd": 37.04,
+      "last_price": 37.11
+    },
+    {
+      "code": "002415",
+      "name": "海康威视",
+      "is_broken": false,
+      "a_zd": 31.96,
+      "c_zd": 30.84,
+      "last_price": 33.6
+    },
+    {
+      "code": "000895",
+      "name": "双汇发展",
+      "is_broken": false,
+      "a_zd": 26.51,
+      "c_zd": 28.21,
+      "last_price": 29.2
+    },
+    {
+      "code": "000423",
+      "name": "东阿阿胶",
+      "is_broken": false,
+      "a_zd": 50.16,
+      "c_zd": 51.71,
+      "last_price": 52.0
+    },
+    {
+      "code": "000001",
+      "name": "平安银行",
+      "is_broken": false,
+      "a_zd": 10.78,
+      "c_zd": 10.97,
+      "last_price": 11.0
+    },
+    {
+      "code": "hk01810",
+      "name": "小米集团",
+      "is_broken": true,
+      "a_zd": 32.78,
+      "c_zd": 31.52,
+      "last_price": 30.86
+    },
+    {
+      "code": "hk06862",
+      "name": "海底捞",
+      "is_broken": false,
+      "a_zd": 14.22,
+      "c_zd": 14.3,
+      "last_price": 14.58
+    },
+    {
+      "code": "510300",
+      "name": "沪深300ETF",
+      "is_broken": false,
+      "a_zd": 4.687,
+      "c_zd": 4.667,
+      "last_price": 4.781
+    },
+    {
+      "code": "588000",
+      "name": "科创50ETF",
+      "is_broken": false,
+      "a_zd": 1.495,
+      "c_zd": 1.55,
+      "last_price": 1.531
+    },
+    {
+      "code": "512400",
+      "name": "有色金属ETF",
+      "is_broken": false,
+      "a_zd": 2.107,
+      "c_zd": 2.105,
+      "last_price": 2.117
+    },
+    {
+      "code": "512690",
+      "name": "酒ETF",
+      "is_broken": false,
+      "a_zd": 0.503,
+      "c_zd": 0.485,
+      "last_price": 0.491
+    },
+    {
+      "code": "159985",
+      "name": "豆粕ETF",
+      "is_broken": false,
+      "a_zd": 2.031,
+      "c_zd": 2.084,
+      "last_price": 2.125
+    },
+    {
+      "code": "159227",
+      "name": "航空航天ETF",
+      "is_broken": false,
+      "a_zd": 1.201,
+      "c_zd": 1.229,
+      "last_price": 1.306
+    },
+    {
+      "code": "002475",
+      "name": "立讯精密",
+      "is_broken": false,
+      "a_zd": 55.4,
+      "c_zd": 58.28,
+      "last_price": 66.0
+    },
+    {
+      "code": "600938",
+      "name": "中国海油",
+      "is_broken": false,
+      "a_zd": 35.29,
+      "c_zd": 38.5,
+      "last_price": 38.38
+    },
+    {
+      "code": "hk00175",
+      "name": "吉利汽车",
+      "is_broken": false,
+      "a_zd": 18.84,
+      "c_zd": 23.64,
+      "last_price": 23.0
+    },
+    {
+      "code": "000858",
+      "name": "五粮液",
+      "is_broken": false,
+      "a_zd": 101.59,
+      "c_zd": 101.08,
+      "last_price": 101.27
+    },
+    {
+      "code": "000429",
+      "name": "粤高速A",
+      "is_broken": false,
+      "a_zd": 12.7,
+      "c_zd": 12.48,
+      "last_price": 12.83
+    },
+    {
+      "code": "601225",
+      "name": "陕西煤业",
+      "is_broken": false,
+      "a_zd": 25.15,
+      "c_zd": 25.21,
+      "last_price": 26.3
+    },
+    {
+      "code": "601288",
+      "name": "农业银行",
+      "is_broken": false,
+      "a_zd": 6.73,
+      "c_zd": 6.93,
+      "last_price": 7.04
+    },
+    {
+      "code": "000338",
+      "name": "潍柴动力",
+      "is_broken": false,
+      "a_zd": 25.92,
+      "c_zd": 23.75,
+      "last_price": 29.59
+    },
+    {
+      "code": "000538",
+      "name": "云南白药",
+      "is_broken": false,
+      "a_zd": 55.4,
+      "c_zd": 54.4,
+      "last_price": 54.43
+    },
+    {
+      "code": "688981",
+      "name": "中芯国际",
+      "is_broken": false,
+      "a_zd": 100.13,
+      "c_zd": 113.44,
+      "last_price": 110.96
+    },
+    {
+      "code": "688041",
+      "name": "海光信息",
+      "is_broken": false,
+      "a_zd": 230.0,
+      "c_zd": 242.0,
+      "last_price": 285.0
+    },
+    {
+      "code": "002230",
+      "name": "科大讯飞",
+      "is_broken": false,
+      "a_zd": 48.1,
+      "c_zd": 48.51,
+      "last_price": 49.07
+    }
+  ]
+}

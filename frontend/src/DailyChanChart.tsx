@@ -161,10 +161,12 @@ function buildDailyTooltip(
 export function DailyChanChart({
   data: indexKline,
   seriesName,
-  indexAlertKind,
-  isIndexSelf = false,
+  indexAlertKind: _indexAlertKind,
+  isIndexSelf: _isIndexSelf = false,
   radarSummaryAlert,
   radarSummaryGeneratedAt,
+  /** 60分钟最新收盘价（盘中优先使用，使核心伏击圈现价随60m更新） */
+  currentPrice,
 }: {
   data: IndexKlineResponse
   seriesName: string
@@ -176,6 +178,8 @@ export function DailyChanChart({
   radarSummaryAlert?: string | null
   /** 摘要 generated_at，与 json 一致 */
   radarSummaryGeneratedAt?: string | null
+  /** 60分钟最新收盘价（盘中优先使用，使核心伏击圈现价随60m更新） */
+  currentPrice?: number
 }) {
   const topFractals = (indexKline.fractals ?? [])
     .filter((f) => f.type === 'top')
@@ -217,6 +221,8 @@ export function DailyChanChart({
   const lastPoint = indexKline.data.length > 0 ? indexKline.data[indexKline.data.length - 1] : null
   const lastClose = lastPoint?.close ?? 0
   const lastDate = lastPoint?.date ?? ''
+  // 盘中优先使用60分钟最新价，使核心伏击圈现价随定时调度（60m刷新）实时更新
+  const displayPrice = currentPrice != null && currentPrice > 0 ? currentPrice : lastClose
   const neutralLine = '#64748b'
   /** 时间轴最右侧的中枢视为「当前 C 中枢」（仅该中枢 markArea 绿/红填充；ZG/ZD/DD 线与 A/B 一致为全屏 ZG/ZD + 框内 DD） */
   const cCentralIdx = centrals.length > 0 ? centrals.length - 1 : -1
@@ -229,11 +235,22 @@ export function DailyChanChart({
 
   const aZd = centrals.length > 0 ? Number(centrals[0].zd) : null
   const cZd = centrals.length > 0 ? Number(centrals[cCentralIdx].zd) : null
-  const breakBelowAZd = aZd != null && lastClose < aZd
+  const breakBelowAZd = aZd != null && displayPrice < aZd
+
+  // 绿色核心伏击圈基准线：取 C-ZD 和 A-ZD 中较大的一个
+  const baseZd =
+    aZd != null && cZd != null
+      ? Math.max(aZd, cZd)
+      : aZd != null
+        ? aZd
+        : cZd != null
+          ? cZd
+          : null
 
   const priceYExtent = mainChartYExtent(indexKline.data, [
     ...centrals.flatMap((c) => [Number(c.zd), Number(c.zg)]),
     ...bollExtentPrices(indexKline.data),
+    ...(baseZd != null ? [baseZd, baseZd * 1.03] : []),
   ])
 
   const bollData = buildBollLineData(indexKline.data)
@@ -256,8 +273,8 @@ export function DailyChanChart({
       const zd = Number(c.zd)
       const dd = (zg + zd) / 2
       const centralName = centralLegendName(i)
-      const zgColor = lastClose > zg ? '#22c55e' : neutralLine
-      const zdColor = lastClose < zd ? '#ef4444' : neutralLine
+      const zgColor = displayPrice > zg ? '#22c55e' : neutralLine
+      const zdColor = displayPrice < zd ? '#ef4444' : neutralLine
       const ddColor = '#94a3b8'
       const sd = c.start_date
       const ed = c.end_date
@@ -535,54 +552,84 @@ export function DailyChanChart({
                     ? {
                         silent: true,
                         z: 1,
-                        data: centrals.map((c, i) => {
-                          const isC = i === cCentralIdx
-                          const zdN = Number(c.zd)
-                          const pot = Boolean(c.potential_divergence)
-                          let itemStyle: {
-                            color: string
-                            borderColor: string
-                            borderWidth: number
-                          } = isC
-                            ? lastClose < zdN
-                              ? {
-                                  color: 'rgba(239, 68, 68, 0.16)',
-                                  borderColor: 'rgba(248, 113, 113, 0.42)',
-                                  borderWidth: 1,
-                                }
+                        data: [
+                          // 🟢 核心伏击圈：以绝对防线 MIN(C-ZD, A-ZD) 为底线，向上浮动 3%
+                          ...(baseZd != null
+                            ? [
+                                [
+                                  {
+                                    name: '🟢 核心伏击圈 (胜率极高)',
+                                    xAxis: dates[0],
+                                    yAxis: baseZd * 1.03,
+                                    itemStyle: {
+                                      color: 'rgba(34, 197, 94, 0.1)',
+                                      borderColor: 'rgba(34, 197, 94, 0.3)',
+                                      borderWidth: 1,
+                                    },
+                                    label: {
+                                      show: true,
+                                      position: 'insideTop',
+                                      color: '#22c55e',
+                                      fontSize: 11,
+                                      formatter: '🟢 核心伏击圈 (胜率极高)',
+                                    },
+                                  },
+                                  {
+                                    xAxis: dates[dates.length - 1],
+                                    yAxis: Math.min(aZd ?? Infinity, cZd ?? Infinity),
+                                  },
+                                ],
+                              ]
+                            : []),
+                          ...centrals.map((c, i) => {
+                            const isC = i === cCentralIdx
+                            const zdN = Number(c.zd)
+                            const pot = Boolean(c.potential_divergence)
+                            let itemStyle: {
+                              color: string
+                              borderColor: string
+                              borderWidth: number
+                            } = isC
+                              ? displayPrice < zdN
+                                ? {
+                                    color: 'rgba(239, 68, 68, 0.16)',
+                                    borderColor: 'rgba(248, 113, 113, 0.42)',
+                                    borderWidth: 1,
+                                  }
+                                : {
+                                    color: 'rgba(34, 197, 94, 0.16)',
+                                    borderColor: 'rgba(74, 222, 128, 0.48)',
+                                    borderWidth: 1,
+                                  }
                               : {
-                                  color: 'rgba(34, 197, 94, 0.16)',
-                                  borderColor: 'rgba(74, 222, 128, 0.48)',
-                                  borderWidth: 1,
+                                  color: 'rgba(249, 115, 22, 0.1)',
+                                  borderColor: 'rgba(234, 88, 12, 0.28)',
+                                  borderWidth: 0.5,
                                 }
-                            : {
-                                color: 'rgba(249, 115, 22, 0.1)',
-                                borderColor: 'rgba(234, 88, 12, 0.28)',
-                                borderWidth: 0.5,
+                            if (pot) {
+                              itemStyle = {
+                                ...itemStyle,
+                                borderColor: 'rgba(251, 191, 36, 0.92)',
+                                borderWidth: Math.max(itemStyle.borderWidth, 2.5),
                               }
-                          if (pot) {
-                            itemStyle = {
-                              ...itemStyle,
-                              borderColor: 'rgba(251, 191, 36, 0.92)',
-                              borderWidth: Math.max(itemStyle.borderWidth, 2.5),
                             }
-                          }
-                          return [
-                            {
-                              name: pot
-                                ? `${centralLegendName(i)} · 潜在背驰`
-                                : centralLegendName(i),
-                              xAxis: c.start_date,
-                              yAxis: c.zg,
-                              itemStyle,
-                            },
-                            {
-                              xAxis: c.end_date,
-                              yAxis: c.zd,
-                              itemStyle,
-                            },
-                          ]
-                        }),
+                            return [
+                              {
+                                name: pot
+                                  ? `${centralLegendName(i)} · 潜在背驰`
+                                  : centralLegendName(i),
+                                xAxis: c.start_date,
+                                yAxis: c.zg,
+                                itemStyle,
+                              },
+                              {
+                                xAxis: c.end_date,
+                                yAxis: c.zd,
+                                itemStyle,
+                              },
+                            ]
+                          }),
+                        ],
                       }
                     : undefined,
                   markLine: centralMarkLine,
@@ -688,11 +735,9 @@ export function DailyChanChart({
         </div>
         <aside className="central-compare-aside" aria-label="现价与中枢下沿对比">
           <DefenseAlertBrief
-            price={lastClose}
+            price={displayPrice}
             cZd={cZd}
             aZd={aZd}
-            indexAlertKind={indexAlertKind}
-            isIndexSelf={isIndexSelf}
           />
           {radarSummaryAlert ? (
             <div className="defense-radar-sync-block">
@@ -706,11 +751,34 @@ export function DailyChanChart({
           ) : null}
           <div className="central-compare-aside-title">实时对比</div>
           <div className="central-compare-price">
-            现价 <strong>{lastClose.toFixed(3)}</strong>
+            现价 <strong>{displayPrice.toFixed(3)}</strong>
             <span className="central-compare-time" style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: '#94a3b8', fontWeight: 400 }}>
               {lastDate}
             </span>
           </div>
+          {/* 日线最后一笔方向 */}
+          {(() => {
+            const pensEff = indexKline.pens_effective ?? []
+            const lastPen = pensEff.length > 0 ? pensEff[pensEff.length - 1] : null
+            if (lastPen) {
+              const isUp = lastPen.direction === 'up'
+              return (
+                <div className="central-compare-row" style={{ marginTop: '0.5rem' }}>
+                  <span className="central-compare-label">日线笔向</span>
+                  <span
+                    className="central-compare-ref"
+                    style={{
+                      color: isUp ? '#22c55e' : '#ef4444',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {isUp ? '一笔上' : '一笔下'}
+                  </span>
+                </div>
+              )
+            }
+            return null
+          })()}
           {centrals.length === 0 ? (
             <p className="central-compare-muted">暂无中枢数据</p>
           ) : (
@@ -724,7 +792,7 @@ export function DailyChanChart({
               <div className="central-compare-metric">
                 压力（相对 C-ZD）
                 <span className="central-compare-pct">
-                  {pctVsRef(lastClose, cZd)}%
+                  {pctVsRef(displayPrice, cZd)}%
                 </span>
               </div>
               <div className="central-compare-row central-compare-row--spaced">
@@ -736,7 +804,7 @@ export function DailyChanChart({
               <div className="central-compare-metric">
                 支撑（相对 A-ZD）
                 <span className="central-compare-pct">
-                  {pctVsRef(lastClose, aZd)}%
+                  {pctVsRef(displayPrice, aZd)}%
                 </span>
               </div>
               {breakBelowAZd && (

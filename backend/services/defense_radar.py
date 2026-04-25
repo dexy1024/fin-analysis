@@ -55,6 +55,7 @@ DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
     ("300048", "合康新能"),
     ("002415", "海康威视"),
     ("601919", "中远海控"),
+    ("600585", "海螺水泥"),
     ("600873", "梅花生物"),
     ("601166", "兴业银行"),
     ("600900", "长江电力"),
@@ -69,6 +70,22 @@ DEFENSE_RADAR_WATCHLIST: Tuple[Tuple[str, str], ...] = (
     ("002230", "科大讯飞"),
     ("002714", "牧原股份"),
     ("hk01810", "小米集团"),
+    ("002602", "世纪华通"),
+    ("688981", "中芯国际"),
+    ("688041", "海光信息"),
+    ("512690", "酒ETF"),
+    ("hk00175", "吉利汽车"),
+    ("hk03690", "美团"),
+    ("hk03896", "金山云"),
+    ("hk06862", "海底捞"),
+    ("000538", "云南白药"),
+    ("000858", "五粮液"),
+    ("600938", "中国海油"),
+    ("601288", "农业银行"),
+    ("002475", "立讯精密"),
+    ("512400", "有色金属ETF"),
+    ("159985", "豆粕ETF"),
+    ("159227", "航空航天ETF"),
 )
 
 EXCLUDED_SYMBOLS = frozenset({"sh000001", "SH000001"})
@@ -324,28 +341,33 @@ def macd_green_bars_shortening_ok(bars: List[Dict[str, Any]]) -> bool:
 
 def macd_condition3_radar_ok(h60_payload: Dict[str, Any]) -> bool:
     """
-    条件 3（必选）：最近两段向下有效笔的零轴下绿柱面积前者更大、当前段更小；**或**末段绿柱连续缩短。
-    二者满足其一即 True；均不满足则 False（避免无 MACD 依据仍扳机）。
+    MACD 转强判定：严格基于柱状图动能变化（导数）。
+    macd_hist = (DIF - DEA) * 2，即 bars[n]["macd"]["macd"] 已经是 MACD 柱值。
+
+    转强(True)：当前柱值 > 前一根柱值（动能向上）
+      - 场景A（水下底背驰）：macd_hist < 0 且 macd_hist > prev_macd_hist（绿柱缩短）
+      - 场景B（水上主升浪）：macd_hist > 0 且 macd_hist > prev_macd_hist（红柱伸长）
+    转弱(False)：当前柱值 < 前一根柱值（动能向下）
+      - 场景C（水下主跌浪）：macd_hist < 0 且 macd_hist < prev_macd_hist（绿柱伸长）
+      - 场景D（水上顶背驰）：macd_hist > 0 且 macd_hist < prev_macd_hist（红柱缩短）
     """
     bars = h60_payload.get("data") or []
-    if not bars:
+    if len(bars) < 2:
         return False
-    pens = h60_payload.get("pens_effective") or []
-    down_pens: List[Dict[str, Any]] = [p for p in pens if p.get("direction") == "down"]
-    area_ok = False
-    if len(down_pens) >= 2:
-        prev_pen = down_pens[-2]
-        cur_pen = down_pens[-1]
-        a_prev = _macd_neg_green_area_between(
-            bars, str(prev_pen["start_date"]), str(prev_pen["end_date"])
-        )
-        a_cur = _macd_neg_green_area_between(
-            bars, str(cur_pen["start_date"]), str(cur_pen["end_date"])
-        )
-        if a_prev > 1e-12 and a_cur < a_prev:
-            area_ok = True
-    shorten_ok = macd_green_bars_shortening_ok(bars)
-    return bool(area_ok or shorten_ok)
+    m0_obj = bars[-1].get("macd")
+    m1_obj = bars[-2].get("macd")
+    if not isinstance(m0_obj, dict) or not isinstance(m1_obj, dict):
+        return False
+    m0 = m0_obj.get("macd")
+    m1 = m1_obj.get("macd")
+    if m0 is None or m1 is None:
+        return False
+    try:
+        m0v = float(m0)
+        m1v = float(m1)
+    except (TypeError, ValueError):
+        return False
+    return m0v > m1v
 
 
 def macd_momentum_ok_two_down_pens(h60_payload: Dict[str, Any]) -> bool:
@@ -385,12 +407,20 @@ def _append_meihua2test_row_if_missing(rows: List[DefenseRow], *, refresh: bool)
     rows.append(analyze_meihua2test_symbol(refresh=refresh))
 
 
+def _get_full_radar_watchlist() -> Tuple[Tuple[str, str], ...]:
+    """DEFENSE_RADAR_WATCHLIST + observation.json 中的标的（去重，observation 排在后面）。"""
+    obs = _load_watchlist_observation_symbols()
+    seen = set(code for code, _ in DEFENSE_RADAR_WATCHLIST)
+    extra = [(code, name) for code, name in obs if code not in seen]
+    return DEFENSE_RADAR_WATCHLIST + tuple(extra)
+
+
 def build_defense_radar_summary(
     *,
     refresh: bool = False,
     watchlist: Optional[Tuple[Tuple[str, str], ...]] = None,
 ) -> List[DefenseRadarSummaryItem]:
-    wl = watchlist or DEFENSE_RADAR_WATCHLIST
+    wl = watchlist or _get_full_radar_watchlist()
     rows: List[DefenseRow] = []
     for code, name in wl:
         rows.append(analyze_symbol(code, name, refresh=refresh))
@@ -580,9 +610,10 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             error="skipped_index",
         )
     try:
+        daily_start = (datetime.now() - timedelta(days=380)).strftime("%Y-%m-%d")
         payload = get_index_kline(
             symbol=code.strip(),
-            start_date="2024-12-01",
+            start_date=daily_start,
             end_date=None,
             period="daily",
             refresh=refresh,
@@ -664,8 +695,12 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
     pen_60m_down = switched_down_to_up  # 字段名保留，逻辑改为「前下+当前上」
     pen_label = _effective_60m_pen_label(h60)
 
-    # 3. macd_momentum_ok：保持现有逻辑（两段向下笔绿柱面积缩小）
+    # 3. macd_momentum_ok：MACD 转强判定
     macd_ok = macd_condition3_radar_ok(h60)
+    if code == "603317":
+        m0 = bars[-1].get("macd", {}).get("macd") if bars else None
+        m1 = bars[-2].get("macd", {}).get("macd") if len(bars) >= 2 else None
+        print(f"[DEBUG 603317] m0={m0}, m1={m1}, macd_ok={macd_ok}", flush=True)
 
     # 4. blue_triangle_strict（原：末三K底分型）-> 改为：hasBottomFractalInSwitch（当前向上笔内有底分型）
     fractals = h60.get("fractals") or []
@@ -728,7 +763,7 @@ def run_defense_radar(
     display_time = now.strftime("%Y-%m-%d %H:%M:%S")
     path = out_dir / f"defense_radar_{ts}.md"
 
-    wl = watchlist or DEFENSE_RADAR_WATCHLIST
+    wl = watchlist or _get_full_radar_watchlist()
     rows_out: List[DefenseRow] = []
     for code, name in wl:
         rows_out.append(analyze_symbol(code, name, refresh=refresh))
@@ -763,6 +798,158 @@ def run_defense_radar(
 
     logging.info("defense_radar: 已写入 %s（共 %s 行）", path, len(rows_out))
     return path
+
+
+# ==================== 破位状态批量计算（供定时调度调用） ====================
+
+BROKEN_SYMBOLS_JSON = "broken_symbols.json"
+
+
+def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
+    """读取 watchlist.json 和 observation.json，返回 (code, name) 列表。"""
+    symbols: List[Tuple[str, str]] = []
+    root = Path(__file__).resolve().parents[2]
+
+    watchlist_path = root / "backend" / "data" / "watchlist.json"
+    if watchlist_path.is_file():
+        try:
+            data = json.loads(watchlist_path.read_text(encoding="utf-8"))
+            for item in data.get("holdings", []):
+                if isinstance(item, dict) and item.get("code"):
+                    symbols.append((str(item["code"]).strip(), str(item.get("name", "")).strip()))
+        except Exception:  # noqa: BLE001
+            logging.warning("defense_radar: 读取 watchlist.json 失败")
+
+    observation_path = root / "backend" / "data" / "observation.json"
+    if observation_path.is_file():
+        try:
+            data = json.loads(observation_path.read_text(encoding="utf-8"))
+            for item in data.get("observations", []):
+                if isinstance(item, dict) and item.get("code"):
+                    code = str(item["code"]).strip()
+                    name = str(item.get("name", "")).strip()
+                    # 去重：已存在于 watchlist 的跳过
+                    if not any(c == code for c, _ in symbols):
+                        symbols.append((code, name))
+        except Exception:  # noqa: BLE001
+            logging.warning("defense_radar: 读取 observation.json 失败")
+
+    return symbols
+
+
+def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float], Optional[float]]:
+    """
+    判断单个标的是否破位。
+    返回: (is_broken, a_zd, c_zd, last_price)
+    破位定义：60分钟最新收盘价 < MIN(日线A-ZD, 日线C-ZD)
+    """
+    sym = code.strip()
+    if sym in EXCLUDED_SYMBOLS or sym.lower() in EXCLUDED_SYMBOLS:
+        return False, None, None, None
+
+    # 1. 获取日线数据（取 centrals）
+    try:
+        daily_start = (datetime.now() - timedelta(days=380)).strftime("%Y-%m-%d")
+        daily = get_index_kline(
+            symbol=sym,
+            start_date=daily_start,
+            end_date=None,
+            period="daily",
+            refresh=False,
+        )
+    except Exception:  # noqa: BLE001
+        logging.warning("defense_radar: 日线数据获取失败 %s", sym)
+        return False, None, None, None
+
+    centrals_raw = daily.get("centrals") or []
+    centrals = _sort_centrals_chronologically(list(centrals_raw))
+    a_zd, c_zd = _daily_a_c_zd(centrals)
+    if a_zd is None or c_zd is None:
+        return False, None, None, None
+
+    # 2. 获取60分钟最新收盘价
+    try:
+        h60 = get_index_kline(
+            symbol=sym,
+            start_date=_h60_start_date(90),
+            end_date=None,
+            period="60",
+            refresh=False,
+        )
+    except Exception:  # noqa: BLE001
+        logging.warning("defense_radar: 60分钟数据获取失败 %s", sym)
+        return False, a_zd, c_zd, None
+
+    bars = h60.get("data") or []
+    if not bars:
+        return False, a_zd, c_zd, None
+
+    last_price = float(bars[-1]["close"])
+    min_zd = min(a_zd, c_zd)
+    is_broken = last_price < min_zd
+
+    return is_broken, a_zd, c_zd, last_price
+
+
+def compute_and_save_broken_symbols() -> Path:
+    """
+    计算 watchlist + observation 中所有标的的破位状态，保存到 broken_symbols.json。
+    由 kline_scheduler 在每次定时调度完成后调用。
+    """
+    symbols = _load_watchlist_observation_symbols()
+    if not symbols:
+        logging.info("defense_radar: watchlist 和 observation 均为空，跳过破位计算")
+        out_dir = radar_output_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / BROKEN_SYMBOLS_JSON
+        path.write_text(
+            json.dumps({"generated_at": datetime.now().replace(microsecond=0).isoformat(), "broken_codes": []}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    broken_codes: List[str] = []
+    details: List[Dict[str, Any]] = []
+
+    for code, name in symbols:
+        is_broken, a_zd, c_zd, last_price = _is_symbol_broken(code)
+        if is_broken:
+            broken_codes.append(code)
+        details.append({
+            "code": code,
+            "name": name,
+            "is_broken": is_broken,
+            "a_zd": round(a_zd, 4) if a_zd is not None else None,
+            "c_zd": round(c_zd, 4) if c_zd is not None else None,
+            "last_price": round(last_price, 4) if last_price is not None else None,
+        })
+
+    payload: Dict[str, Any] = {
+        "generated_at": datetime.now().replace(microsecond=0).isoformat(),
+        "broken_codes": broken_codes,
+        "details": details,
+    }
+
+    out_dir = radar_output_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / BROKEN_SYMBOLS_JSON
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    logging.info("defense_radar: 破位状态已写入 %s（%d 个标的，%d 个破位）", path, len(symbols), len(broken_codes))
+    return path
+
+
+def load_broken_symbols_json(radar_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """读取 broken_symbols.json，供 API 接口使用。"""
+    d = radar_dir or radar_output_dir()
+    path = d / BROKEN_SYMBOLS_JSON
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        logging.warning("defense_radar: 读取 %s 失败", path)
+        return None
 
 
 if __name__ == "__main__":

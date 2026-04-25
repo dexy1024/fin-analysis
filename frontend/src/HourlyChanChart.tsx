@@ -60,6 +60,7 @@ function buildAxisTooltipHtmlHourly(
   candleSeriesName: string,
   centralTips: CentralTipEntry[],
   klineRows?: IndexKlinePoint[],
+  periodLabel: string = '60分钟',
 ): string {
   if (!Array.isArray(params) || params.length === 0) return ''
   const first = params[0] as { axisValue?: string; axisValueLabel?: string }
@@ -99,7 +100,7 @@ function buildAxisTooltipHtmlHourly(
           [b.upper, b.middle, b.lower].every((x) => Number.isFinite(x))
         ) {
           lines.push(
-            `<div style="color:#93c5fd;font-size:11px;margin-top:4px">60分钟 BOLL(20,2) 上 ${b.upper.toFixed(3)}　中 ${b.middle.toFixed(3)}　下 ${b.lower.toFixed(3)}</div>`,
+            `<div style="color:#93c5fd;font-size:11px;margin-top:4px">${periodLabel} BOLL(20,2) 上 ${b.upper.toFixed(3)}　中 ${b.middle.toFixed(3)}　下 ${b.lower.toFixed(3)}</div>`,
           )
         }
       }
@@ -141,9 +142,10 @@ function buildHourlyTooltip(
   candleSeriesName: string,
   centralTips: CentralTipEntry[],
   klineRows?: IndexKlinePoint[],
+  periodLabel: string = '60分钟',
 ): string {
   return (
-    buildAxisTooltipHtmlHourly(params, candleSeriesName, centralTips, klineRows) +
+    buildAxisTooltipHtmlHourly(params, candleSeriesName, centralTips, klineRows, periodLabel) +
     appendMacdTooltipBlock(params)
   )
 }
@@ -165,12 +167,23 @@ export interface HourlyBuyConditions {
   bollBuy: boolean
 }
 
+/** 用户持仓信息（从 watchlist.json 读取） */
+export interface HoldingInfo {
+  code: string
+  name: string
+  cost?: number
+  shares?: number
+  note?: string
+}
+
 export function HourlyChanChart({
   data: indexKline,
   seriesName,
   dailyAZd,
   dailyCZd,
+  dailyMacd,
   buyConditions,
+  holdingInfo,
 }: {
   data: IndexKlineResponse
   seriesName: string
@@ -178,8 +191,12 @@ export function HourlyChanChart({
   dailyAZd: number | null
   /** 日线 C 中枢下沿（与日线图一致，来自日线最后一根中枢 zd） */
   dailyCZd: number | null
+  /** 日线最后一根K线MACD（用于卖点防卖飞过滤） */
+  dailyMacd?: { macd: number }
   /** 60分钟买点7条件（后端定时计算） */
   buyConditions?: HourlyBuyConditions
+  /** 用户持仓信息（可选） */
+  holdingInfo?: HoldingInfo
 }) {
   const topFractals = (indexKline.fractals ?? [])
     .filter((f) => f.type === 'top')
@@ -223,6 +240,7 @@ export function HourlyChanChart({
   const lastDate = lastPoint?.date ?? ''
   const neutralLine = '#64748b'
   const cCentralIdx = centrals.length > 0 ? centrals.length - 1 : -1
+  const periodLabel = indexKline.period === '15' ? '15分钟' : '60分钟'
 
   const centralLegendName = (i: number) => {
     if (centrals.length === 1) return 'C中枢'
@@ -408,11 +426,73 @@ export function HourlyChanChart({
   const threeBExtraMinPrice = threeBLast ? threeBLast.y : null
 
   // 使用后端定时计算的7个条件，如果没有则回退到前端实时计算
-  const { signalMarker, flags, sellSignalActive } = computeHourlyBuySellState(
-    indexKline,
-    dailyAZd,
-    dailyCZd,
-  )
+  const {
+    signalMarker,
+    flags,
+    sellSignalActive,
+    firstBuyPoint,
+    secondBuyPoint,
+    firstBuyFailed,
+    secondBuyFailed,
+    thirdBuyFailed,
+    thirdBuyPoint,
+    firstSellPoint,
+    secondSellPoint,
+    thirdSellPoint,
+  } = computeHourlyBuySellState(indexKline, dailyAZd, dailyCZd, dailyMacd)
+
+  // ========== 日线破位强制降级 ==========
+  // 若当前价跌破日线绝对防线 MIN(C-ZD, A-ZD)，所有买点信号强制灰度化，isExecutable=false
+  const isDailyBroken =
+    firstBuyPoint?.isExecutable === false ||
+    secondBuyPoint?.isExecutable === false ||
+    thirdBuyPoint?.isExecutable === false
+  const DEGRADED_COLOR = '#666666'
+
+  // ========== 日线核心伏击圈跨级别风控 ==========
+  // 核心伏击圈基准线：取 C-ZD 和 A-ZD 中较大的一个（即绝对防线）
+  const baseZd =
+    dailyAZd != null && dailyCZd != null
+      ? Math.max(dailyAZd, dailyCZd)
+      : null
+  const lastPrice = indexKline.data.length > 0 ? indexKline.data[indexKline.data.length - 1].close : 0
+  // 伏击圈 = 绝对防线向上 3% 范围内
+  const isInAmbushZone = baseZd != null && lastPrice > 0 ? lastPrice <= baseZd * 1.03 : true
+  const dailyBias = baseZd != null && lastPrice > 0 ? ((lastPrice - baseZd) / baseZd) * 100 : 0
+  const AMBUSH_WARNING_COLOR = '#f97316' // 橙色警示
+
+  /** 统一生成买点标签：已失效 > 日线破位 > 高乖离 > 正常 */
+  function getBuyLabel(
+    point: { isDestroyed?: boolean },
+    type: string,
+    defaultLabel: string,
+  ): string {
+    if (point.isDestroyed) return `${type}(已失效)`
+    if (isDailyBroken) return `${type}(日线破位·放弃)`
+    if (!isInAmbushZone) return `[高乖离]${type}`
+    return defaultLabel
+  }
+
+  /** 统一生成买点颜色：已失效/日线破位=灰色，高乖离=橙色，正常=原色 */
+  function getBuyColor(
+    point: { isDestroyed?: boolean },
+    defaultColor: string,
+  ): string {
+    if (point.isDestroyed || isDailyBroken) return DEGRADED_COLOR
+    if (!isInAmbushZone) return AMBUSH_WARNING_COLOR
+    return defaultColor
+  }
+
+  /** 高乖离风控仓位建议文本 */
+  function getAmbushPositionAdvice(): string {
+    return `⚠️ 脱离日线伏击圈(乖离率 ${dailyBias.toFixed(2)}%)，建议放弃或极轻仓(10%)！`
+  }
+
+  // 二三买共振：同一根K线上同时出现二买和三买信号
+  const isBuy23Resonance =
+    secondBuyPoint?.hasSignal &&
+    thirdBuyPoint?.hasSignal &&
+    secondBuyPoint.date === thirdBuyPoint.date
 
   // 优先使用后端定时计算的7个条件
   const buyConditionChecklist = buyConditions
@@ -441,6 +521,17 @@ export function HourlyChanChart({
     dailyCZd,
     ...bollExtentPrices(indexKline.data),
     threeBExtraMinPrice,
+    signalMarker?.y,
+    firstBuyPoint?.hasSignal && !firstBuyPoint?.suppressed ? firstBuyPoint.price : undefined,
+    firstBuyPoint?.suppressed ? firstBuyPoint.price : undefined,
+    secondBuyPoint?.hasSignal ? secondBuyPoint.price : undefined,
+    firstBuyFailed?.hasSignal ? firstBuyFailed.price : undefined,
+    secondBuyFailed?.hasSignal ? secondBuyFailed.price : undefined,
+    thirdBuyFailed?.hasSignal ? thirdBuyFailed.price : undefined,
+    thirdBuyPoint?.hasSignal ? thirdBuyPoint.price : undefined,
+    firstSellPoint?.hasSignal ? firstSellPoint.price : undefined,
+    secondSellPoint?.hasSignal ? secondSellPoint.price : undefined,
+    thirdSellPoint?.hasSignal ? thirdSellPoint.price : undefined,
   ])
 
   const centralMarkLineData: unknown[] = []
@@ -617,6 +708,17 @@ export function HourlyChanChart({
     'DIF',
     'DEA',
     ...(divergenceArrows.length ? ['底背驰'] : []),
+    ...(firstBuyPoint?.hasSignal && !firstBuyPoint?.suppressed ? [getBuyLabel(firstBuyPoint, '一买', '一买')] : []),
+    ...(firstBuyPoint?.suppressed ? [getBuyLabel(firstBuyPoint, '一买↑', '一买(已升级)')] : []),
+    ...(isBuy23Resonance ? [getBuyLabel({ isDestroyed: (secondBuyPoint?.isDestroyed || false) || (thirdBuyPoint?.isDestroyed || false) }, '二三买共振', '二三买共振')] : []),
+    ...(secondBuyPoint?.hasSignal && !isBuy23Resonance ? [getBuyLabel(secondBuyPoint, '二买', '二买')] : []),
+    ...(thirdBuyPoint?.hasSignal && !isBuy23Resonance ? [getBuyLabel(thirdBuyPoint, '三买', '三买')] : []),
+    ...(firstBuyFailed?.hasSignal ? ['一买失败'] : []),
+    ...(secondBuyFailed?.hasSignal ? ['二买失败'] : []),
+    ...(thirdBuyFailed?.hasSignal ? ['三买失败'] : []),
+    ...(firstSellPoint?.hasSignal ? ['一卖'] : []),
+    ...(secondSellPoint?.hasSignal ? ['二卖'] : []),
+    ...(thirdSellPoint?.hasSignal ? ['三卖'] : []),
   ]
 
   return (
@@ -637,15 +739,157 @@ export function HourlyChanChart({
                 borderColor: 'rgba(148, 163, 184, 0.35)',
                 textStyle: { color: '#e5e7eb' },
                 formatter: (params: unknown) => {
-                  const base = buildHourlyTooltip(params, seriesName, centralTips, indexKline.data)
-                  if (!signalMarker?.reasons?.length) return base
-                  return (
-                    base +
-                    `<div style="margin-top:6px;color:${signalMarker.color};font-weight:700">信号：${signalMarker.text}</div>` +
-                    `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
-                    signalMarker.reasons.map((r) => `- ${r}`).join('<br/>') +
-                    `</div>`
-                  )
+                  const pArr = Array.isArray(params) ? params : [params]
+                  const axisDate = pArr.length > 0 && (pArr[0] as { axisValue?: string }).axisValue ? (pArr[0] as { axisValue: string }).axisValue : ''
+                  const base = buildHourlyTooltip(params, seriesName, centralTips, indexKline.data, periodLabel)
+                  let extra = ''
+                  // 显示买卖信号（仅当信号时间与当前K线匹配时）
+                  if (signalMarker?.reasons?.length && signalMarker.date === axisDate) {
+                    extra += `<div style="margin-top:6px;color:${signalMarker.color};font-weight:700">信号：${signalMarker.text}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${signalMarker.date}<br/>` +
+                      signalMarker.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  // 显示一买信号（仅当信号时间与当前K线匹配时）
+                  if (firstBuyPoint?.hasSignal && !firstBuyPoint?.suppressed && firstBuyPoint.date === axisDate) {
+                    const b1Destroyed = firstBuyPoint.isDestroyed === true
+                    const b1AmbushWarn = !b1Destroyed && !isDailyBroken && !isInAmbushZone
+                    const b1Label = getBuyLabel(firstBuyPoint, '一买', '一买信号')
+                    const b1Color = getBuyColor(firstBuyPoint, '#f59e0b')
+                    extra += `<div style="margin-top:6px;color:${b1Color};font-weight:700">${b1Label}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${firstBuyPoint.date}<br/>` +
+                      `- 触发价: ${firstBuyPoint.price.toFixed(2)}<br/>` +
+                      `- 止损线: ${firstBuyPoint.stopLoss.toFixed(2)}<br/>` +
+                      `- 背驰强度: ${(firstBuyPoint.areaRatio * 100).toFixed(1)}%<br/>` +
+                      `- <span style="color:${b1AmbushWarn ? AMBUSH_WARNING_COLOR : '#fbbf24'}">${b1AmbushWarn ? getAmbushPositionAdvice() : '[左侧试探] 建议建仓 20% (约 1万)'}</span><br/>` +
+                      `${b1Destroyed ? '- <span style="color:' + DEGRADED_COLOR + '">⚠ 已失效：后续价格跌破止损线，原买点结构被破坏</span><br/>' : ''}` +
+                      `${!b1Destroyed && isDailyBroken ? '- <span style="color:' + DEGRADED_COLOR + '">⚠ 日线破位：已跌破绝对防线 MIN(C-ZD, A-ZD)，信号强制降级为不可执行</span><br/>' : ''}` +
+                      `${b1AmbushWarn ? '- <span style="color:' + AMBUSH_WARNING_COLOR + '">⚠ 跨级别风控：当前不在日线核心伏击圈内，高乖离状态建议大幅削减仓位</span><br/>' : ''}` +
+                      `</div>`
+                  }
+                  // 显示已升级的一买信号（被二买覆盖，仅当信号时间与当前K线匹配时）
+                  if (firstBuyPoint?.suppressed && firstBuyPoint.date === axisDate) {
+                    const b1Destroyed = firstBuyPoint.isDestroyed === true
+                    const b1AmbushWarn = !b1Destroyed && !isDailyBroken && !isInAmbushZone
+                    const b1Color = getBuyColor(firstBuyPoint, '#9ca3af')
+                    extra += `<div style="margin-top:6px;color:${b1Color};font-weight:700">${getBuyLabel(firstBuyPoint, '一买↑', '一买（已升级为二买）')}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${firstBuyPoint.date}<br/>` +
+                      `- 触发价: ${firstBuyPoint.price.toFixed(2)}<br/>` +
+                      `- 背驰强度: ${(firstBuyPoint.areaRatio * 100).toFixed(1)}%<br/>` +
+                      `- <span style="color:${b1AmbushWarn ? AMBUSH_WARNING_COLOR : '#fbbf24'}">${b1AmbushWarn ? getAmbushPositionAdvice() : '[左侧试探] 建议建仓 20% (约 1万)'}</span><br/>` +
+                      firstBuyPoint.reasons.filter((r) => r.includes('已升级')).map((r) => `- ${r}`).join('<br/>') +
+                      `${b1Destroyed ? '<br/>- <span style="color:' + DEGRADED_COLOR + '">⚠ 已失效：后续价格跌破止损线，原买点结构被破坏</span>' : ''}` +
+                      `${!b1Destroyed && isDailyBroken ? '<br/>- <span style="color:' + DEGRADED_COLOR + '">⚠ 日线破位：已跌破绝对防线 MIN(C-ZD, A-ZD)，信号强制降级为不可执行</span>' : ''}` +
+                      `${b1AmbushWarn ? '<br/>- <span style="color:' + AMBUSH_WARNING_COLOR + '">⚠ 跨级别风控：当前不在日线核心伏击圈内，高乖离状态建议大幅削减仓位</span>' : ''}` +
+                      `</div>`
+                  }
+                  // 二三买共振合并显示
+                  if (isBuy23Resonance && secondBuyPoint.date === axisDate) {
+                    const b23Destroyed = secondBuyPoint.isDestroyed === true || thirdBuyPoint.isDestroyed === true
+                    const b23AmbushWarn = !b23Destroyed && !isDailyBroken && !isInAmbushZone
+                    const b23Color = getBuyColor({ isDestroyed: b23Destroyed }, '#a855f7')
+                    extra += `<div style="margin-top:6px;color:${b23Color};font-weight:700">${getBuyLabel({ isDestroyed: b23Destroyed }, '二三买共振', '二三买共振')}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${secondBuyPoint.date}<br/>` +
+                      `- 【二买】` + secondBuyPoint.reasons.map((r) => `${r}`).join(' | ') + `<br/>` +
+                      `- 【三买】` + thirdBuyPoint.reasons.map((r) => `${r}`).join(' | ') + `<br/>` +
+                      `${b23AmbushWarn ? '- <span style="color:' + AMBUSH_WARNING_COLOR + '">' + getAmbushPositionAdvice() + '</span><br/>' : ''}` +
+                      `${b23Destroyed ? '- <span style="color:' + DEGRADED_COLOR + '">⚠ 已失效：后续价格跌破止损线，原买点结构被破坏</span>' : ''}` +
+                      `${!b23Destroyed && isDailyBroken ? '- <span style="color:' + DEGRADED_COLOR + '">⚠ 日线破位：已跌破绝对防线 MIN(C-ZD, A-ZD)，信号强制降级为不可执行</span>' : ''}` +
+                      `${b23AmbushWarn ? '- <span style="color:' + AMBUSH_WARNING_COLOR + '">⚠ 跨级别风控：当前不在日线核心伏击圈内，高乖离状态建议大幅削减仓位</span>' : ''}` +
+                      `</div>`
+                  }
+                  // 显示二买信号（仅当信号时间与当前K线匹配时，且未与三买共振）
+                  if (secondBuyPoint?.hasSignal && secondBuyPoint.date === axisDate && !isBuy23Resonance) {
+                    const b2Destroyed = secondBuyPoint.isDestroyed === true
+                    const b2AmbushWarn = !b2Destroyed && !isDailyBroken && !isInAmbushZone
+                    const b2Color = getBuyColor(secondBuyPoint, '#8b5cf6')
+                    extra += `<div style="margin-top:6px;color:${b2Color};font-weight:700">${getBuyLabel(secondBuyPoint, '二买', '二买信号')}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${secondBuyPoint.date}<br/>` +
+                      secondBuyPoint.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `${b2AmbushWarn ? '<br/>- <span style="color:' + AMBUSH_WARNING_COLOR + '">' + getAmbushPositionAdvice() + '</span>' : ''}` +
+                      `${b2Destroyed ? '<br/>- <span style="color:' + DEGRADED_COLOR + '">⚠ 已失效：后续价格跌破止损线，原买点结构被破坏</span>' : ''}` +
+                      `${!b2Destroyed && isDailyBroken ? '<br/>- <span style="color:' + DEGRADED_COLOR + '">⚠ 日线破位：已跌破绝对防线 MIN(C-ZD, A-ZD)，信号强制降级为不可执行</span>' : ''}` +
+                      `${b2AmbushWarn ? '<br/>- <span style="color:' + AMBUSH_WARNING_COLOR + '">⚠ 跨级别风控：当前不在日线核心伏击圈内，高乖离状态建议大幅削减仓位</span>' : ''}` +
+                      `</div>`
+                  }
+                  // 显示一买失败信号（仅当信号时间与当前K线匹配时）
+                  if (firstBuyFailed?.hasSignal && firstBuyFailed.date === axisDate) {
+                    extra += `<div style="margin-top:6px;color:#ef4444;font-weight:700">一买失败（左侧试错失败）</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${firstBuyFailed.date}<br/>` +
+                      firstBuyFailed.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  // 显示二买失败信号（仅当信号时间与当前K线匹配时）
+                  if (secondBuyFailed?.hasSignal && secondBuyFailed.date === axisDate) {
+                    extra += `<div style="margin-top:6px;color:#ef4444;font-weight:700">二买失败（右侧确认失败）</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${secondBuyFailed.date}<br/>` +
+                      secondBuyFailed.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  // 显示三买信号（仅当信号时间与当前K线匹配时，且未与二买共振）
+                  if (thirdBuyPoint?.hasSignal && thirdBuyPoint.date === axisDate && !isBuy23Resonance) {
+                    const b3Destroyed = thirdBuyPoint.isDestroyed === true
+                    const b3AmbushWarn = !b3Destroyed && !isDailyBroken && !isInAmbushZone
+                    const b3Color = getBuyColor(thirdBuyPoint, '#f97316')
+                    extra += `<div style="margin-top:6px;color:${b3Color};font-weight:700">${getBuyLabel(thirdBuyPoint, '三买', '三买信号')}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${thirdBuyPoint.date}<br/>` +
+                      thirdBuyPoint.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `${b3AmbushWarn ? '<br/>- <span style="color:' + AMBUSH_WARNING_COLOR + '">' + getAmbushPositionAdvice() + '</span>' : ''}` +
+                      `${b3Destroyed ? '<br/>- <span style="color:' + DEGRADED_COLOR + '">⚠ 已失效：后续价格跌破止损线，原买点结构被破坏</span>' : ''}` +
+                      `${!b3Destroyed && isDailyBroken ? '<br/>- <span style="color:' + DEGRADED_COLOR + '">⚠ 日线破位：已跌破绝对防线 MIN(C-ZD, A-ZD)，信号强制降级为不可执行</span>' : ''}` +
+                      `${b3AmbushWarn ? '<br/>- <span style="color:' + AMBUSH_WARNING_COLOR + '">⚠ 跨级别风控：当前不在日线核心伏击圈内，高乖离状态建议大幅削减仓位</span>' : ''}` +
+                      `</div>`
+                  }
+                  // 显示三买失败信号（仅当信号时间与当前K线匹配时）
+                  if (thirdBuyFailed?.hasSignal && thirdBuyFailed.date === axisDate) {
+                    extra += `<div style="margin-top:6px;color:#ef4444;font-weight:700">三买失败·止损</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${thirdBuyFailed.date}<br/>` +
+                      thirdBuyFailed.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  // 显示一卖信号（仅当信号时间与当前K线匹配时，根据tier显示不同标题）
+                  if (firstSellPoint?.hasSignal && firstSellPoint.date === axisDate) {
+                    const tier = firstSellPoint.tier
+                    const sellTitle = tier === 'weak' ? '弱卖（洗盘）' : tier === 'half' ? '半仓卖' : '清仓卖'
+                    const sellColor = tier === 'weak' ? '#f59e0b' : tier === 'half' ? '#f97316' : '#ef4444'
+                    extra += `<div style="margin-top:6px;color:${sellColor};font-weight:700">一卖·${sellTitle}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${firstSellPoint.date}<br/>` +
+                      `- 触发价: ${firstSellPoint.price.toFixed(2)}<br/>` +
+                      `- 止损线: ${firstSellPoint.stopLoss.toFixed(2)}<br/>` +
+                      `- 背驰强度: ${(firstSellPoint.areaRatio * 100).toFixed(1)}%<br/>` +
+                      firstSellPoint.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  // 显示二卖信号（仅当信号时间与当前K线匹配时，根据tier显示不同标题）
+                  if (secondSellPoint?.hasSignal && secondSellPoint.date === axisDate) {
+                    const tier = secondSellPoint.tier
+                    const sellTitle = tier === 'weak' ? '弱卖（洗盘）' : tier === 'half' ? '半仓卖' : '清仓卖'
+                    const sellColor = tier === 'weak' ? '#f59e0b' : tier === 'half' ? '#f97316' : '#ef4444'
+                    extra += `<div style="margin-top:6px;color:${sellColor};font-weight:700">二卖·${sellTitle}</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${secondSellPoint.date}<br/>` +
+                      secondSellPoint.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  // 显示三卖信号（仅当信号时间与当前K线匹配时，三卖无条件清仓）
+                  if (thirdSellPoint?.hasSignal && thirdSellPoint.date === axisDate) {
+                    extra += `<div style="margin-top:6px;color:#ef4444;font-weight:700">三卖·清仓卖</div>` +
+                      `<div style="color:#cbd5e1;font-size:11px;line-height:1.45">` +
+                      `- 时间: ${thirdSellPoint.date}<br/>` +
+                      thirdSellPoint.reasons.map((r) => `- ${r}`).join('<br/>') +
+                      `</div>`
+                  }
+                  return base + extra
                 },
               },
               legend: {
@@ -897,18 +1141,303 @@ export function HourlyChanChart({
                         yAxisIndex: 0,
                         data: [[signalMarker.date, signalMarker.y]] as [string, number][],
                         symbol: 'circle',
-                        symbolSize: 6,
+                        symbolSize: 4,
                         itemStyle: { color: signalMarker.color },
                         label: {
                           show: true,
                           formatter: signalMarker.text,
                           position: 'top',
-                          distance: 12,
+                          distance: 8,
                           color: signalMarker.color,
                           fontWeight: 'bold',
-                          fontSize: 28,
+                          fontSize: 13,
                         },
-                        z: 20,
+                        z: 15,
+                      },
+                    ]
+                  : []),
+                // 第一类买点（一买）标记 — 正常状态（isDestroyed 优先于 isDailyBroken）
+                ...(firstBuyPoint?.hasSignal && !firstBuyPoint?.suppressed
+                  ? [
+                      {
+                        name: getBuyLabel(firstBuyPoint, '一买', '一买'),
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[firstBuyPoint.date, firstBuyPoint.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: firstBuyPoint.isDestroyed ? 9 : (isDailyBroken ? 10 : (!isInAmbushZone ? 11 : 12)),
+                        itemStyle: { color: getBuyColor(firstBuyPoint, '#f59e0b'), opacity: firstBuyPoint.isDestroyed ? 0.5 : (isDailyBroken ? 0.6 : 1) },
+                        label: {
+                          show: true,
+                          formatter: firstBuyPoint.isDestroyed ? '一买(已失效)' : (isDailyBroken ? '一买(日线破位·放弃)' : (!isInAmbushZone ? '[高乖离]一买·左试20%' : '一买·左试20%')),
+                          position: 'bottom',
+                          distance: firstBuyPoint.isDestroyed ? 10 : (isDailyBroken ? 12 : 15),
+                          color: getBuyColor(firstBuyPoint, '#f59e0b'),
+                          fontWeight: 'bold',
+                          fontSize: firstBuyPoint.isDestroyed ? 12 : (isDailyBroken ? 14 : (!isInAmbushZone ? 16 : 20)),
+                        },
+                        z: 25,
+                      },
+                    ]
+                  : []),
+                // 第一类买点（一买）标记 — 已升级状态（被二买覆盖，灰显；isDestroyed 优先降级）
+                ...(firstBuyPoint?.suppressed
+                  ? [
+                      {
+                        name: getBuyLabel(firstBuyPoint, '一买↑', '一买(已升级)'),
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[firstBuyPoint.date, firstBuyPoint.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: firstBuyPoint.isDestroyed ? 9 : 10,
+                        itemStyle: { color: getBuyColor(firstBuyPoint, '#9ca3af'), opacity: firstBuyPoint.isDestroyed ? 0.5 : 0.6 },
+                        label: {
+                          show: true,
+                          formatter: firstBuyPoint.isDestroyed ? '一买↑(已失效)' : (isDailyBroken ? '一买↑(日线破位·放弃)' : (!isInAmbushZone ? '[高乖离]一买↑' : '一买↑')),
+                          position: 'bottom',
+                          distance: firstBuyPoint.isDestroyed ? 10 : 12,
+                          color: getBuyColor(firstBuyPoint, '#9ca3af'),
+                          fontWeight: 'bold',
+                          fontSize: firstBuyPoint.isDestroyed ? 12 : 14,
+                        },
+                        z: 24,
+                      },
+                    ]
+                  : []),
+                // 二三买共振标记（同一K线二买+三买合并；isDestroyed 优先降级）
+                ...(isBuy23Resonance
+                  ? [
+                      {
+                        name: getBuyLabel({ isDestroyed: secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed }, '二三买共振', '二三买共振'),
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[secondBuyPoint.date, secondBuyPoint.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: (secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed) ? 10 : (isDailyBroken ? 12 : 16),
+                        itemStyle: { color: getBuyColor({ isDestroyed: secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed }, '#a855f7'), opacity: (secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed) ? 0.5 : (isDailyBroken ? 0.6 : 1) },
+                        label: {
+                          show: true,
+                          formatter: (secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed) ? '二三买共振(已失效)' : (isDailyBroken ? '二三买共振(日线破位·放弃)' : (!isInAmbushZone ? '[高乖离]二三买共振·重仓80%' : '二三买共振·重仓80%')),
+                          position: 'bottom',
+                          distance: (secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed) ? 12 : (isDailyBroken ? 14 : 18),
+                          color: getBuyColor({ isDestroyed: secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed }, '#a855f7'),
+                          fontWeight: 'bold',
+                          fontSize: (secondBuyPoint.isDestroyed || thirdBuyPoint.isDestroyed) ? 12 : (isDailyBroken ? 14 : 20),
+                        },
+                        z: 28,
+                      },
+                    ]
+                  : []),
+                // 第二类买点（二买）标记（未共振时独立显示；isDestroyed 优先降级）
+                ...(secondBuyPoint?.hasSignal && !isBuy23Resonance
+                  ? [
+                      {
+                        name: getBuyLabel(secondBuyPoint, '二买', '二买'),
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[secondBuyPoint.date, secondBuyPoint.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: secondBuyPoint.isDestroyed ? 9 : (isDailyBroken ? 10 : (!isInAmbushZone ? 11 : 12)),
+                        itemStyle: { color: getBuyColor(secondBuyPoint, '#8b5cf6'), opacity: secondBuyPoint.isDestroyed ? 0.5 : (isDailyBroken ? 0.6 : 1) },
+                        label: {
+                          show: true,
+                          formatter: secondBuyPoint.isDestroyed ? '二买(已失效)' : (isDailyBroken ? '二买(日线破位·放弃)' : (!isInAmbushZone ? '[高乖离]二买·确认50%' : '二买·确认50%')),
+                          position: 'bottom',
+                          distance: secondBuyPoint.isDestroyed ? 10 : (isDailyBroken ? 12 : 15),
+                          color: getBuyColor(secondBuyPoint, '#8b5cf6'),
+                          fontWeight: 'bold',
+                          fontSize: secondBuyPoint.isDestroyed ? 12 : (isDailyBroken ? 14 : (!isInAmbushZone ? 16 : 20)),
+                        },
+                        z: 25,
+                      },
+                    ]
+                  : []),
+                // 一买失败标记
+                ...(firstBuyFailed?.hasSignal
+                  ? [
+                      {
+                        name: '一买失败',
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[firstBuyFailed.date, firstBuyFailed.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: 14,
+                        itemStyle: { color: '#ef4444' }, // 红色
+                        label: {
+                          show: true,
+                          formatter: '一买失败',
+                          position: 'bottom',
+                          distance: 18,
+                          color: '#ef4444',
+                          fontWeight: 'bold',
+                          fontSize: 20,
+                        },
+                        z: 26,
+                      },
+                    ]
+                  : []),
+                // 二买失败标记
+                ...(secondBuyFailed?.hasSignal
+                  ? [
+                      {
+                        name: '二买失败',
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[secondBuyFailed.date, secondBuyFailed.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: 14,
+                        itemStyle: { color: '#ef4444' }, // 红色
+                        label: {
+                          show: true,
+                          formatter: '二买失败',
+                          position: 'bottom',
+                          distance: 18,
+                          color: '#ef4444',
+                          fontWeight: 'bold',
+                          fontSize: 20,
+                        },
+                        z: 26,
+                      },
+                    ]
+                  : []),
+                // 三买失败标记
+                ...(thirdBuyFailed?.hasSignal
+                  ? [
+                      {
+                        name: '三买失败',
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[thirdBuyFailed.date, thirdBuyFailed.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: 14,
+                        itemStyle: { color: '#ef4444' }, // 红色
+                        label: {
+                          show: true,
+                          formatter: '三买失败·止损',
+                          position: 'bottom',
+                          distance: 18,
+                          color: '#ef4444',
+                          fontWeight: 'bold',
+                          fontSize: 20,
+                        },
+                        z: 26,
+                      },
+                    ]
+                  : []),
+                // 第三类买点（三买）标记（未共振时独立显示；isDestroyed 优先降级）
+                ...(thirdBuyPoint?.hasSignal && !isBuy23Resonance
+                  ? [
+                      {
+                        name: getBuyLabel(thirdBuyPoint, '三买', '三买'),
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[thirdBuyPoint.date, thirdBuyPoint.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: thirdBuyPoint.isDestroyed ? 9 : (isDailyBroken ? 10 : (!isInAmbushZone ? 11 : 12)),
+                        itemStyle: { color: getBuyColor(thirdBuyPoint, '#f97316'), opacity: thirdBuyPoint.isDestroyed ? 0.5 : (isDailyBroken ? 0.6 : 1) },
+                        label: {
+                          show: true,
+                          formatter: thirdBuyPoint.isDestroyed ? '三买(已失效)' : (isDailyBroken ? '三买(日线破位·放弃)' : (!isInAmbushZone ? '[高乖离]三买·重仓80%' : '三买·重仓80%')),
+                          position: 'bottom',
+                          distance: thirdBuyPoint.isDestroyed ? 10 : (isDailyBroken ? 12 : 15),
+                          color: getBuyColor(thirdBuyPoint, '#f97316'),
+                          fontWeight: 'bold',
+                          fontSize: thirdBuyPoint.isDestroyed ? 12 : (isDailyBroken ? 14 : (!isInAmbushZone ? 16 : 20)),
+                        },
+                        z: 25,
+                      },
+                    ]
+                  : []),
+                // 第一类卖点（一卖）标记
+                ...(firstSellPoint?.hasSignal
+                  ? (() => {
+                      const tier = firstSellPoint.tier
+                      const color = tier === 'weak' ? '#f59e0b' : tier === 'half' ? '#f97316' : '#ef4444'
+                      const labelText = tier === 'weak' ? '弱卖' : tier === 'half' ? '半仓' : '清仓'
+                      return [
+                        {
+                          name: '一卖',
+                          type: 'scatter' as const,
+                          xAxisIndex: 0,
+                          yAxisIndex: 0,
+                          data: [[firstSellPoint.date, firstSellPoint.price]] as [string, number][],
+                          symbol: 'diamond',
+                          symbolSize: 12,
+                          itemStyle: { color },
+                          label: {
+                            show: true,
+                            formatter: `一卖·${labelText}`,
+                            position: 'top',
+                            distance: 15,
+                            color,
+                            fontWeight: 'bold',
+                            fontSize: 20,
+                          },
+                          z: 25,
+                        },
+                      ]
+                    })()
+                  : []),
+                // 第二类卖点（二卖）标记
+                ...(secondSellPoint?.hasSignal
+                  ? (() => {
+                      const tier = secondSellPoint.tier
+                      const color = tier === 'weak' ? '#f59e0b' : tier === 'half' ? '#f97316' : '#ef4444'
+                      const labelText = tier === 'weak' ? '弱卖' : tier === 'half' ? '半仓' : '清仓'
+                      return [
+                        {
+                          name: '二卖',
+                          type: 'scatter' as const,
+                          xAxisIndex: 0,
+                          yAxisIndex: 0,
+                          data: [[secondSellPoint.date, secondSellPoint.price]] as [string, number][],
+                          symbol: 'diamond',
+                          symbolSize: 12,
+                          itemStyle: { color },
+                          label: {
+                            show: true,
+                            formatter: `二卖·${labelText}`,
+                            position: 'top',
+                            distance: 15,
+                            color,
+                            fontWeight: 'bold',
+                            fontSize: 20,
+                          },
+                          z: 25,
+                        },
+                      ]
+                    })()
+                  : []),
+                // 第三类卖点（三卖）标记
+                ...(thirdSellPoint?.hasSignal
+                  ? [
+                      {
+                        name: '三卖',
+                        type: 'scatter' as const,
+                        xAxisIndex: 0,
+                        yAxisIndex: 0,
+                        data: [[thirdSellPoint.date, thirdSellPoint.price]] as [string, number][],
+                        symbol: 'diamond',
+                        symbolSize: 12,
+                        itemStyle: { color: '#111827' }, // 黑色
+                        label: {
+                          show: true,
+                          formatter: '三卖·清仓',
+                          position: 'top',
+                          distance: 15,
+                          color: '#111827',
+                          fontWeight: 'bold',
+                          fontSize: 20,
+                        },
+                        z: 25,
                       },
                     ]
                   : []),
@@ -965,62 +1494,135 @@ export function HourlyChanChart({
             }}
           />
         </div>
-        <aside className="central-compare-aside" aria-label="60分钟现价与日线中枢对比">
+        <aside className="central-compare-aside" aria-label={`${periodLabel}现价与日线中枢对比`}>
           <div className="central-compare-aside-title">实时对比</div>
-          <div className="central-compare-price">
-            现价 <strong>{lastClose.toFixed(3)}</strong>
-            <span className="central-compare-time" style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: '#94a3b8', fontWeight: 400 }}>
-              {lastDate}
-            </span>
-          </div>
-          <div className="central-compare-row">
-            <span className="central-compare-label">当前笔（60min）</span>
-            <span className="central-compare-ref">{penDirLabel}</span>
-          </div>
-          <div className="central-compare-row central-compare-row--spaced">
-            <span className="central-compare-label">日线 C-ZD</span>
-            <span className="central-compare-ref">
-              {dailyCZd != null ? dailyCZd.toFixed(2) : '—'}
-            </span>
-          </div>
-          <div className="central-compare-metric">
-            相对日线 C-ZD
-            <span className="central-compare-pct">{pctVsRef(lastClose, dailyCZd)}%</span>
-          </div>
-          <div className="central-compare-row central-compare-row--spaced">
-            <span className="central-compare-label">日线 A-ZD</span>
-            <span className="central-compare-ref">
-              {dailyAZd != null ? dailyAZd.toFixed(2) : '—'}
-            </span>
-          </div>
-          <div className="central-compare-metric">
-            相对日线 A-ZD
-            <span className="central-compare-pct">{pctVsRef(lastClose, dailyAZd)}%</span>
-          </div>
-          {buyConditionChecklist && buyConditionChecklist.length > 0 && (
-            <div className="buy-checklist" aria-label="买条件自检">
-              <div className="buy-checklist-title">「买」条件自检（须全部满足）</div>
-              {sellSignalActive && (
-                <p className="buy-checklist-note">
-                  当前已触发卖条件，不会显示「买」；下列仅表示各项是否单独成立。
+          {indexKline.period === '15' ? (
+            <>
+              <div className="central-compare-price" style={{ marginTop: '8px' }}>
+                <div style={{ fontSize: '13px', color: '#e2e8f0', marginBottom: '4px' }}>{seriesName}</div>
+                现价 <strong>{lastClose.toFixed(3)}</strong>
+                <span className="central-compare-time" style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: '#94a3b8', fontWeight: 400 }}>
+                  {lastDate}
+                </span>
+              </div>
+              <div className="central-compare-row central-compare-row--spaced" style={{ marginTop: '12px' }}>
+                <span className="central-compare-label">日线 C-ZD</span>
+                <span className="central-compare-ref">
+                  {dailyCZd != null ? dailyCZd.toFixed(2) : '—'}
+                </span>
+              </div>
+              <div className="central-compare-metric">
+                相对日线 C-ZD
+                <span className="central-compare-pct">{pctVsRef(lastClose, dailyCZd)}%</span>
+              </div>
+              <div className="central-compare-row central-compare-row--spaced" style={{ marginTop: '8px' }}>
+                <span className="central-compare-label">日线 A-ZD</span>
+                <span className="central-compare-ref">
+                  {dailyAZd != null ? dailyAZd.toFixed(2) : '—'}
+                </span>
+              </div>
+              <div className="central-compare-metric">
+                相对日线 A-ZD
+                <span className="central-compare-pct">{pctVsRef(lastClose, dailyAZd)}%</span>
+              </div>
+            </>
+          ) : (
+            <>
+              {holdingInfo && (
+                <div className="holding-info-card" style={{
+                  marginTop: '8px',
+                  marginBottom: '10px',
+                  padding: '8px 10px',
+                  background: 'rgba(251,191,36,0.12)',
+                  border: '1px solid rgba(251,191,36,0.35)',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                }}>
+                  <div style={{ color: '#fbbf24', fontWeight: 700, marginBottom: '4px' }}>
+                    ★ 持仓：{holdingInfo.name}（{holdingInfo.code}）
+                  </div>
+                  {holdingInfo.cost != null && (
+                    <div style={{ color: '#cbd5e1', lineHeight: '1.5' }}>
+                      成本: {holdingInfo.cost.toFixed(2)}&nbsp;&nbsp;
+                      <span style={{
+                        color: lastClose >= holdingInfo.cost ? '#4ade80' : '#f87171',
+                        fontWeight: 600,
+                      }}>
+                        {(((lastClose - holdingInfo.cost) / holdingInfo.cost) * 100).toFixed(2)}%
+                      </span>
+                    </div>
+                  )}
+                  {holdingInfo.shares != null && (
+                    <div style={{ color: '#94a3b8', fontSize: '11px', marginTop: '2px' }}>
+                      股数: {holdingInfo.shares.toLocaleString()}
+                      {holdingInfo.cost != null && (
+                        <>&nbsp;&nbsp;市值: {(lastClose * holdingInfo.shares).toFixed(0)}元</>
+                      )}
+                    </div>
+                  )}
+                  {holdingInfo.note && (
+                    <div style={{ color: '#94a3b8', fontSize: '11px', marginTop: '2px' }}>
+                      备注: {holdingInfo.note}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="central-compare-price">
+                现价 <strong>{lastClose.toFixed(3)}</strong>
+                <span className="central-compare-time" style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: '#94a3b8', fontWeight: 400 }}>
+                  {lastDate}
+                </span>
+              </div>
+              <div className="central-compare-row">
+                <span className="central-compare-label">当前笔（60min）</span>
+                <span className="central-compare-ref">{penDirLabel}</span>
+              </div>
+              <div className="central-compare-row central-compare-row--spaced">
+                <span className="central-compare-label">日线 C-ZD</span>
+                <span className="central-compare-ref">
+                  {dailyCZd != null ? dailyCZd.toFixed(2) : '—'}
+                </span>
+              </div>
+              <div className="central-compare-metric">
+                相对日线 C-ZD
+                <span className="central-compare-pct">{pctVsRef(lastClose, dailyCZd)}%</span>
+              </div>
+              <div className="central-compare-row central-compare-row--spaced">
+                <span className="central-compare-label">日线 A-ZD</span>
+                <span className="central-compare-ref">
+                  {dailyAZd != null ? dailyAZd.toFixed(2) : '—'}
+                </span>
+              </div>
+              <div className="central-compare-metric">
+                相对日线 A-ZD
+                <span className="central-compare-pct">{pctVsRef(lastClose, dailyAZd)}%</span>
+              </div>
+              {buyConditionChecklist && buyConditionChecklist.length > 0 && (
+                <div className="buy-checklist" aria-label="买条件自检">
+                  <div className="buy-checklist-title">「买」条件自检（须全部满足）</div>
+                  {sellSignalActive && (
+                    <p className="buy-checklist-note">
+                      当前已触发卖条件，不会显示「买」；下列仅表示各项是否单独成立。
+                    </p>
+                  )}
+                  <ul className="buy-checklist-ul">
+                    {buyConditionChecklist.map((row) => (
+                      <li key={row.label} className="buy-checklist-li">
+                        <span className={row.ok ? 'buy-checklist-yes' : 'buy-checklist-no'}>
+                          {row.ok ? '✓' : '✗'}
+                        </span>
+                        <span className="buy-checklist-text">{row.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {divergenceArrows.length > 0 && (
+                <p className="central-compare-muted" style={{ marginTop: '0.5rem' }}>
+                  图中亮黄色方块：相邻向下笔创新低且 MACD 绿柱面积缩小（或笔长更短）的底背驰位置
                 </p>
               )}
-              <ul className="buy-checklist-ul">
-                {buyConditionChecklist.map((row) => (
-                  <li key={row.label} className="buy-checklist-li">
-                    <span className={row.ok ? 'buy-checklist-yes' : 'buy-checklist-no'}>
-                      {row.ok ? '✓' : '✗'}
-                    </span>
-                    <span className="buy-checklist-text">{row.label}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {divergenceArrows.length > 0 && (
-            <p className="central-compare-muted" style={{ marginTop: '0.5rem' }}>
-              图中亮黄色方块：相邻向下笔创新低且 MACD 绿柱面积缩小（或笔长更短）的底背驰位置
-            </p>
+            </>
           )}
         </aside>
       </div>

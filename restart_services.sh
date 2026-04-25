@@ -23,10 +23,22 @@ if [ -d "${HOME}/.local/bin" ]; then
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
+# 设置代理（Clash Verge）
+export HTTP_PROXY="http://127.0.0.1:7897"
+export HTTPS_PROXY="http://127.0.0.1:7897"
+export http_proxy="http://127.0.0.1:7897"
+export https_proxy="http://127.0.0.1:7897"
+
 # 选用已安装 uvicorn 的 Python（系统自带 python3 常未装依赖）
 pick_python_with_uvicorn() {
   if [ -n "${PYTHON_BIN:-}" ] && [ -x "${PYTHON_BIN}" ] && "${PYTHON_BIN}" -m uvicorn --version >/dev/null 2>&1; then
     echo "${PYTHON_BIN}"
+    return 0
+  fi
+  # 优先使用项目虚拟环境
+  venv_python="${ROOT_DIR}/.venv/bin/python"
+  if [ -x "${venv_python}" ] && "${venv_python}" -m uvicorn --version >/dev/null 2>&1; then
+    echo "${venv_python}"
     return 0
   fi
   for cand in python3 python3.13 python3.12 python3.11; do
@@ -48,6 +60,7 @@ lsof -ti:${FRONTEND_PORT} | xargs kill -9 2>/dev/null || true
 # 额外清理 vite 和 uvicorn 进程
 pkill -9 -f "vite" 2>/dev/null || true
 pkill -9 -f "uvicorn.*main:app.*${BACKEND_PORT}" 2>/dev/null || true
+pkill -9 -f "gunicorn.*main:app.*${BACKEND_PORT}" 2>/dev/null || true
 pkill -9 -f "node.*frontend" 2>/dev/null || true
 
 sleep 2
@@ -65,8 +78,8 @@ timestamp="$(date +"%Y%m%d_%H%M%S")"
 backend_log="${LOG_DIR}/backend_${timestamp}.log"
 frontend_log="${LOG_DIR}/frontend_${timestamp}.log"
 
-echo "Starting backend on port ${BACKEND_PORT} (python: ${PYTHON_FOR_BACKEND})..."
-nohup bash -lc "cd \"${BACKEND_DIR}\" && \"${PYTHON_FOR_BACKEND}\" -m uvicorn main:app --host 127.0.0.1 --port ${BACKEND_PORT} --log-level info" >"${backend_log}" 2>&1 &
+echo "Starting backend on port ${BACKEND_PORT} (python: ${PYTHON_FOR_BACKEND}, workers: 2)..."
+nohup bash -lc "cd \"${BACKEND_DIR}\" && \"${PYTHON_FOR_BACKEND}\" -m gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:${BACKEND_PORT} --timeout 120 --access-logfile -" >"${backend_log}" 2>&1 &
 backend_pid=$!
 
 echo "Starting frontend on port ${FRONTEND_PORT}..."

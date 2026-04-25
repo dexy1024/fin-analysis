@@ -12,12 +12,15 @@ from typing import Any, Dict, List
 import akshare as ak
 import pandas as pd
 import requests
+import yfinance as yf
 
 from services.index_cache import (
     _a_share_daily_cache_path,
     _cache_path,
+    _hk_daily_cache_path,
     _is_likely_etf_code,
     load_a_share_daily_dataframe,
+    load_hk_daily_dataframe,
     load_index_daily_dataframe,
 )
 
@@ -63,6 +66,15 @@ def _meihua2test_extend_end_ts_if_demo(
                 peek = None
             if peek is not None and not peek.empty:
                 mx = pd.to_datetime(peek["date"], errors="coerce").max()
+    elif period == "15":
+        path = _kline_15_cache_path(symbol)
+        if path.is_file():
+            try:
+                peek = pd.read_csv(path, parse_dates=["date"], usecols=["date"])
+            except (ValueError, KeyError, pd.errors.EmptyDataError):
+                peek = None
+            if peek is not None and not peek.empty:
+                mx = pd.to_datetime(peek["date"], errors="coerce").max()
 
     if mx is None or pd.isna(mx):
         return default_end
@@ -80,7 +92,7 @@ _KLINE_RESP_CACHE: Dict[tuple[str, str, str, str], tuple[float, float | None, Di
 
 def _kline_local_csv_mtime(symbol: str, period: str) -> float | None:
     """
-    与 get_index_kline 数据源对应的本地文件 mtime；无本地文件（如港股日线直拉新浪）返回 None。
+    与 get_index_kline 数据源对应的本地文件 mtime；无本地文件返回 None。
     """
     try:
         api_sym, src = _split_kline_symbol(symbol)
@@ -90,11 +102,16 @@ def _kline_local_csv_mtime(symbol: str, period: str) -> float | None:
     if pr == "60":
         p = _kline_60_cache_path(symbol)
         return p.stat().st_mtime if p.is_file() else None
+    if pr == "15":
+        p = _kline_15_cache_path(symbol)
+        return p.stat().st_mtime if p.is_file() else None
     if pr == "daily":
         if src == "index":
             p = _cache_path(api_sym)
         elif src == "a_share":
             p = _a_share_daily_cache_path(api_sym)
+        elif src == "hk":
+            p = _hk_daily_cache_path(symbol)
         else:
             return None
         return p.stat().st_mtime if p.is_file() else None
@@ -266,7 +283,72 @@ def _load_kline_60_cache(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timesta
         return None
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
-    # 防止误用历史“日线映射 60m”伪缓存（全是 15:00 的错误时间轴）
+    # 防止误用历史"日线映射 60m"伪缓存（全是 15:00 的错误时间轴）
+    hm = set(df["date"].dt.strftime("%H:%M"))
+    if hm == {"15:00"}:
+        return None
+    df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)].reset_index(drop=True)
+    return df if not df.empty else None
+
+
+def _is_kline_cache_sufficient(
+    cached: pd.DataFrame | None,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    min_coverage_ratio: float = 0.6,
+    min_rows: int = 12,
+) -> bool:
+    """检查本地K线缓存是否完整覆盖请求的时间范围。
+
+    - coverage_ratio: 缓存覆盖天数 / 请求天数，默认需 >= 60%
+    - min_rows: 最少K线数量，默认12根（约3个交易日）
+    """
+    if cached is None or cached.empty:
+        return False
+    cache_min = cached["date"].min()
+    cache_max = cached["date"].max()
+    request_days = max((end_ts - start_ts).days, 1)
+    cache_days = max((cache_max - cache_min).days, 0)
+    coverage = cache_days / request_days
+    return coverage >= min_coverage_ratio and len(cached) >= min_rows
+
+
+def _kline_15_cache_path(symbol: str) -> Path:
+    safe = symbol.replace("/", "_")
+    return KLINE_60_CACHE_DIR / f"kline_15_{safe}.csv"
+
+
+def _save_kline_15_cache(symbol: str, df: pd.DataFrame) -> None:
+    """
+    缓存 15m 原始 OHLCV，供网络抖动时兜底。
+    """
+    if df.empty:
+        return
+    KLINE_60_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    out = df.copy()
+    keep = ["date", "open", "high", "low", "close", "volume"]
+    if not set(keep).issubset(out.columns):
+        return
+    out = out[keep].copy()
+    out.to_csv(_kline_15_cache_path(symbol), index=False)
+
+
+def _load_kline_15_cache(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame | None:
+    path = _kline_15_cache_path(symbol)
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path, parse_dates=["date"])
+    except Exception:  # noqa: BLE001
+        return None
+    if df.empty:
+        return None
+    req = {"date", "open", "high", "low", "close", "volume"}
+    if not req.issubset(df.columns):
+        return None
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+    # 15分钟应有多个不同时间点，若全是 15:00 则为伪缓存
     hm = set(df["date"].dt.strftime("%H:%M"))
     if hm == {"15:00"}:
         return None
@@ -318,6 +400,50 @@ def _fetch_60m_from_sina(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timesta
     return out
 
 
+def _fetch_15m_from_sina(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """
+    新浪 15m 指数接口（复用 60m 逻辑，仅改 scale=15）：
+    https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData
+    """
+    url = (
+        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "CN_MarketData.getKLineData"
+    )
+    params = {
+        "symbol": symbol.lower(),
+        "scale": "15",
+        "ma": "no",
+        "datalen": "2048",
+    }
+
+    r = _with_retry(lambda: requests.get(url, params=params, timeout=12), retries=3, sleep_sec=0.7)
+    r.raise_for_status()
+    rows = r.json()
+    if not isinstance(rows, list) or len(rows) == 0:
+        raise ValueError(f"未获取到 {symbol} 的新浪15分钟数据")
+
+    df = pd.DataFrame(rows)
+    if not {"day", "open", "high", "low", "close", "volume"}.issubset(df.columns):
+        raise ValueError("新浪15分钟数据缺少必要字段")
+
+    out = pd.DataFrame(
+        {
+            "date": pd.to_datetime(df["day"]),
+            "open": pd.to_numeric(df["open"], errors="coerce"),
+            "high": pd.to_numeric(df["high"], errors="coerce"),
+            "low": pd.to_numeric(df["low"], errors="coerce"),
+            "close": pd.to_numeric(df["close"], errors="coerce"),
+            "volume": pd.to_numeric(df["volume"], errors="coerce"),
+        },
+    )
+    out = out.dropna(subset=["date", "open", "high", "low", "close", "volume"])
+    out = out.sort_values("date").reset_index(drop=True)
+    out = out[(out["date"] >= start_ts) & (out["date"] <= end_ts)].reset_index(drop=True)
+    if out.empty:
+        raise ValueError(f"{symbol} 新浪15分钟在指定区间无数据")
+    return out
+
+
 def _fetch_daily_from_sina(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
     """
     新浪 K 线接口按 240 分钟获取日线口径数据（非聚合）。
@@ -360,6 +486,41 @@ def _fetch_daily_from_sina(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Times
     return out
 
 
+def _fetch_hk_daily_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """
+    使用 AKShare 获取港股日线数据。
+    symbol: 5位数字代码，如 '01810'
+    
+    使用 stock_hk_daily 接口获取数据（该接口更稳定）。
+    """
+    logging.info("使用 AKShare stock_hk_daily 获取港股 %s 数据", symbol)
+    
+    # 使用 stock_hk_daily 接口获取数据
+    df = ak.stock_hk_daily(symbol=symbol)
+    if df is None or df.empty:
+        raise ValueError(f"AKShare 未返回 {symbol} 的港股数据")
+    
+    # 转换日期
+    df["date"] = pd.to_datetime(df["date"])
+    
+    # 数据类型转换
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    # 过滤日期范围
+    df = df[(df["date"] >= start_ts.normalize()) & (df["date"] <= end_ts.normalize())]
+    df = df.sort_values("date").reset_index(drop=True)
+    
+    # 去除无效数据
+    df = df.dropna(subset=["date", "open", "high", "low", "close", "volume"])
+    
+    if df.empty:
+        raise ValueError(f"{symbol} AKShare 港股数据在指定日期范围内为空")
+    
+    logging.info("AKShare 港股 %s 日线数据获取完成，共 %d 条", symbol, len(df))
+    return df
+
+
 def _to_sina_symbol(symbol: str, src: str, api_sym: str) -> str:
     if src == "index":
         return symbol.lower()
@@ -371,6 +532,115 @@ def _to_sina_symbol(symbol: str, src: str, api_sym: str) -> str:
     raise ValueError("不支持的 symbol")
 
 
+def _fetch_hk_60m_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """
+    使用 AKShare 获取港股 60 分钟数据。
+    symbol: 5位数字代码，如 '01810'
+    """
+    logging.info("使用 AKShare stock_hk_hist_min_em 获取港股 %s 60分钟数据", symbol)
+    
+    # 使用 stock_hk_hist_min_em 接口获取60分钟数据
+    df = ak.stock_hk_hist_min_em(symbol=symbol, period='60')
+    if df is None or df.empty:
+        raise ValueError(f"AKShare 未返回 {symbol} 的港股60分钟数据")
+    
+    # 统一列名
+    rename_map = {
+        "时间": "date",
+        "开盘": "open",
+        "收盘": "close",
+        "最高": "high",
+        "最低": "low",
+        "成交量": "volume",
+    }
+    df = df.rename(columns=rename_map)
+    
+    required_cols = {"date", "open", "high", "low", "close", "volume"}
+    if not required_cols.issubset(df.columns):
+        raise ValueError(f"AKShare 港股60分钟数据缺少必要字段，实际列: {list(df.columns)}")
+    
+    # 转换时间
+    df["date"] = pd.to_datetime(df["date"])
+    
+    # 数据类型转换
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    # 过滤日期范围
+    df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
+    df = df.sort_values("date").reset_index(drop=True)
+    
+    # 去除无效数据
+    df = df.dropna(subset=["date", "open", "high", "low", "close", "volume"])
+    
+    if df.empty:
+        raise ValueError(f"{symbol} AKShare 港股60分钟数据在指定日期范围内为空")
+    
+    logging.info("AKShare 港股 %s 60分钟数据获取完成，共 %d 条", symbol, len(df))
+    return df
+
+
+def _fetch_hk_60m_from_yfinance(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    """
+    使用 yfinance 获取港股 60 分钟数据。
+    symbol: 5位数字代码，如 '01810'
+    
+    yfinance 港股代码格式: 1810.HK（去掉前导零，但保留至少4位）
+    注意: yfinance 60分钟数据最多支持约730天
+    """
+    logging.info("使用 yfinance 获取港股 %s 60分钟数据", symbol)
+    
+    # yfinance 港股代码格式：去掉前导零，但保留至少4位
+    # 如 01810 -> 1810.HK, 00175 -> 0175.HK
+    num = int(symbol)
+    if num < 1000:
+        # 小于4位的需要补零到4位（如 175 -> 0175）
+        yf_symbol = f"{num:04d}.HK"
+    else:
+        yf_symbol = f"{num}.HK"
+    
+    try:
+        ticker = yf.Ticker(yf_symbol)
+        
+        # 获取数据
+        df = ticker.history(start=start_ts.strftime('%Y-%m-%d'), interval='60m')
+        
+        if df is None or df.empty:
+            raise ValueError(f"yfinance 未返回 {symbol} 的港股60分钟数据")
+        
+        # 统一列名（yfinance 返回的是首字母大写）
+        df = df.rename(columns={
+            'Open': 'open',
+            'High': 'high',
+            'Low': 'low',
+            'Close': 'close',
+            'Volume': 'volume',
+        })
+        
+        # 转换时间索引为列
+        df = df.reset_index()
+        df = df.rename(columns={'Datetime': 'date'})
+        
+        # 处理时区：将 yfinance 的时区感知时间转换为无时区（与 start_ts/end_ts 一致）
+        if df['date'].dt.tz is not None:
+            df['date'] = df['date'].dt.tz_convert('Asia/Shanghai').dt.tz_localize(None)
+        
+        # 过滤日期范围
+        df = df[(df['date'] >= start_ts) & (df['date'] <= end_ts)]
+        df = df.sort_values('date').reset_index(drop=True)
+        
+        # 去除无效数据
+        df = df.dropna(subset=['date', 'open', 'high', 'low', 'close', 'volume'])
+        
+        if df.empty:
+            raise ValueError(f"{symbol} yfinance 港股60分钟数据在指定日期范围内为空")
+        
+        logging.info("yfinance 港股 %s 60分钟数据获取完成，共 %d 条", symbol, len(df))
+        return df[['date', 'open', 'high', 'low', 'close', 'volume']]
+        
+    except Exception as e:
+        logging.error("yfinance 获取港股 %s 60分钟数据失败: %s", symbol, e)
+        raise
 
 
 def _normalize_symbol(code: str) -> str:
@@ -444,6 +714,9 @@ def _axis_date_key(date_val: Any) -> str:
     与 K 线 rows[].date 一致：纯日线为 YYYY-MM-DD，分钟线为 YYYY-MM-DD HH:MM。
     供分型、笔、中枢与原始 K 线下标映射使用（避免分钟线被截成同日而冲突）。
     """
+    # 已经是字符串时直接返回，避免 pd.to_datetime 的昂贵解析（中枢构建中会被调用数万次）
+    if isinstance(date_val, str):
+        return date_val
     ts = pd.to_datetime(date_val)
     if (
         ts.hour == 0
@@ -1370,7 +1643,7 @@ def get_history_indicators(code: str, start_date: str = "2026-01-01") -> Dict[st
 
 def get_index_kline(
     symbol: str = "sh000001",
-    start_date: str = "2024-12-01",
+    start_date: str = "2025-04-13",
     end_date: str | None = None,
     period: str = "daily",
     refresh: bool = False,
@@ -1378,41 +1651,48 @@ def get_index_kline(
     """
     返回 K 线及缠论衍生字段（分型/笔/线段/有效笔/至多 3 段中枢）。
 
-    缓存与本地文件（日线与 60m 分开判断）：
+    缓存与本地文件（日线与 60m/15m 分开判断）：
     - refresh=False 时，若本周期对应本地 CSV 的修改时间晚于该 symbol+period 下已缓存响应所记录的时间，
       会先丢弃该标的该周期全部内存缓存再重算；否则在 TTL（默认 300s）内可命中缓存。
-    - 日线 CSV：指数 index_daily_*.csv，A 股/ETF 为 a_daily_qfq_*.csv / a_daily_nq_*.csv。
-    - 60m CSV：data/kline_60_{symbol}.csv。
-    - 港股日线无本地 CSV，不参与 mtime 比对，仅依赖 TTL。
+    - 日线 CSV：指数 index_daily_*.csv，A 股/ETF 为 a_daily_qfq_*.csv / a_daily_nq_*.csv，港股为 hk_daily_*.csv。
+    - 60m CSV：data/kline_60_{symbol}.csv；15m CSV：data/kline_15_{symbol}.csv。
+    - 港股日线同样本地优先（hk_daily_*.csv），参与 mtime 比对。
     - refresh=True 时清空该标的该周期全部缓存并强制走拉数/读盘后的完整计算。
     """
+    start_perf = time.time()
     cache_key: tuple[str, str, str, str] = (
         symbol.strip(),
         period.strip(),
         start_date.strip(),
         (end_date or "").strip(),
     )
+    cache_hit = False
     if not refresh:
         _purge_stale_kline_cache_for_symbol_period(symbol, period)
-        cached = _kline_cache_get(cache_key)
-        if cached is not None:
-            return cached
+        cached_result = _kline_cache_get(cache_key)
+        if cached_result is not None:
+            total_ms = int((time.time() - start_perf) * 1000)
+            logging.info(
+                "PERF kline %s %s rows=%d cache=hit total=%dms",
+                symbol, period, len(cached_result.get("data", [])), total_ms,
+            )
+            return cached_result
     else:
         # refresh=true 时清掉该标的该周期下全部响应缓存，避免不同 start_date 键残留旧中枢
         _kline_cache_delete_all_for_symbol_period(symbol, period)
 
     start_ts = pd.to_datetime(start_date)
-    # 日线：起止一律按「日历日 0 点」比较；60 分钟保持原有时分秒逻辑
+    # 日线：起止一律按「日历日 0 点」比较；60/15 分钟保持原有时分秒逻辑
     if period == "daily":
         start_ts = start_ts.normalize()
         end_ts = pd.to_datetime(end_date).normalize() if end_date else pd.Timestamp.today().normalize()
     elif end_date:
         end_ts = pd.to_datetime(end_date)
-        # 60 分钟：若只给到自然日 0 点，数据源会截断当日盘中 K，改为该日收盘前
-        if period == "60" and end_ts.normalize() == end_ts:
+        # 60/15 分钟：若只给到自然日 0 点，数据源会截断当日盘中 K，改为该日收盘前
+        if period in ("60", "15") and end_ts.normalize() == end_ts:
             end_ts = end_ts + pd.Timedelta(hours=23, minutes=59, seconds=59)
-    elif period == "60":
-        # 未指定 end 时须用「当前时刻」，勿用 normalize()（否则 end 落在当日 0 点，盘中已走出的 60m 根会被排除）
+    elif period in ("60", "15"):
+        # 未指定 end 时须用「当前时刻」，勿用 normalize()（否则 end 落在当日 0 点，盘中已走出的分钟根会被排除）
         end_ts = pd.Timestamp.now()
     else:
         end_ts = pd.Timestamp.today().normalize()
@@ -1427,8 +1707,8 @@ def get_index_kline(
         if src == "index":
             df = load_index_daily_dataframe(api_sym, force_refresh=refresh)
         elif src == "hk":
-            sina_symbol = _to_sina_symbol(symbol, src, api_sym)
-            df = _fetch_daily_from_sina(sina_symbol, start_ts, end_ts)
+            # 港股日线：本地优先（hk_daily_*.csv），本地不存在时从 AKShare 拉取并写回
+            df = load_hk_daily_dataframe(symbol, force_refresh=refresh)
         else:
             df = load_a_share_daily_dataframe(api_sym, force_refresh=refresh)
         df["date"] = pd.to_datetime(df["date"])
@@ -1452,19 +1732,21 @@ def get_index_kline(
                 sina_symbol = _to_sina_symbol(symbol, src, api_sym)
                 return _fetch_60m_from_sina(sina_symbol, start_ts, end_ts)
             if src == "hk":
-                sina_symbol = _to_sina_symbol(symbol, src, api_sym)
-                return _fetch_60m_from_sina(sina_symbol, start_ts, end_ts)
+                # 港股60分钟：优先使用 AKShare，失败后回退 yfinance
+                try:
+                    return _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
+                except Exception:
+                    logging.exception("AKShare 港股60分钟失败，回退 yfinance: %s", api_sym)
+                    return _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
             raise ValueError("不支持的 symbol")
 
-        # 默认严格只读本地；仅 refresh=true 时访问线上
-        if not refresh:
-            if cached is None:
-                raise ValueError(f"{symbol} 本地60分钟缓存不存在，请先用 refresh=true 预拉数据")
+        # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上
+        if not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
             df = cached
             logging.info("60m 命中本地缓存: %s (rows=%s)", symbol, len(df))
         else:
             try:
-                # 仅显式 refresh 时顺带刷新日线缓存
+                # 顺带刷新日线缓存
                 try:
                     _refresh_daily_cache_for_kline_symbol(symbol)
                 except Exception:
@@ -1500,8 +1782,67 @@ def get_index_kline(
         df = pd.concat([df, macd_part], axis=1)
         boll_part = _calc_boll(df["close"], period=20, num_std=2.0)
         df = pd.concat([df, boll_part], axis=1)
+    elif period == "15":
+        api_sym, src = _split_kline_symbol(symbol)
+        cached = _load_kline_15_cache(symbol, start_ts, end_ts)
+
+        def fetch_remote_15m() -> pd.DataFrame:
+            if src in ("a_share", "index"):
+                sina_symbol = _to_sina_symbol(symbol, src, api_sym)
+                return _fetch_15m_from_sina(sina_symbol, start_ts, end_ts)
+            if src == "hk":
+                # 港股15分钟：优先使用 AKShare，失败后回退 yfinance
+                try:
+                    return _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
+                except Exception:
+                    logging.exception("AKShare 港股15分钟失败，回退 yfinance: %s", api_sym)
+                    return _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
+            raise ValueError("不支持的 symbol")
+
+        # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上
+        if not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
+            df = cached
+            logging.info("15m 命中本地缓存: %s (rows=%s)", symbol, len(df))
+        else:
+            try:
+                # 顺带刷新日线缓存
+                try:
+                    _refresh_daily_cache_for_kline_symbol(symbol)
+                except Exception:
+                    logging.exception("15 分钟 refresh 时顺带刷新日线缓存失败: %s", symbol)
+                df = fetch_remote_15m()
+            except Exception:  # noqa: BLE001
+                logging.exception("拉取 %s 15 分钟数据失败，尝试回退本地缓存", symbol)
+                if cached is None:
+                    raise
+                df = cached
+                logging.warning("已回退使用本地 15m 缓存: %s (rows=%s)", symbol, len(df))
+
+        if df is None or df.empty:
+            raise ValueError(f"未获取到 {symbol} 的15分钟数据")
+
+        rename_map = {
+            "时间": "date",
+            "开盘": "open",
+            "收盘": "close",
+            "最高": "high",
+            "最低": "low",
+            "成交量": "volume",
+        }
+        df = df.rename(columns=rename_map)
+        required_cols = {"date", "open", "high", "low", "close", "volume"}
+        if not required_cols.issubset(df.columns):
+            raise ValueError("15分钟行情数据缺少必要字段")
+
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").reset_index(drop=True)
+        _save_kline_15_cache(symbol, df)
+        macd_part = _calc_macd(df["close"])
+        df = pd.concat([df, macd_part], axis=1)
+        boll_part = _calc_boll(df["close"], period=20, num_std=2.0)
+        df = pd.concat([df, boll_part], axis=1)
     else:
-        raise ValueError("period 仅支持 daily 或 60")
+        raise ValueError("period 仅支持 daily、60 或 15")
 
     if df.empty:
         raise ValueError("指定日期区间内没有指数K线数据")
@@ -1510,7 +1851,7 @@ def get_index_kline(
     for _, row in df.iterrows():
         dt = row["date"]
         if isinstance(dt, pd.Timestamp):
-            date_str = dt.strftime("%Y-%m-%d %H:%M") if period == "60" else dt.strftime("%Y-%m-%d")
+            date_str = dt.strftime("%Y-%m-%d %H:%M") if period in ("60", "15") else dt.strftime("%Y-%m-%d")
         else:
             date_str = str(dt)
         item: Dict[str, Any] = {
@@ -1521,7 +1862,7 @@ def get_index_kline(
             "close": float(row["close"]),
             "volume": float(row["volume"]),
         }
-        if period in ("daily", "60"):
+        if period in ("daily", "60", "15"):
             item["macd"] = {
                 "dif": float(row["dif"]) if pd.notna(row.get("dif")) else 0.0,
                 "dea": float(row["dea"]) if pd.notna(row.get("dea")) else 0.0,
@@ -1538,7 +1879,9 @@ def get_index_kline(
     pens: List[Dict[str, Any]] = []
     segments: List[Dict[str, Any]] = []
     pens_effective: List[Dict[str, Any]] = []
-    if period in ("daily", "60"):
+    chan_times: Dict[str, float] = {}
+    if period in ("daily", "60", "15"):
+        t0 = time.time()
         source_bars: List[Dict[str, Any]] = []
         for _, row in df.iterrows():
             source_bars.append(
@@ -1551,12 +1894,26 @@ def get_index_kline(
                     "volume": float(row["volume"]),
                 },
             )
+        t1 = time.time()
         standardized_bars = _merge_inclusive_bars(source_bars)
+        t2 = time.time()
         fractals = _find_fractals_from_standardized(standardized_bars)
+        t3 = time.time()
         raw_idx = _raw_date_index_map(rows)
         pens = _build_bi_from_fractals(fractals, raw_idx)
+        t4 = time.time()
         segments = _build_segments_from_pens(pens)
+        t5 = time.time()
         pens_effective = _normalize_effective_pens(pens)
+        t6 = time.time()
+        chan_times = {
+            "prepare": round(t1 - t0, 3),
+            "merge_bars": round(t2 - t1, 3),
+            "fractals": round(t3 - t2, 3),
+            "pens": round(t4 - t3, 3),
+            "segments": round(t5 - t4, 3),
+            "effective_pens": round(t6 - t5, 3),
+        }
 
     result: Dict[str, Any] = {
         "symbol": symbol,
@@ -1570,11 +1927,20 @@ def get_index_kline(
         "segments": segments,
         "pens_effective": pens_effective,
     }
-    if period in ("daily", "60"):
+    if period in ("daily", "60", "15"):
+        tc0 = time.time()
         last_close = float(rows[-1]["close"]) if rows else 0.0
         result["centrals"] = _build_centrals(pens_effective, last_close, rows, max_visible=3)
+        tc1 = time.time()
+        chan_times["centrals"] = round(tc1 - tc0, 3)
+        chan_times["total"] = round(tc1 - t0, 3) if 't0' in dir() else 0
     else:
         result["centrals"] = []
     _kline_cache_set(cache_key, result, symbol=symbol, period=period)
+    total_ms = int((time.time() - start_perf) * 1000)
+    logging.info(
+        "PERF kline %s %s rows=%d cache=miss total=%dms chan=%s",
+        symbol, period, len(rows), total_ms, chan_times,
+    )
     return result
 
