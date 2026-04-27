@@ -22,7 +22,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.defense_radar import radar_output_dir
-from services.first_buy_point import detect_first_buy_point
+from services.first_buy_point import (
+    calculate_macd_green_area,
+    check_macd_zero_axis_retrace,
+    detect_first_buy_point,
+    find_down_pens,
+    find_downward_hubs,
+    has_bottom_fractal,
+)
 from services.indicators import get_index_kline
 
 BUY_SELL_SIGNALS_JSON = "buy_sell_signals.json"
@@ -68,6 +75,97 @@ def _build_date_to_idx(data: List[Dict[str, Any]]) -> Dict[str, int]:
 
 def _sort_centrals_for_hourly(centrals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(centrals, key=lambda c: (c["start_date"], c["end_date"]))
+
+
+# ---------------------------------------------------------------------------
+# 第一类买点（一买）—— 复用 first_buy_point 核心逻辑，适配 data/centrals/pens/fractals 接口
+# ---------------------------------------------------------------------------
+
+def _detect_first_buy_point(
+    data: List[Dict[str, Any]],
+    centrals: List[Dict[str, Any]],
+    pens_effective: List[Dict[str, Any]],
+    fractals: List[Dict[str, Any]],
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """
+    检测一买信号（趋势底背驰）。
+    返回: (has_signal, info)
+    info 包含 date, stop_loss, area_ratio。
+    """
+    if not data or not centrals or not pens_effective or not fractals:
+        return False, None
+
+    # 1. 识别向下中枢（至少2个）
+    downward_hubs = find_downward_hubs(centrals, pens_effective)
+    if len(downward_hubs) < 2:
+        return False, None
+
+    hub_a = downward_hubs[-2]
+    hub_b = downward_hubs[-1]
+
+    # 2. 获取向下笔
+    down_pens = find_down_pens(pens_effective)
+    if len(down_pens) < 2:
+        return False, None
+
+    # 找到 B 中枢后的向下笔（c 段）：结束时间在 B 中枢之后，且创新低
+    hub_b_end = hub_b["end_date"]
+    hub_b_low = float(hub_b.get("zd", 0) or 0)
+    c_pen = None
+    for pen in down_pens:
+        pen_end = pen.get("end_date")
+        pen_low = min(float(pen.get("start_price", 0) or 0), float(pen.get("end_price", 0) or 0))
+        if pen_end > hub_b_end and pen_low < hub_b_low:
+            c_pen = pen
+            break
+    if not c_pen:
+        return False, None
+
+    # 找到 c 段之前的向下笔（b 段）
+    hub_a_end = hub_a["end_date"]
+    b_pen = None
+    for pen in down_pens:
+        if pen.get("end_date") > hub_a_end and pen.get("end_date") < c_pen.get("start_date"):
+            b_pen = pen
+    if not b_pen:
+        return False, None
+
+    # 3. 创新低检查
+    c_low = min(float(c_pen.get("start_price", 0) or 0), float(c_pen.get("end_price", 0) or 0))
+    if c_low >= hub_b_low:
+        return False, None
+
+    # 4. B 中枢构建期间 MACD 回抽零轴
+    if not check_macd_zero_axis_retrace(data, hub_b["start_date"], hub_b["end_date"]):
+        return False, None
+
+    # 5. MACD 绿柱面积
+    b_area = calculate_macd_green_area(data, b_pen.get("start_date"), b_pen.get("end_date"))
+    c_area = calculate_macd_green_area(data, c_pen.get("start_date"), c_pen.get("end_date"))
+    if b_area <= 0 or c_area <= 0:
+        return False, None
+    if c_area >= b_area:
+        return False, None
+
+    # 6. 底分型确认
+    c_end_date = c_pen.get("end_date")
+    if not has_bottom_fractal(data, c_end_date):
+        return False, None
+
+    # 止损线：底分型最低价
+    stop_loss = c_low
+    for item in data:
+        if item.get("date") == c_end_date:
+            stop_loss = item.get("low", c_low)
+            break
+
+    return True, {
+        "date": c_end_date,
+        "stop_loss": stop_loss,
+        "area_ratio": c_area / b_area,
+        "b_area": b_area,
+        "c_area": c_area,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +286,7 @@ def _detect_second_buy_point(
         else retracement_pen["end_price"]
     )
 
-    return True, {"date": retracement_pen["end_date"], "stop_loss": stop_loss}
+    return True, {"date": retracement_pen["end_date"], "stop_loss": stop_loss, "buy1_date": c_pen["end_date"], "buy1_stop": c_low}
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +296,7 @@ def _detect_second_buy_point(
 def _detect_third_buy_point(
     data: List[Dict[str, Any]],
     centrals: List[Dict[str, Any]],
-    pens: List[Dict[str, Any]],
+    pens_effective: List[Dict[str, Any]],
     fractals: List[Dict[str, Any]],
 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """
@@ -206,7 +304,7 @@ def _detect_third_buy_point(
     返回: (has_signal, info)
     info 包含 date 和 stop_loss，用于后续失效检查。
     """
-    if not centrals or len(centrals) == 0 or not pens or len(pens) < 2 or len(data) < 10:
+    if not centrals or len(centrals) == 0 or not pens_effective or len(pens_effective) < 2 or len(data) < 10:
         return False, None
 
     sorted_centrals = _sort_centrals_for_hourly(centrals)
@@ -220,7 +318,7 @@ def _detect_third_buy_point(
     if hub_end_idx is None:
         return False, None
 
-    pens_after_hub = [p for p in pens if date_to_idx.get(p["start_date"], -1) > hub_end_idx]
+    pens_after_hub = [p for p in pens_effective if date_to_idx.get(p["start_date"], -1) > hub_end_idx]
     if len(pens_after_hub) < 2:
         return False, None
 
@@ -309,15 +407,15 @@ def _detect_third_buy_point(
 def _detect_first_sell_point(
     data: List[Dict[str, Any]],
     centrals: List[Dict[str, Any]],
-    pens: List[Dict[str, Any]],
+    pens_effective: List[Dict[str, Any]],
     fractals: List[Dict[str, Any]],
 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    if not centrals or len(centrals) < 2 or not pens or len(pens) < 2 or len(data) < 10:
+    if not centrals or len(centrals) < 2 or not pens_effective or len(pens_effective) < 2 or len(data) < 10:
         return False, None
 
     upward_hubs = [
         c for c in _sort_centrals_for_hourly(centrals)
-        if next((p for p in pens if p["start_date"] == c["start_date"]), {}).get("direction") == "up"
+        if next((p for p in pens_effective if p["start_date"] == c["start_date"]), {}).get("direction") == "up"
     ]
     if len(upward_hubs) < 2:
         return False, None
@@ -325,7 +423,7 @@ def _detect_first_sell_point(
     hub_a = upward_hubs[-2]
     hub_b = upward_hubs[-1]
 
-    up_pens = sorted([p for p in pens if p["direction"] == "up"], key=lambda p: p["start_date"])
+    up_pens = sorted([p for p in pens_effective if p["direction"] == "up"], key=lambda p: p["start_date"])
     if len(up_pens) < 2:
         return False, None
 
@@ -500,10 +598,10 @@ def _detect_second_sell_point(
 def _detect_third_sell_point(
     data: List[Dict[str, Any]],
     centrals: List[Dict[str, Any]],
-    pens: List[Dict[str, Any]],
+    pens_effective: List[Dict[str, Any]],
     fractals: List[Dict[str, Any]],
 ) -> bool:
-    if not centrals or len(centrals) == 0 or not pens or len(pens) < 2 or len(data) < 10:
+    if not centrals or len(centrals) == 0 or not pens_effective or len(pens_effective) < 2 or len(data) < 10:
         return False
 
     sorted_centrals = _sort_centrals_for_hourly(centrals)
@@ -517,7 +615,7 @@ def _detect_third_sell_point(
     if hub_end_idx is None:
         return False
 
-    pens_after_hub = [p for p in pens if date_to_idx.get(p["start_date"], -1) > hub_end_idx]
+    pens_after_hub = [p for p in pens_effective if date_to_idx.get(p["start_date"], -1) > hub_end_idx]
     if len(pens_after_hub) < 2:
         return False
 
@@ -623,13 +721,15 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
     third_buy_info: Optional[Dict[str, Any]] = None
 
     # 一买（复用已有模块）
+    raw_first_buy_info = None
     try:
         first_buy = detect_first_buy_point(code, name, refresh=False)
         if first_buy is not None:
-            first_buy_info = {
-                "date": first_buy.get("date", ""),
-                "stop_loss": first_buy.get("stopLoss", 0),
+            raw_first_buy_info = {
+                "date": first_buy.date,
+                "stop_loss": first_buy.stop_loss,
             }
+            first_buy_info = raw_first_buy_info
             details["first_buy"] = True
             has_buy = True
     except Exception as e:
@@ -646,7 +746,7 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
 
     # 三买
     try:
-        third_buy_has, third_buy_info = _detect_third_buy_point(data, centrals, pens, fractals)
+        third_buy_has, third_buy_info = _detect_third_buy_point(data, centrals, pens_effective, fractals)
         if third_buy_has:
             details["third_buy"] = True
             has_buy = True
@@ -659,7 +759,7 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
 
     # 一卖
     try:
-        first_sell_has, first_sell_info = _detect_first_sell_point(data, centrals, pens, fractals)
+        first_sell_has, first_sell_info = _detect_first_sell_point(data, centrals, pens_effective, fractals)
         if first_sell_has:
             details["first_sell"] = True
             has_sell = True
@@ -677,7 +777,7 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
 
     # 三卖
     try:
-        if _detect_third_sell_point(data, centrals, pens, fractals):
+        if _detect_third_sell_point(data, centrals, pens_effective, fractals):
             details["third_sell"] = True
             has_sell = True
     except Exception as e:
@@ -851,19 +951,35 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
                     details["second_sell"] = False
                     break
 
-    # ===== 严格状态机互斥：三买尝试/失败后禁止二买 =====
-    # 一旦走势触发过尝试三买（third_buy_info 存在即代表尝试过），
-    # 在未跌破前一个一买低点（first_buy_info.stop_loss）之前，绝对禁止触发二买
-    if details["second_buy"] and second_buy_info and third_buy_info and first_buy_info:
-        third_buy_date = third_buy_info.get("date", "")
-        first_buy_date = first_buy_info.get("date", "")
-        first_buy_stop = first_buy_info.get("stop_loss", 0)
+    # ===== 严格单向状态机互斥（核心修复：禁止时空穿越） =====
+    # 状态机定义：0(初始) -> 1(一买确认) -> 2(二买确认) -> 3(三买确认/尝试中)
+    # 流转方向严格单向，绝对禁止逆向流转（3 变回 2）
+    # 三买失败后进入 CENTER_OSCILLATION，屏蔽一切买点信号
+    # 重置条件：从三买触发日开始，价格向下跌破上一买的绝对最低点
 
-        # 三买必须发生在一买之后才构成状态机递进
-        if third_buy_date and first_buy_date and third_buy_date > first_buy_date and first_buy_stop > 0:
+    state_machine_locked = False
+    center_oscillation = False
+
+    # 检查三买是否已失效（用于判定 CENTER_OSCILLATION）
+    third_buy_destroyed = _check_buy_destroyed(third_buy_info) if third_buy_info else False
+
+    # 确定是否进入过 STATE_3（三买已确认/尝试中/失败），与前端语义对齐
+    has_entered_state3 = bool(third_buy_info) or third_buy_destroyed
+
+    # 获取上一买的绝对最低点（优先从 raw_first_buy_info，其次从 second_buy_info 携带的一买信息）
+    buy1_low = raw_first_buy_info.get("stop_loss", 0) if raw_first_buy_info else 0
+    buy1_date = raw_first_buy_info.get("date", "") if raw_first_buy_info else ""
+    if buy1_low == 0 and second_buy_info and details.get("second_buy"):
+        buy1_low = second_buy_info.get("buy1_stop", 0)
+        buy1_date = second_buy_info.get("buy1_date", "")
+
+    if has_entered_state3 and buy1_low > 0 and buy1_date:
+        mutex_date = third_buy_info.get("date", "")
+
+        if mutex_date and mutex_date > buy1_date:
             third_idx = -1
             for i, d in enumerate(data):
-                if d.get("date") == third_buy_date:
+                if d.get("date") == mutex_date:
                     third_idx = i
                     break
 
@@ -871,13 +987,28 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
                 broke_new_low = False
                 for i in range(third_idx + 1, len(data)):
                     low_val = data[i].get("low")
-                    if low_val is not None and low_val < first_buy_stop:
+                    if low_val is not None and low_val < buy1_low:
                         broke_new_low = True
                         break
 
                 if not broke_new_low:
-                    # 静默拦截：直接抹除二买信号
-                    details["second_buy"] = False
+                    state_machine_locked = True
+                    # 三买失效后进入中枢震荡，屏蔽一切买点
+                    if third_buy_destroyed:
+                        center_oscillation = True
+
+    # 应用互斥锁
+    if state_machine_locked:
+        # STATE_3 后绝对禁止二买（无论三买成功还是失败）
+        if details["second_buy"]:
+            details["second_buy"] = False
+
+        # 三买失败后进入 CENTER_OSCILLATION，屏蔽一切买点
+        if center_oscillation:
+            if details["first_buy"]:
+                details["first_buy"] = False
+            if details["third_buy"]:
+                details["third_buy"] = False
 
     # 重新计算 has_buy / has_sell
     has_buy = details["first_buy"] or details["second_buy"] or details["third_buy"]

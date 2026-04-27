@@ -77,17 +77,66 @@ def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 def _load_holding_codes() -> set[str]:
-    """读取 positions.json，返回当前持仓中的 code 集合。"""
-    positions_file = ROOT_DIR / "data" / "positions.json"
-    if not positions_file.is_file():
+    """持仓识别唯一权威来源：watchlist.json 的 holdings 列表。"""
+    watchlist_path = ROOT_DIR / "backend" / "data" / "watchlist.json"
+    if not watchlist_path.is_file():
         return set()
     try:
-        with open(positions_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return {str(p["code"]).strip() for p in data if isinstance(p, dict) and p.get("status") == "holding"}
+        data = json.loads(watchlist_path.read_text(encoding="utf-8"))
+        return {
+            str(item["code"]).strip()
+            for item in data.get("holdings", [])
+            if isinstance(item, dict) and item.get("code")
+        }
     except Exception:  # noqa: BLE001
-        logging.warning("trade_command_engine: 读取 positions.json 失败")
+        logging.warning("trade_command_engine: 读取 watchlist.json 失败")
         return set()
+
+
+def _load_holding_amounts() -> Dict[str, int]:
+    """
+    返回 watchlist 中各标的的持仓金额(元)。
+    金额优先级：positions.json(真实交易记录) > watchlist.json(shares*cost) > 默认 10,000
+    """
+    # 1. 先拿到 watchlist 中的持仓 code 列表（唯一持仓来源）
+    watchlist_path = ROOT_DIR / "backend" / "data" / "watchlist.json"
+    holding_amounts: Dict[str, int] = {}
+    if not watchlist_path.is_file():
+        return holding_amounts
+
+    try:
+        data = json.loads(watchlist_path.read_text(encoding="utf-8"))
+        for item in data.get("holdings", []):
+            if isinstance(item, dict) and item.get("code"):
+                code = str(item["code"]).strip()
+                shares = item.get("shares")
+                cost = item.get("cost")
+                if shares is not None and cost is not None:
+                    holding_amounts[code] = int(float(shares) * float(cost))
+                else:
+                    holding_amounts[code] = 10_000  # 默认仓位
+    except Exception:  # noqa: BLE001
+        logging.warning("trade_command_engine: 读取 watchlist.json 失败")
+        return {}
+
+    # 2. 用 positions.json 中的真实金额覆盖（如有）
+    positions_file = ROOT_DIR / "data" / "positions.json"
+    if positions_file.is_file():
+        try:
+            with open(positions_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for p in data:
+                if isinstance(p, dict) and p.get("status") == "holding":
+                    code = str(p["code"]).strip()
+                    # 只在 watchlist 中的标才覆盖金额
+                    if code in holding_amounts:
+                        amount = int(float(p.get("amount", 0) or 0))
+                        if amount > 0:
+                            holding_amounts[code] = amount
+        except Exception:  # noqa: BLE001
+            logging.warning("trade_command_engine: 读取 positions.json 金额失败")
+
+    return holding_amounts
 
 
 # ---------------------------------------------------------------------------
@@ -681,12 +730,13 @@ def _compute_h60_conditions(
 def _compute_market_state(
     index_daily: Optional[Dict[str, Any]],
     index_h60: Optional[Dict[str, Any]],
+    index_h15: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     计算上证指数全局风控状态，返回三级风控之一：
     - MARKET_DEAD:   现价 < A-ZD（极度危险，全局熔断）
-    - MARKET_DANGER: A-ZD <= 现价 < C-ZD，或 60m 触发卖点（警戒，禁止开新仓）
-    - MARKET_SAFE:   现价 >= C-ZD 且 60m 无卖点（安全，个股独立运行）
+    - MARKET_DANGER: A-ZD <= 现价 < C-ZD，或 60m/15m 触发卖点（警戒，禁止开新仓）
+    - MARKET_SAFE:   现价 >= C-ZD 且 60m/15m 无卖点（安全，个股独立运行）
     """
     # 故障安全原则：数据缺失时默认最保守策略（警戒，禁止开新仓）
     result = {
@@ -715,7 +765,24 @@ def _compute_market_state(
     daily_czd = float(sorted_centrals[-1]["zd"])
     daily_close = float(daily_data[-1]["close"])
 
-    result["price"] = daily_close
+    # 优先使用更高频的最新价格做风控判断（15m > 60m > 日线）
+    latest_close = daily_close
+    if index_h60 and index_h60.get("data"):
+        try:
+            h60_close = float(index_h60["data"][-1]["close"])
+            if h60_close > 0:
+                latest_close = h60_close
+        except Exception:
+            pass
+    if index_h15 and index_h15.get("data"):
+        try:
+            h15_close = float(index_h15["data"][-1]["close"])
+            if h15_close > 0:
+                latest_close = h15_close
+        except Exception:
+            pass
+
+    result["price"] = latest_close
     result["c_zd"] = daily_czd
     result["a_zd"] = daily_azd
 
@@ -745,16 +812,46 @@ def _compute_market_state(
                     pens_eff[-2]["direction"] == "up" and pens_eff[-1]["direction"] == "down"
                 )
 
-    # 三级风控判定（带容差）
-    if daily_close < daily_azd - _EPS:
+    # 15分钟卖点检测：与60分钟卖点并列，增加灵敏度
+    h15_sell_triggered = False
+    if index_h15 and index_h15.get("data") and index_h15.get("centrals") and index_h15.get("pens_effective"):
+        try:
+            from services.buy_sell_signals import (
+                _detect_first_sell_point,
+                _detect_second_sell_point,
+                _detect_third_sell_point,
+            )
+            h15_data = index_h15["data"]
+            h15_centrals = index_h15["centrals"]
+            h15_pens = index_h15["pens_effective"]
+            h15_fractals = index_h15.get("fractals", [])
+
+            first_sell, _ = _detect_first_sell_point(h15_data, h15_centrals, h15_pens, h15_fractals)
+            second_sell, _ = _detect_second_sell_point(h15_data, h15_pens, h15_fractals)
+            third_sell = _detect_third_sell_point(h15_data, h15_centrals, h15_pens, h15_fractals)
+            h15_sell_triggered = first_sell or second_sell or third_sell
+        except Exception:  # noqa: BLE001
+            pens_eff = index_h15["pens_effective"]
+            if len(pens_eff) >= 2:
+                h15_sell_triggered = (
+                    pens_eff[-2]["direction"] == "up" and pens_eff[-1]["direction"] == "down"
+                )
+
+    # 三级风控判定（带容差）：以 min(A-ZD, C-ZD) 为战略底线，max 为战术防线
+    min_zd = min(daily_azd, daily_czd)
+    max_zd = max(daily_azd, daily_czd)
+
+    if latest_close < min_zd - _EPS:
         result["state"] = "MARKET_DEAD"
-        result["reason"] = "大盘已跌破战略底线 A-ZD，系统性风险爆发，强制清仓所有标的！"
-    elif daily_close < daily_czd - _EPS or h60_sell_triggered:
+        result["reason"] = "大盘已跌破战略底线，系统性风险爆发，强制清仓所有标的！"
+    elif latest_close < max_zd - _EPS or h60_sell_triggered or h15_sell_triggered:
         result["state"] = "MARKET_DANGER"
-        if daily_close < daily_czd - _EPS:
-            result["reason"] = "大盘跌破战术防线 C-ZD，今日严禁开新仓！"
-        else:
+        if latest_close < max_zd - _EPS:
+            result["reason"] = "大盘跌破战术防线，今日严禁开新仓！"
+        elif h60_sell_triggered:
             result["reason"] = "大盘60分钟触发卖点，今日严禁开新仓！"
+        else:
+            result["reason"] = "大盘15分钟触发卖点，今日严禁开新仓！"
     else:
         result["state"] = "MARKET_SAFE"
         result["reason"] = "大盘结构安全，个股可积极狙击！"
@@ -775,20 +872,12 @@ def _classify_symbol_state(
     market_state: str,
 ) -> Dict[str, Any]:
     """
-    终极状态机判定（综合大盘风控 + 个股三维区间套），只能输出四种状态之一：
-
-    优先级（从高到低）：
-    1. 大盘 MARKET_DEAD          -> 强制 SELL（全局熔断）
-    2. 个股跌破 A-ZD（死亡区）   -> IGNORE（拉黑，严禁抄底）
-    3. 个股 60m+15m 顶背驰       -> SELL
-    4. 个股 < C-ZD（走弱区）      -> SELL（持仓强制清仓）
-    5. 持仓中 + 安全向上笔        -> HOLD
-    6. 大盘 MARKET_DANGER        -> BUY 降级为 IGNORE
-    7. 大盘 SAFE + 强势区 + 买点   -> BUY
-    8. 其他                      -> IGNORE
+    三维共振状态机（日线 → 60m → 15m），输出细分状态：
+    SELL / BUY_1 / BUY_2 / BUY_3 / HOLD / IGNORE
     """
     state = "IGNORE"
     reason = "中枢震荡，无买卖点"
+    h60_buy_type: Optional[str] = None
 
     daily_close: Optional[float] = None
     daily_czd: Optional[float] = None
@@ -799,7 +888,6 @@ def _classify_symbol_state(
         daily_centrals = daily_result["centrals"]
         daily_data = daily_result["data"]
         if daily_centrals and daily_data:
-            # 中枢列表按距离现价排序，必须按形成时间重新排序：最早为 A，最晚为 C
             sorted_centrals = sorted(
                 daily_centrals,
                 key=lambda c: c.get("form_end_date", c.get("end_date", "")),
@@ -808,12 +896,56 @@ def _classify_symbol_state(
             daily_czd = float(sorted_centrals[-1]["zd"])
             daily_close = float(daily_data[-1]["close"])
 
+    # 个股风控阈值与大盘统一：min(A-ZD, C-ZD) 为战略底线，max 为战术防线
+    min_zd = min(daily_azd, daily_czd) if daily_azd is not None and daily_czd is not None else None
+    max_zd = max(daily_azd, daily_czd) if daily_azd is not None and daily_czd is not None else None
+
     # 60分钟分析
     h60_conditions = _compute_h60_conditions(
         h60_result.get("data", []) if h60_result else [],
         h60_result.get("centrals", []) if h60_result else [],
         h60_result.get("pens_effective", []) if h60_result else [],
     )
+
+    # 60分钟买卖点检测（区分一买/二买/三买）
+    h60_first_buy, h60_first_buy_info = False, None
+    h60_second_buy, h60_second_buy_info = False, None
+    h60_third_buy, h60_third_buy_info = False, None
+    if h60_result and h60_result.get("data"):
+        h60_data = h60_result["data"]
+        h60_centrals = h60_result.get("centrals", [])
+        h60_pens = h60_result.get("pens_effective", [])
+        h60_fractals = h60_result.get("fractals", [])
+        try:
+            from services.buy_sell_signals import (
+                _detect_first_buy_point,
+                _detect_second_buy_point,
+                _detect_third_buy_point,
+            )
+        except Exception as e:
+            logging.warning("trade_command_engine: %s 60m买点模块导入异常: %s", code, e)
+        else:
+            if _detect_first_buy_point:
+                try:
+                    h60_first_buy, h60_first_buy_info = _detect_first_buy_point(
+                        h60_data, h60_centrals, h60_pens, h60_fractals
+                    )
+                except Exception:
+                    logging.exception("trade_command_engine: %s 一买检测异常", code)
+            if _detect_second_buy_point:
+                try:
+                    h60_second_buy, h60_second_buy_info = _detect_second_buy_point(
+                        h60_data, h60_pens, h60_fractals
+                    )
+                except Exception:
+                    logging.exception("trade_command_engine: %s 二买检测异常", code)
+            if _detect_third_buy_point:
+                try:
+                    h60_third_buy, h60_third_buy_info = _detect_third_buy_point(
+                        h60_data, h60_centrals, h60_pens, h60_fractals
+                    )
+                except Exception:
+                    logging.exception("trade_command_engine: %s 三买检测异常", code)
 
     # 15分钟分析
     h15_bottom_div = False
@@ -828,96 +960,76 @@ def _classify_symbol_state(
         h15_top_div = _detect_15m_top_divergence(
             h15_result["data"], h15_result["pens_effective"]
         )
-
-        # 显式趋势背驰检测（含中枢识别）
-        # ⚠️ 必须传入 pens_effective，因为 centrals.segment_indices 对应的是 pens_effective
         h15_trend_div = _detect_15m_trend_bottom_divergence(
             h15_result["data"],
             h15_result.get("centrals", []),
             h15_result.get("pens_effective", []),
             h15_result.get("fractals", []),
         )
-
-        # 跨级别联立校验：15分钟背驰 ↔ 60分钟笔完成状态
         h60_pens_eff = h60_result.get("pens_effective", []) if h60_result else []
         h15_level_alignment = _check_level_alignment_15m_to_60m(h15_trend_div, h60_pens_eff)
 
     is_holding = code in holding_codes
 
     # === 优先级 1：大盘 MARKET_DEAD ===
-    # 持仓 -> SELL（强制清仓）；空仓 -> IGNORE（禁止开新仓）
     if market_state == "MARKET_DEAD":
-        if is_holding:
-            state = "SELL"
-            reason = "大盘极度危险，强制清仓"
-        else:
-            state = "IGNORE"
-            reason = "大盘极度危险，禁止开新仓"
-    # === 优先级 2：持仓 + 跌破 A-ZD（死亡区）-> 强制 SELL ===
-    elif is_holding and daily_close is not None and daily_azd is not None and daily_close < daily_azd - _EPS:
-        state = "SELL"
-        reason = "持仓跌破战略底线 A-ZD，强制清仓"
-    # === 优先级 2.5：非持仓 + 跌破 A-ZD（死亡区）-> IGNORE ===
-    elif daily_close is not None and daily_azd is not None and daily_close < daily_azd - _EPS:
-        state = "IGNORE"
-        reason = "跌破战略底线 A-ZD，拉黑"
-    # === 优先级 3：持仓 + 60m+15m 顶背驰 -> SELL ===
-    elif is_holding and h60_conditions["last_pen_up"] and h15_top_div:
-        state = "SELL"
-        reason = "60分钟向上笔+15分钟顶背驰"
-    # === 优先级 3.5：非持仓 + 60m+15m 顶背驰 -> IGNORE ===
+        state = "SELL" if is_holding else "IGNORE"
+        reason = "大盘极度危险，强制清仓" if is_holding else "大盘极度危险，禁止开新仓"
+    # === 优先级 2：跌破 min(A-ZD, C-ZD)（死亡区）===
+    elif daily_close is not None and daily_close < min_zd - _EPS:
+        state = "SELL" if is_holding else "IGNORE"
+        reason = "持仓跌破战略底线，强制清仓" if is_holding else "跌破战略底线，拉黑"
+    # === 优先级 3：60m+15m 顶背驰 ===
     elif h60_conditions["last_pen_up"] and h15_top_div:
-        state = "IGNORE"
-        reason = "60分钟向上笔+15分钟顶背驰，空仓不追"
-    # === 优先级 4：持仓 + 跌破 C-ZD（走弱区）-> SELL ===
-    elif is_holding and daily_close is not None and daily_czd is not None and daily_close < daily_czd - _EPS:
-        state = "SELL"
-        reason = "持仓跌破战术防线 C-ZD，清仓"
-    # === 优先级 4.5：非持仓 + 跌破 C-ZD（走弱区）-> IGNORE ===
-    elif daily_close is not None and daily_czd is not None and daily_close < daily_czd - _EPS:
-        state = "IGNORE"
-        reason = "跌破战术防线 C-ZD，放弃狙击"
+        state = "SELL" if is_holding else "IGNORE"
+        reason = "60分钟向上笔+15分钟顶背驰"
+    # === 优先级 4：跌破 max(A-ZD, C-ZD)（走弱区）===
+    elif daily_close is not None and daily_close < max_zd - _EPS:
+        state = "SELL" if is_holding else "IGNORE"
+        reason = "持仓跌破战术防线，清仓" if is_holding else "跌破战术防线，放弃狙击"
     # === 优先级 5：持仓中 + 安全向上笔 -> HOLD ===
     elif is_holding and h60_conditions["last_pen_up"]:
         state = "HOLD"
         reason = "持仓中，安全向上笔"
-    # === 优先级 5.5：持仓兜底保护（无明确卖点则继续持仓）===
+    # === 优先级 5.5：持仓兜底保护 ===
     elif is_holding:
         state = "HOLD"
         reason = "持仓中，无明确卖点，继续观望"
-    # === 优先级 6：大盘 DANGER -> BUY 降级为 IGNORE ===
+    # === 优先级 6：大盘 DANGER -> IGNORE ===
     elif market_state == "MARKET_DANGER":
         state = "IGNORE"
         reason = "大盘警戒，禁止开新仓"
     # === 优先级 7：大盘 SAFE + 强势区 + 60m买点 + 15m底背驰 -> BUY ===
-    # 支持两种15分钟微观信号：
-    #   A) 传统盘整背驰（h15_bottom_div）
-    #   B) 显式趋势背驰（h15_trend_div.has_signal）+ 级别联立校验通过
-    h15_micro_buy = h15_bottom_div or (
-        h15_trend_div.has_signal and h15_level_alignment.is_aligned
-    )
-
-    if (
-        market_state == "MARKET_SAFE"
-        and daily_close is not None
-        and daily_czd is not None
-        and daily_close >= daily_czd - _EPS
-        and h60_conditions["in_c_central"]
-        and h60_conditions["switched_down_to_up"]
-        and h60_conditions["has_bottom_div_in_switch"]
-        and h60_conditions["macd_buy"]
-        and h15_micro_buy
-    ):
-        state = "BUY"
-        if h15_trend_div.has_signal and h15_trend_div.divergence_type == "trend":
-            reason = f"多级别共振趋势背驰(面积比{h15_trend_div.area_ratio:.2f})"
-        elif h15_trend_div.has_signal and h15_trend_div.divergence_type == "pan":
-            reason = f"多级别共振盘整背驰(面积比{h15_trend_div.area_ratio:.2f})"
-        else:
-            reason = "多级别共振底背驰"
     else:
-        state = "IGNORE"
-        reason = "中枢震荡，无买卖点"
+        h15_micro_buy = h15_bottom_div or (
+            h15_trend_div.has_signal and h15_level_alignment.is_aligned
+        )
+
+        if (
+            market_state == "MARKET_SAFE"
+            and daily_close is not None
+            and daily_close >= max_zd - _EPS
+            and h15_micro_buy
+        ):
+            # 判定 60m 买点类型（优先级：二买 > 三买 > 一买）
+            if h60_second_buy:
+                state = "BUY_2"
+                h60_buy_type = "second_buy"
+                reason = "右侧二买确认，底部确立！"
+            elif h60_third_buy:
+                state = "BUY_3"
+                h60_buy_type = "third_buy"
+                reason = "三买突破确认，顺势跟进。"
+            elif h60_first_buy:
+                state = "BUY_1"
+                h60_buy_type = "first_buy"
+                reason = "左侧一买确认，轻仓试探。"
+            else:
+                state = "IGNORE"
+                reason = "中枢震荡，无买卖点"
+        else:
+            state = "IGNORE"
+            reason = "中枢震荡，无买卖点"
 
     return {
         "state": state,
@@ -926,6 +1038,10 @@ def _classify_symbol_state(
         "daily_czd": daily_czd,
         "daily_azd": daily_azd,
         "h60_conditions": h60_conditions,
+        "h60_buy_type": h60_buy_type,
+        "h60_first_buy_info": h60_first_buy_info,
+        "h60_second_buy_info": h60_second_buy_info,
+        "h60_third_buy_info": h60_third_buy_info,
         "h15_bottom_div": h15_bottom_div,
         "h15_top_div": h15_top_div,
         "h15_trend_div": h15_trend_div,
@@ -940,15 +1056,16 @@ def _classify_symbol_state(
 
 def _build_radar_checklist(analysis: Dict[str, Any]) -> Dict[str, Any]:
     """
-    构建三维雷达自检结果：
-    - macro:  √/×  宏观(日线)：现价 vs C-ZD vs A-ZD
-    - battle: √/×  战役(60分钟)
-    - micro:  √/×  微观(15分钟)
+    构建三维共振雷达自检结果：
+    - 🌍 宏观(日线)：强势区 / 走弱区 / 死亡区
+    - ⚔️ 战役(60m)：一买/二买/三买预警 或 卖点预警
+    - 🎯 微观(15m)：底背驰/顶背驰确认
     """
     daily_close = analysis.get("daily_close")
     daily_czd = analysis.get("daily_czd")
     daily_azd = analysis.get("daily_azd")
     h60_conditions = analysis.get("h60_conditions", {})
+    h60_buy_type = analysis.get("h60_buy_type")
     h15_bottom_div = analysis.get("h15_bottom_div", False)
     h15_top_div = analysis.get("h15_top_div", False)
     h15_trend_div = analysis.get("h15_trend_div", TrendDivergenceResult())
@@ -958,25 +1075,36 @@ def _build_radar_checklist(analysis: Dict[str, Any]) -> Dict[str, Any]:
     if daily_close is not None and daily_czd is not None and daily_azd is not None:
         macro_ok = daily_close >= daily_czd - _EPS
         if daily_close >= daily_czd - _EPS:
-            macro_text = f"现价 {daily_close:.2f} 大于 战术防线 C-ZD {daily_czd:.2f} (战略底线 A-ZD: {daily_azd:.2f})"
+            macro_zone = "强势区"
+            macro_text = f"现价 {daily_close:.2f} >= 战术防线 C-ZD {daily_czd:.2f} (A-ZD: {daily_azd:.2f})"
         elif daily_close >= daily_azd - _EPS:
-            macro_text = f"现价 {daily_close:.2f} 小于 战术防线 C-ZD {daily_czd:.2f}，但高于 战略底线 A-ZD {daily_azd:.2f}"
+            macro_zone = "走弱区"
+            macro_text = f"现价 {daily_close:.2f} < C-ZD {daily_czd:.2f}，但 >= A-ZD {daily_azd:.2f}"
         else:
-            macro_text = f"现价 {daily_close:.2f} 小于 战略底线 A-ZD {daily_azd:.2f} (C-ZD: {daily_czd:.2f})"
+            macro_zone = "死亡区"
+            macro_text = f"现价 {daily_close:.2f} < 战略底线 A-ZD {daily_azd:.2f}"
     else:
         macro_ok = False
-        macro_text = "日线数据不足，无法判定"
+        macro_zone = "未知"
+        macro_text = "日线数据不足"
 
     # 战役(60分钟)
-    battle_ok = h60_conditions.get("in_c_central", False) or h60_conditions.get("last_pen_up", False)
-    if h60_conditions.get("in_c_central"):
+    if h60_buy_type:
+        battle_ok = True
+    else:
+        battle_ok = h60_conditions.get("in_c_central", False) or h60_conditions.get("last_pen_up", False)
+    if h60_buy_type == "first_buy":
+        battle_text = "一买预警（左侧底背驰，暴跌创新低）"
+    elif h60_buy_type == "second_buy":
+        battle_text = "二买预警（右侧底确认，回踩不破低点）"
+    elif h60_buy_type == "third_buy":
+        battle_text = "三买预警（突破回踩，悬空不破ZG）"
+    elif h60_conditions.get("in_c_central"):
         battle_text = "回踩 ZD 支撑，当前处于 C 中枢内"
     elif h60_conditions.get("last_pen_up"):
         battle_text = "向上笔进行中，未触发卖点"
     elif h60_conditions.get("switched_up_to_down"):
         battle_text = "向上笔转向下笔，卖点触发"
-    elif not h60_conditions.get("last_pen_up") and h60_conditions.get("switched_down_to_up") is False:
-        battle_text = "向下笔进行中，动能向下"
     else:
         battle_text = "中枢震荡，无明确方向"
 
@@ -986,21 +1114,22 @@ def _build_radar_checklist(analysis: Dict[str, Any]) -> Dict[str, Any]:
         div_type = "趋势背驰" if h15_trend_div.divergence_type == "trend" else "盘整背驰"
         ratio_text = f"(面积比{h15_trend_div.area_ratio:.2f})"
         if h15_level_alignment.is_aligned:
-            micro_text = f"15分钟{div_type}确认{ratio_text} | {h15_level_alignment.reason}"
+            micro_text = f"底背驰已确认 — {div_type}{ratio_text} | {h15_level_alignment.reason}"
         else:
-            micro_text = f"15分钟{div_type}确认{ratio_text} | ⚠️ {h15_level_alignment.reason}"
+            micro_text = f"底背驰信号 — {div_type}{ratio_text} | ⚠️ {h15_level_alignment.reason}"
     elif h15_bottom_div:
         micro_ok = True
-        micro_text = "MACD 底背驰确认（传统盘整背驰）"
+        micro_text = "底背驰已确认（传统盘整背驰）"
     elif h15_top_div:
         micro_ok = True
-        micro_text = "MACD 顶背驰确认"
+        micro_text = "顶背驰已确认"
     else:
         micro_ok = False
         micro_text = "无背驰信号"
 
     return {
         "macro_ok": macro_ok,
+        "macro_zone": macro_zone,
         "macro_text": macro_text,
         "battle_ok": battle_ok,
         "battle_text": battle_text,
@@ -1010,31 +1139,106 @@ def _build_radar_checklist(analysis: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 军机处指令生成
+# 傻瓜式仓位计算器
 # ---------------------------------------------------------------------------
 
-def _generate_command(state: str, name: str, code: str, radar: Dict[str, Any], analysis: Dict[str, Any]) -> str:
-    """根据状态生成包含 50,000 元的具体操作建议。"""
-    daily_czd = analysis.get("daily_czd")
+def _calculate_order_amount(signal_type: str, current_holding: int) -> Tuple[int, str]:
+    """
+    傻瓜式仓位计算器。
+    返回: (操作金额, 操作描述)
+    """
+    if signal_type == "BUY_1":
+        if current_holding == 0:
+            return 10_000, "买入 10,000 元"
+        return 0, "已有持仓，一买不再加仓"
+    elif signal_type == "BUY_2":
+        amount = FIXED_TRADE_AMOUNT - current_holding
+        if amount > 0:
+            return amount, f"买入 {amount:,} 元"
+        return 0, "已满仓，无需加仓"
+    elif signal_type == "BUY_3":
+        target = 25_000
+        if current_holding == 0:
+            return target, f"买入 {target:,} 元"
+        elif current_holding < target:
+            amount = target - current_holding
+            return amount, f"买入 {amount:,} 元"
+        return 0, "已达三买仓位上限，持仓不动"
+    elif signal_type == "SELL":
+        if current_holding > 0:
+            return current_holding, f"卖出 {current_holding:,} 元"
+        return 0, "空仓，无需卖出"
+    return 0, "持兵不动"
 
-    if state == "SELL":
-        if radar["micro_text"] == "MACD 顶背驰确认":
-            return (
-                f"🔴 警告：微观顶背驰确认，动能衰竭。立刻清仓，卖出 {FIXED_TRADE_AMOUNT:,} 元！"
-            )
-        return f"🔴 警告：宏观破位，趋势走坏。立刻清仓，卖出 {FIXED_TRADE_AMOUNT:,} 元！"
 
-    if state == "BUY":
-        stop_loss = f"绝对止损位设于 {daily_czd:.2f}" if daily_czd else "严格止损"
-        return (
-            f"🟢 狙击：大盘安全，多级别共振底背驰。建议满仓买入 {FIXED_TRADE_AMOUNT:,} 元，"
-            f"{stop_loss}。"
-        )
+# ---------------------------------------------------------------------------
+# 军机处指令生成（极简 Markdown）
+# ---------------------------------------------------------------------------
 
-    if state == "HOLD":
-        return f"🟡 观望：结构安全，动能充沛，持仓 {FIXED_TRADE_AMOUNT:,} 元不动。"
+def _generate_command(
+    state: str, name: str, code: str, radar: Dict[str, Any], analysis: Dict[str, Any], current_holding: int
+) -> str:
+    """根据状态生成包含具体买卖金额的极简操作建议。"""
+    order_amount, order_desc = _calculate_order_amount(state, current_holding)
 
-    return "⚪ 放弃：无明确信号或大盘风控拦截，空仓休息。"
+    # 止损线：优先从 60m 买点信息提取，其次用日线 C-ZD
+    stop_loss: Optional[float] = None
+    h60_second = analysis.get("h60_second_buy_info")
+    h60_first = analysis.get("h60_first_buy_info")
+    h60_third = analysis.get("h60_third_buy_info")
+    if h60_second and h60_second.get("stop_loss"):
+        stop_loss = float(h60_second["stop_loss"])
+    elif h60_first and h60_first.get("stop_loss"):
+        stop_loss = float(h60_first["stop_loss"])
+    elif h60_third and h60_third.get("stop_loss"):
+        stop_loss = float(h60_third["stop_loss"])
+    else:
+        stop_loss = analysis.get("daily_czd")
+
+    lines: List[str] = []
+    lines.append("- **【极简操作指令】**：")
+
+    if state == "BUY_1":
+        lines.append("  - 🚦 **状态**：🟢 一买轻仓试探")
+        lines.append(f"  - 💰 **操作**：{order_desc}")
+        if stop_loss is not None:
+            lines.append(f"  - 🛡️ **防守**：绝对止损位设于 {stop_loss:.2f}。")
+        else:
+            lines.append("  - 🛡️ **防守**：止损位未计算，以日线 C-ZD 为参考。")
+    elif state == "BUY_2":
+        lines.append("  - 🚦 **状态**：🟢 二买重仓出击")
+        if order_amount > 0:
+            lines.append(f"  - 💰 **操作**：{order_desc}，打满 50,000 元！")
+        else:
+            lines.append(f"  - 💰 **操作**：{order_desc}")
+        if stop_loss is not None:
+            lines.append(f"  - 🛡️ **防守**：绝对止损位设于 {stop_loss:.2f}。")
+        else:
+            lines.append("  - 🛡️ **防守**：止损位未计算，以日线 C-ZD 为参考。")
+    elif state == "BUY_3":
+        lines.append("  - 🚦 **状态**：🟢 三买顺势追击")
+        lines.append(f"  - 💰 **操作**：{order_desc}")
+        if stop_loss is not None:
+            lines.append(f"  - 🛡️ **防守**：绝对止损位设于 {stop_loss:.2f}。")
+        else:
+            lines.append("  - 🛡️ **防守**：止损位未计算，以日线 C-ZD 为参考。")
+    elif state == "SELL":
+        lines.append("  - 🚦 **状态**：🔴 强制清仓")
+        lines.append(f"  - 💰 **操作**：{order_desc}")
+        lines.append("  - 🛡️ **防守**：已触发风控，无防守必要。")
+    elif state == "HOLD":
+        lines.append("  - 🚦 **状态**：🟡 持仓观望")
+        lines.append("  - 💰 **操作**：持兵不动")
+        if stop_loss:
+            lines.append(f"  - 🛡️ **防守**：绝对止损位设于 {stop_loss:.2f}。")
+        else:
+            lines.append("  - 🛡️ **防守**：空仓无防守。")
+    else:
+        lines.append("  - 🚦 **状态**：⚪ 空仓等待")
+        lines.append("  - 💰 **操作**：持兵不动")
+        lines.append("  - 🛡️ **防守**：空仓无防守。")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1044,18 +1248,13 @@ def _generate_command(state: str, name: str, code: str, radar: Dict[str, Any], a
 def _state_label(state: str) -> str:
     labels = {
         "SELL": "🔴 空仓警报",
-        "BUY": "🟢 满仓突击",
+        "BUY_1": "🟢 一买轻仓试探",
+        "BUY_2": "🟢 二买重仓出击",
+        "BUY_3": "🟢 三买顺势追击",
         "HOLD": "🟡 持仓观望",
         "IGNORE": "⚪ 放弃狙击",
     }
     return labels.get(state, "⚪ 放弃狙击")
-
-
-def _state_position(state: str) -> int:
-    """返回当前持仓金额（硬编码规则）。SELL表示卖出后仓位为0。"""
-    if state == "HOLD":
-        return FIXED_TRADE_AMOUNT
-    return 0
 
 
 def _market_state_label(state: str) -> str:
@@ -1073,7 +1272,7 @@ def _append_trade_report(
     market_info: Dict[str, Any],
 ) -> Path:
     """
-    追加写入 Markdown 报告。
+    追加写入 Markdown 报告（极简三维共振格式）。
     - 目录：项目根目录 /trade_reports/
     - 文件名：作战指令_YYYY-MM-DD.md
     - 模式：追加 (a+)，绝不覆盖历史记录
@@ -1102,7 +1301,7 @@ def _append_trade_report(
             f"- **上证指数 (000001.SH)**：现价 {market_price:.2f} (C-ZD: {market_czd:.2f}, A-ZD: {market_azd:.2f})"
         )
     else:
-        lines.append("- **上证指数 (000001.SH)**：数据不足，无法判定大盘状态")
+        lines.append("- **上证指数 (000001.SH)**：数据不足")
     lines.append(f"- **大盘状态**：{_market_state_label(market_state)}")
     lines.append(f"- **风控策略**：{market_reason}")
     lines.append("")
@@ -1113,32 +1312,31 @@ def _append_trade_report(
     lines.append("#### 🛡️ 【个股作战指令】")
     lines.append("")
 
-    # 分离有效区域和无效区域
     active_records = [r for r in records if r["state"] != "IGNORE"]
     ignore_records = [r for r in records if r["state"] == "IGNORE"]
 
-    # 有效区域：完整输出
+    # 有效区域：完整输出三维共振雷达 + 极简操作指令
     for idx, rec in enumerate(active_records, start=1):
         radar = rec["radar"]
         state = rec["state"]
-        pos = _state_position(state)
+        pos = rec.get("current_holding", 0)
         lines.append(
             f"**{idx}. {rec['name']} ({rec['code']}) | 当前持仓：{pos:,} / {FIXED_TRADE_AMOUNT:,} 元**"
         )
         lines.append(f"- **【当前状态】**：{_state_label(state)}")
-        lines.append("- **【三维雷达】**：")
+        lines.append("- **【三维共振雷达】**：")
         m_ok = "√" if radar["macro_ok"] else "×"
         b_ok = "√" if radar["battle_ok"] else "×"
         u_ok = "√" if radar["micro_ok"] else "×"
-        lines.append(f"  - {m_ok} 宏观(日线)：{radar['macro_text']}")
-        lines.append(f"  - {b_ok} 战役(60分钟)：{radar['battle_text']}")
-        lines.append(f"  - {u_ok} 微观(15分钟)：{radar['micro_text']}")
-        lines.append(f"- **【执行指令】**：{rec['command']}")
+        lines.append(f"  - 🌍 {m_ok} 宏观(日线)：{radar['macro_zone']} | {radar['macro_text']}")
+        lines.append(f"  - ⚔️ {b_ok} 战役(60m)：{radar['battle_text']}")
+        lines.append(f"  - 🎯 {u_ok} 微观(15m)：{radar['micro_text']}")
+        lines.append(rec["command"])
         lines.append("")
         lines.append("---")
         lines.append("")
 
-    # 无效区域：极简折叠输出（隐藏三维雷达）
+    # 无效区域：极简折叠
     if ignore_records:
         lines.append("**以下标的放弃狙击，隐藏雷达以极简呈现：**")
         lines.append("")
@@ -1160,10 +1358,13 @@ def _append_trade_report(
 # 主入口
 # ---------------------------------------------------------------------------
 
-def run_trade_command_engine() -> Path:
+def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
     """
-    主入口：拉取 -> 计算 -> 判定 -> 写入报告 -> 返回文件路径。
+    主入口：拉取 -> 计算 -> 判定 -> (可选)写入报告 -> 返回文件路径。
     控制台仅打印一句：[SUCCESS] HH:mm 巡航完毕，报告已生成
+
+    Args:
+        generate_report: 为 True 时生成 Markdown 报告；为 False 时仅计算状态机并写入 CSV 快照。
     """
     # 延迟导入，避免循环依赖与启动时加载过重
     from services.indicators import get_index_kline
@@ -1183,6 +1384,7 @@ def run_trade_command_engine() -> Path:
         return path
 
     holding_codes = _load_holding_codes()
+    holding_amounts = _load_holding_amounts()
     daily_start = _daily_start_date()
     h60_start = _h60_start_date()
     h15_start = _h15_start_date()
@@ -1190,6 +1392,7 @@ def run_trade_command_engine() -> Path:
     # ==================== 第一层：全局大盘风控 ====================
     index_daily: Optional[Dict[str, Any]] = None
     index_h60: Optional[Dict[str, Any]] = None
+    index_h15: Optional[Dict[str, Any]] = None
 
     try:
         index_daily = get_index_kline(
@@ -1213,7 +1416,18 @@ def run_trade_command_engine() -> Path:
     except Exception as e:  # noqa: BLE001
         logging.warning("trade_command_engine: 大盘60m拉取失败: %s", e)
 
-    market_info = _compute_market_state(index_daily, index_h60)
+    try:
+        index_h15 = get_index_kline(
+            symbol=INDEX_CODE,
+            start_date=h15_start,
+            end_date=None,
+            period="15",
+            refresh=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        logging.warning("trade_command_engine: 大盘15m拉取失败: %s", e)
+
+    market_info = _compute_market_state(index_daily, index_h60, index_h15)
     market_state = market_info["state"]
 
     # ==================== 第二层：个股三维区间套 ====================
@@ -1264,24 +1478,297 @@ def run_trade_command_engine() -> Path:
                 code, daily_result, h60_result, h15_result, holding_codes, market_state
             )
             state = analysis["state"]
+
+            # 检测60分钟买点细分类型（用于CSV快照）
+            buy_signals = {"first_buy": False, "second_buy": False, "third_buy": False}
+            if h60_result and h60_result.get("data"):
+                h60_data = h60_result["data"]
+                h60_centrals = h60_result.get("centrals", [])
+                h60_pens = h60_result.get("pens_effective", [])
+                h60_fractals = h60_result.get("fractals", [])
+
+                try:
+                    from services.buy_sell_signals import (
+                        _detect_first_buy_point,
+                        _detect_second_buy_point,
+                        _detect_third_buy_point,
+                    )
+                except Exception:
+                    logging.exception("trade_command_engine: 买点检测模块导入失败 %s", code)
+                    _detect_first_buy_point = None
+                    _detect_second_buy_point = None
+                    _detect_third_buy_point = None
+
+                first_buy_info = None
+                if _detect_first_buy_point:
+                    try:
+                        buy_signals["first_buy"], first_buy_info = _detect_first_buy_point(
+                            h60_data, h60_centrals, h60_pens, h60_fractals
+                        )
+                    except Exception:
+                        logging.exception("trade_command_engine: 一买检测失败 %s", code)
+
+                second_buy_info = None
+                if _detect_second_buy_point:
+                    try:
+                        buy_signals["second_buy"], second_buy_info = _detect_second_buy_point(
+                            h60_data, h60_pens, h60_fractals
+                        )
+                    except Exception:
+                        logging.exception("trade_command_engine: 二买检测失败 %s", code)
+
+                third_buy_info = None
+                if _detect_third_buy_point:
+                    try:
+                        buy_signals["third_buy"], third_buy_info = _detect_third_buy_point(
+                            h60_data, h60_centrals, h60_pens, h60_fractals
+                        )
+                    except Exception:
+                        logging.exception("trade_command_engine: 三买检测失败 %s", code)
+
+            # 检测60分钟卖点细分类型（用于CSV快照）
+            sell_signals = {"first_sell": False, "second_sell": False, "third_sell": False}
+            first_sell_info = None
+            second_sell_info = None
+            if h60_result and h60_result.get("data"):
+                h60_data = h60_result["data"]
+                h60_centrals = h60_result.get("centrals", [])
+                h60_pens = h60_result.get("pens_effective", [])
+                h60_fractals = h60_result.get("fractals", [])
+
+                try:
+                    from services.buy_sell_signals import (
+                        _detect_first_sell_point,
+                        _detect_second_sell_point,
+                        _detect_third_sell_point,
+                    )
+                except Exception:
+                    logging.exception("trade_command_engine: 卖点检测模块导入失败 %s", code)
+                    _detect_first_sell_point = None
+                    _detect_second_sell_point = None
+                    _detect_third_sell_point = None
+
+                # 每个检测函数独立保护并记录日志
+                if _detect_first_sell_point:
+                    try:
+                        sell_signals["first_sell"], first_sell_info = _detect_first_sell_point(
+                            h60_data, h60_centrals, h60_pens, h60_fractals
+                        )
+                    except Exception:
+                        logging.exception("trade_command_engine: 一卖检测失败 %s", code)
+
+                if _detect_second_sell_point:
+                    try:
+                        sell_signals["second_sell"], second_sell_info = _detect_second_sell_point(
+                            h60_data, h60_pens, h60_fractals
+                        )
+                    except Exception:
+                        logging.exception("trade_command_engine: 二卖检测失败 %s", code)
+
+                if _detect_third_sell_point:
+                    try:
+                        sell_signals["third_sell"] = _detect_third_sell_point(
+                            h60_data, h60_centrals, h60_pens, h60_fractals
+                        )
+                    except Exception:
+                        logging.exception("trade_command_engine: 三卖检测失败 %s", code)
+
+                # ========== 买点有效性检查（与前端 computeHourlyBuySellState 对齐） ==========
+                # 二买必须同时满足：日线支撑 + MACD买入 + 价格高于一买低点
+                if buy_signals["second_buy"] and second_buy_info:
+                    filter_reasons: List[str] = []
+                    daily_close_v = analysis.get("daily_close")
+                    daily_azd_v = analysis.get("daily_azd")
+                    daily_czd_v = analysis.get("daily_czd")
+                    if daily_close_v is not None and daily_azd_v is not None and daily_czd_v is not None:
+                        if float(daily_close_v) < min(float(daily_azd_v), float(daily_czd_v)):
+                            filter_reasons.append("价格跌破日线支撑")
+                    h60_conds = analysis.get("h60_conditions", {})
+                    if not h60_conds.get("macd_buy"):
+                        filter_reasons.append("MACD未满足买入条件")
+                    buy1_stop = second_buy_info.get("buy1_stop")
+                    stop_loss_v = second_buy_info.get("stop_loss")
+                    if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) <= float(buy1_stop):
+                        filter_reasons.append("二买价格未高于一买低点")
+                    if filter_reasons:
+                        buy_signals["second_buy"] = False
+                        if state != "SELL":
+                            # 按优先级重新评估 state：二买 > 三买 > 一买
+                            if buy_signals["third_buy"]:
+                                state = "BUY_3"
+                                new_reason = "三买突破确认，顺势跟进。"
+                                analysis["h60_buy_type"] = "third_buy"
+                            elif buy_signals["first_buy"]:
+                                state = "BUY_1"
+                                new_reason = "左侧一买确认，轻仓试探。"
+                                analysis["h60_buy_type"] = "first_buy"
+                            else:
+                                if code in holding_codes:
+                                    state = "HOLD"
+                                    new_reason = "持仓中，无明确买点，继续观望"
+                                else:
+                                    state = "IGNORE"
+                                    new_reason = "中枢震荡，无买卖点"
+                                analysis["h60_buy_type"] = None
+                            analysis["state"] = state
+                            analysis["reason"] = f"{new_reason}（二买不成立：{'；'.join(filter_reasons)}）"
+                        else:
+                            analysis["h60_buy_type"] = None
+
+                # 三买必须同时满足：日线支撑 + 不在C中枢内（突破中枢ZG）
+                if buy_signals["third_buy"] and third_buy_info:
+                    filter_reasons3: List[str] = []
+                    daily_close_v3 = analysis.get("daily_close")
+                    daily_azd_v3 = analysis.get("daily_azd")
+                    daily_czd_v3 = analysis.get("daily_czd")
+                    if daily_close_v3 is not None and daily_azd_v3 is not None and daily_czd_v3 is not None:
+                        if float(daily_close_v3) < min(float(daily_azd_v3), float(daily_czd_v3)):
+                            filter_reasons3.append("价格跌破日线支撑")
+                    h60_conds3 = analysis.get("h60_conditions", {})
+                    if h60_conds3.get("in_c_central"):
+                        filter_reasons3.append("价格仍在C中枢内（未突破ZG）")
+                    if filter_reasons3:
+                        buy_signals["third_buy"] = False
+                        if state != "SELL":
+                            # 按优先级重新评估 state：二买 > 三买 > 一买
+                            if buy_signals["second_buy"]:
+                                state = "BUY_2"
+                                new_reason = "右侧二买确认，底部确立！"
+                                analysis["h60_buy_type"] = "second_buy"
+                            elif buy_signals["first_buy"]:
+                                state = "BUY_1"
+                                new_reason = "左侧一买确认，轻仓试探。"
+                                analysis["h60_buy_type"] = "first_buy"
+                            else:
+                                if code in holding_codes:
+                                    state = "HOLD"
+                                    new_reason = "持仓中，无明确买点，继续观望"
+                                else:
+                                    state = "IGNORE"
+                                    new_reason = "中枢震荡，无买卖点"
+                                analysis["h60_buy_type"] = None
+                            analysis["state"] = state
+                            analysis["reason"] = f"{new_reason}（三买不成立：{'；'.join(filter_reasons3)}）"
+                        else:
+                            analysis["h60_buy_type"] = None
+
+                # 一买必须同时满足：日线支撑 + 有底背驰
+                if buy_signals["first_buy"] and first_buy_info:
+                    filter_reasons1: List[str] = []
+                    daily_close_v1 = analysis.get("daily_close")
+                    daily_azd_v1 = analysis.get("daily_azd")
+                    daily_czd_v1 = analysis.get("daily_czd")
+                    if daily_close_v1 is not None and daily_azd_v1 is not None and daily_czd_v1 is not None:
+                        if float(daily_close_v1) < min(float(daily_azd_v1), float(daily_czd_v1)):
+                            filter_reasons1.append("价格跌破日线支撑")
+                    h60_conds1 = analysis.get("h60_conditions", {})
+                    if not h60_conds1.get("has_bottom_div_in_switch"):
+                        filter_reasons1.append("无底背驰确认")
+                    if filter_reasons1:
+                        buy_signals["first_buy"] = False
+                        if state != "SELL":
+                            # 按优先级重新评估 state：二买 > 三买 > 一买
+                            if buy_signals["second_buy"]:
+                                state = "BUY_2"
+                                new_reason = "右侧二买确认，底部确立！"
+                                analysis["h60_buy_type"] = "second_buy"
+                            elif buy_signals["third_buy"]:
+                                state = "BUY_3"
+                                new_reason = "三买突破确认，顺势跟进。"
+                                analysis["h60_buy_type"] = "third_buy"
+                            else:
+                                if code in holding_codes:
+                                    state = "HOLD"
+                                    new_reason = "持仓中，无明确买点，继续观望"
+                                else:
+                                    state = "IGNORE"
+                                    new_reason = "中枢震荡，无买卖点"
+                                analysis["h60_buy_type"] = None
+                            analysis["state"] = state
+                            analysis["reason"] = f"{new_reason}（一买不成立：{'；'.join(filter_reasons1)}）"
+                        else:
+                            analysis["h60_buy_type"] = None
+
+                # ========== 卖点失效检查（与前端 computeHourlyBuySellState 对齐） ==========
+                # 规则1：一卖触发后，若后续K线高点突破一卖最高点，则一卖结构被破坏
+                if sell_signals["first_sell"] and first_sell_info:
+                    sell1_high = first_sell_info.get("high", 0)
+                    sell1_date = first_sell_info.get("date", "")
+                    sell1_idx = -1
+                    for i, d in enumerate(h60_data):
+                        if d.get("date") == sell1_date:
+                            sell1_idx = i
+                            break
+                    if sell1_idx >= 0:
+                        for i in range(sell1_idx + 1, len(h60_data)):
+                            if h60_data[i].get("high", 0) > sell1_high:
+                                sell_signals["first_sell"] = False
+                                break
+
+                # 规则2：二卖依赖一卖存在，一卖失效则二卖必须同步失效
+                if sell_signals["second_sell"] and not sell_signals["first_sell"]:
+                    sell_signals["second_sell"] = False
+
+                # 规则3：二卖触发后，若后续K线高点突破一卖最高点，说明多头已破坏M头结构，二卖失效
+                if (
+                    sell_signals["second_sell"]
+                    and sell_signals["first_sell"]
+                    and second_sell_info
+                ):
+                    sell1_high = first_sell_info.get("high", 0) if first_sell_info else 0
+                    sell2_date = second_sell_info.get("date", "")
+                    sell2_idx = -1
+                    for i, d in enumerate(h60_data):
+                        if d.get("date") == sell2_date:
+                            sell2_idx = i
+                            break
+                    if sell2_idx >= 0:
+                        for i in range(sell2_idx + 1, len(h60_data)):
+                            if h60_data[i].get("high", 0) > sell1_high:
+                                sell_signals["second_sell"] = False
+                                break
+
+            # 写入15分钟级快照日志（无侵入式，异常不阻塞主逻辑）
+            try:
+                from utils.csv_logger import build_snapshot_data, log_snapshot
+                snapshot = build_snapshot_data(
+                    timestamp=timestamp,
+                    code=code,
+                    name=name,
+                    market_state=market_state,
+                    analysis=analysis,
+                    h60_result=h60_result,
+                    h15_result=h15_result,
+                    sell_signals=sell_signals,
+                    buy_signals=buy_signals,
+                )
+                log_snapshot(snapshot)
+            except Exception:
+                logging.warning("trade_command_engine: CSV快照写入失败 %s", code, exc_info=True)
+
             radar = _build_radar_checklist(analysis)
-            command = _generate_command(state, name, code, radar, analysis)
+            current_holding = holding_amounts.get(code, 0)
+            command = _generate_command(state, name, code, radar, analysis, current_holding)
             records.append({
                 "code": code,
                 "name": name,
                 "state": state,
                 "radar": radar,
                 "command": command,
+                "current_holding": current_holding,
             })
         except Exception as e:  # noqa: BLE001
             logging.warning("trade_command_engine: 标的 %s 分析失败: %s", code, e)
 
-    # 按状态优先级排序：SELL > BUY > HOLD > IGNORE
-    priority = {"SELL": 0, "BUY": 1, "HOLD": 2, "IGNORE": 3}
+    # 按状态优先级排序：SELL > BUY_2 > BUY_3 > BUY_1 > HOLD > IGNORE
+    priority = {"SELL": 0, "BUY_2": 1, "BUY_3": 2, "BUY_1": 3, "HOLD": 4, "IGNORE": 5}
     records.sort(key=lambda r: priority.get(r["state"], 99))
 
-    # ==================== 第四层：Markdown 报告生成 ====================
-    path = _append_trade_report(records, timestamp, market_info)
-
-    print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
-    return path
+    # ==================== 第四层：Markdown 报告生成 / 仅快照模式 ====================
+    if generate_report:
+        path = _append_trade_report(records, timestamp, market_info)
+        print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
+        return path
+    else:
+        logging.info("trade_command_engine: 15分钟快照模式，跳过 Markdown 报告生成（%d 条记录已写入 CSV）", len(records))
+        return None
