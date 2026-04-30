@@ -222,15 +222,15 @@ function buildTopDivergenceSquares(data: IndexKlinePoint[], pensEff: IndexPen[])
 }
 
 /**
- * 检测第一类买点（一买）- 趋势底背驰 / 盘整背驰
+ * 检测第一类买点（一买）- 趋势底背驰 / 盘整底背驰
  *
- * 分支A（趋势背驰）：
+ * 分支A（趋势底背驰）：
  * 1. 至少2个向下中枢（A、B中枢）
  * 2. c段向下笔创新低（跌破B中枢低点）
  * 3. c段MACD绿柱面积 < b段面积（背驰）
  * 4. c段终点出现底分型
  *
- * 分支B（盘整背驰）：
+ * 分支B（盘整底背驰）：
  * 1. 仅1个向下中枢（A中枢）
  * 2. 离开段b的低点跌破A中枢ZD
  * 3. b段MACD绿柱面积 < 进入段a段面积（背驰）
@@ -239,7 +239,7 @@ function buildTopDivergenceSquares(data: IndexKlinePoint[], pensEff: IndexPen[])
 function detectFirstBuyPoint(
   data: IndexKlinePoint[],
   centrals: IndexKlineResponse['centrals'],
-  pens: IndexKlineResponse['pens'],
+  pens: IndexKlineResponse['pens_effective'],
   fractals: IndexKlineResponse['fractals'],
 ): FirstBuyPointSignal {
   const emptyResult: FirstBuyPointSignal = {
@@ -296,7 +296,7 @@ function detectFirstBuyPoint(
     return area
   }
 
-  // ========== 分支A：趋势背驰（>=2个向下中枢）==========
+  // ========== 分支A：趋势底背驰（>=2个向下中枢）==========
   if (downwardHubs.length >= 2) {
     const hubA = downwardHubs[downwardHubs.length - 2]
     const hubB = downwardHubs[downwardHubs.length - 1]
@@ -357,7 +357,7 @@ function detectFirstBuyPoint(
     }
   }
 
-  // ========== 分支B：盘整背驰（仅1个向下中枢）==========
+  // ========== 分支B：盘整底背驰（仅1个向下中枢）==========
   if (downwardHubs.length === 1) {
     const hubA = downwardHubs[0]
 
@@ -406,7 +406,7 @@ function detectFirstBuyPoint(
       stopLoss,
       areaRatio: bArea / aArea,
       reasons: [
-        `盘整背驰: ${(bArea / aArea * 100).toFixed(1)}%`,
+        `盘整底背驰: ${(bArea / aArea * 100).toFixed(1)}%`,
         `跌破A中枢: ${bLow.toFixed(2)} < ${hubA.zd.toFixed(2)}`,
         `止损线: ${stopLoss.toFixed(2)}`,
         '[左侧试探] 建议建仓 20% (约 1万)',
@@ -569,7 +569,7 @@ function detectSecondBuyPoint(
 function detectThirdBuyPoint(
   data: IndexKlinePoint[],
   centrals: IndexKlineResponse['centrals'],
-  pens: IndexKlineResponse['pens'],
+  pens: IndexKlineResponse['pens_effective'],
   fractals: IndexKlineResponse['fractals'],
 ): ThirdBuyPointSignal {
   const emptyResult: ThirdBuyPointSignal = {
@@ -722,7 +722,7 @@ function detectThirdBuyPoint(
 function detectFirstSellPoint(
   data: IndexKlinePoint[],
   centrals: IndexKlineResponse['centrals'],
-  pens: IndexKlineResponse['pens'],
+  pens: IndexKlineResponse['pens_effective'],
   fractals: IndexKlineResponse['fractals'],
   dailyCZd: number | null,
   dailyAZd: number | null,
@@ -995,7 +995,7 @@ function detectSecondSellPoint(
 function detectThirdSellPoint(
   data: IndexKlinePoint[],
   centrals: IndexKlineResponse['centrals'],
-  pens: IndexKlineResponse['pens'],
+  pens: IndexKlineResponse['pens_effective'],
   fractals: IndexKlineResponse['fractals'],
 ): ThirdSellPointSignal {
   const emptyResult: ThirdSellPointSignal = {
@@ -1206,15 +1206,19 @@ export function computeHourlyBuySellState(
   const hasTopFractal = (indexKline.fractals ?? []).some((f) => f.type === 'top' && f.date === last.date)
   const hasTopDivNow = topDivergenceSquares.some((pt) => pt[0] === last.date)
 
-  // MACD 转强判定：严格基于柱状图动能变化（导数）
-  // macd_hist = (DIF - DEA) * 2，即 m0/m1 已经是 MACD 柱值
-  // 转强(True)：m0 > m1（当前柱 > 前一根柱，动能向上）
-  //   场景A（水下底背驰）：m0 < 0 且 m0 > m1（绿柱缩短）
-  //   场景B（水上主升浪）：m0 > 0 且 m0 > m1（红柱伸长）
-  // 转弱(False)：m0 < m1（当前柱 < 前一根柱，动能向下）
-  //   场景C（水下主跌浪）：m0 < 0 且 m0 < m1（绿柱伸长）
-  //   场景D（水上顶背驰）：m0 > 0 且 m0 < m1（红柱缩短）
-  const macdBuy = m0 != null && m1 != null && m0 > m1
+  // MACD 转强判定（与后端 buy_sell_signals.py 完全一致）
+  // 条件1：柱值向上（绿柱缩短 / 绿转红 / 红柱伸长）
+  // 条件2：DIF 向上 或 DIF 在 DEA 下方开始上穿
+  // 条件3：排除绿柱连续伸长（主跌浪）
+  const macdGreenShort = m0 != null && m1 != null && m0 < 0 && Math.abs(m0) < Math.abs(m1)
+  const macdGreenToRed = m0 != null && m1 != null && m0 >= 0 && m1 < 0
+  const macdRedLen = m0 != null && m1 != null && m0 > 0 && m1 > 0 && m0 > m1
+  const macdBuy = (
+    (macdGreenShort || macdGreenToRed || macdRedLen)
+    && dif0 != null && dif1 != null && dea0 != null && dea1 != null
+    && (dif0 > dif1 || (dif1 <= dea1 && dif0 > dea0))
+    && !(m0 != null && m1 != null && m2 != null && m0 < 0 && m1 < 0 && m2 < 0 && Math.abs(m0) > Math.abs(m1) && Math.abs(m1) > Math.abs(m2))
+  )
 
   const bollBuy =
     b0?.middle != null &&
@@ -1290,7 +1294,8 @@ export function computeHourlyBuySellState(
   }))
 
   // 检测第一类买点（一买）
-  let firstBuyPoint = detectFirstBuyPoint(data, indexKline.centrals, indexKline.pens, indexKline.fractals)
+  const rawFirstBuyPoint = detectFirstBuyPoint(data, indexKline.centrals, indexKline.pens_effective, indexKline.fractals)
+  let firstBuyPoint = rawFirstBuyPoint
 
   // 检测第二类买点（二买）
   let secondBuyPoint: SecondBuyPointSignal | null = detectSecondBuyPoint(
@@ -1303,7 +1308,7 @@ export function computeHourlyBuySellState(
   const rawThirdBuyPoint = detectThirdBuyPoint(
     data,
     indexKline.centrals,
-    indexKline.pens,
+    indexKline.pens_effective,
     indexKline.fractals,
   )
   let thirdBuyPoint = rawThirdBuyPoint
@@ -1331,7 +1336,7 @@ export function computeHourlyBuySellState(
   let firstSellPoint = detectFirstSellPoint(
     data,
     indexKline.centrals,
-    indexKline.pens,
+    indexKline.pens_effective,
     indexKline.fractals,
     dailyCZd,
     dailyAZd,
@@ -1401,7 +1406,7 @@ export function computeHourlyBuySellState(
   const thirdSellPoint = detectThirdSellPoint(
     data,
     indexKline.centrals,
-    indexKline.pens,
+    indexKline.pens_effective,
     indexKline.fractals,
   )
 
@@ -1517,30 +1522,33 @@ export function computeHourlyBuySellState(
     }
   }
 
-  // 三买失效检查：买入后收盘价跌破战术止损线（用收盘价避免下影线扫损）
+  // 三买失效检查：基于原始三买信号检查（即使被过滤条件屏蔽，结构破坏仍应触发 CENTER_OSCILLATION）
   // 注意：不抹除历史信号，而是标记 isDestroyed=true，保留原位用于战场留痕复盘
   let thirdBuyFailed: ThirdBuyPointSignal | null = null
-  if (thirdBuyPoint?.hasSignal) {
-    const buyIdx = data.findIndex((d) => d.date === thirdBuyPoint.date)
+  if (rawThirdBuyPoint?.hasSignal) {
+    const buyIdx = data.findIndex((d) => d.date === rawThirdBuyPoint.date)
     if (buyIdx >= 0) {
       for (let i = buyIdx + 1; i < data.length; i++) {
-        if (data[i].close < thirdBuyPoint.stopLoss) {
+        if (data[i].close < rawThirdBuyPoint.stopLoss) {
           thirdBuyFailed = {
-            ...thirdBuyPoint,
+            ...rawThirdBuyPoint,
             date: data[i].date,
-            price: thirdBuyPoint.stopLoss,
+            price: rawThirdBuyPoint.stopLoss,
             reasons: [
-              ...thirdBuyPoint.reasons,
-              `三买失败·止损: ${data[i].date} 收盘价跌破战术止损线 ${thirdBuyPoint.stopLoss.toFixed(2)}`,
+              ...rawThirdBuyPoint.reasons,
+              `三买失败·止损: ${data[i].date} 收盘价跌破战术止损线 ${rawThirdBuyPoint.stopLoss.toFixed(2)}`,
             ],
           }
-          thirdBuyPoint = {
-            ...thirdBuyPoint,
-            isDestroyed: true,
-            reasons: [
-              ...thirdBuyPoint.reasons,
-              `【已失效】${data[i].date} 收盘价跌破战术止损线 ${thirdBuyPoint.stopLoss.toFixed(2)}，原买点结构被破坏`,
-            ],
+          // 同步标记过滤后的三买为失效
+          if (thirdBuyPoint?.hasSignal) {
+            thirdBuyPoint = {
+              ...thirdBuyPoint,
+              isDestroyed: true,
+              reasons: [
+                ...thirdBuyPoint.reasons,
+                `【已失效】${data[i].date} 收盘价跌破战术止损线 ${thirdBuyPoint.stopLoss.toFixed(2)}，原买点结构被破坏`,
+              ],
+            }
           }
           break
         }
@@ -1548,33 +1556,64 @@ export function computeHourlyBuySellState(
     }
   }
 
-  // ===== 严格状态机互斥：三买尝试/失败后禁止二买 =====
-  // 一旦走势触发过尝试三买或三买失败，在未跌破前一个一买低点之前，绝对禁止触发二买
-  if (secondBuyPoint && secondBuyPoint.hasSignal) {
-    const hasThirdBuyAttempt = rawThirdBuyPoint?.hasSignal || (thirdBuyFailed && thirdBuyFailed.hasSignal)
-    if (hasThirdBuyAttempt && firstBuyPoint?.hasSignal) {
-      // 始终使用原始三买触发日期作为状态机递进基准
-      // （三买失效日期只是后续确认，扫描窗口必须从三买触发日开始）
-      const mutexDate = rawThirdBuyPoint?.date
-      const buy1Date = firstBuyPoint.date
-      const buy1Low = firstBuyPoint.stopLoss
+  // ===== 严格单向状态机互斥（核心修复：禁止时空穿越） =====
+  // 状态机定义：0(初始) -> 1(一买确认) -> 2(二买确认) -> 3(三买确认/尝试中)
+  // 流转方向严格单向，绝对禁止逆向流转（3 变回 2）
+  // 三买失败后进入 CENTER_OSCILLATION，屏蔽一切买点信号
+  // 重置条件：从三买触发日/失败日开始，价格向下跌破上一买的绝对最低点
 
-      // 三买必须发生在一买之后才构成状态机递进
-      if (mutexDate && buy1Date && mutexDate > buy1Date) {
-        const mutexIdx = data.findIndex((d) => d.date === mutexDate)
-        if (mutexIdx >= 0) {
-          let brokeNewLow = false
-          for (let i = mutexIdx + 1; i < data.length; i++) {
-            if (data[i].low < buy1Low) {
-              brokeNewLow = true
-              break
-            }
-          }
-          if (!brokeNewLow) {
-            // 静默拦截：直接抹除二买信号，不显示任何替代标签
-            secondBuyPoint = null
+  let stateMachineLocked = false
+  let centerOscillation = false
+
+  // 确定是否进入过 STATE_3（三买已确认/尝试中/失败）
+  const hasEnteredState3 = rawThirdBuyPoint?.hasSignal || (thirdBuyFailed && thirdBuyFailed.hasSignal)
+
+  // 获取上一买的绝对最低点（优先从 rawFirstBuyPoint，其次从 secondBuyPoint 携带的一买信息）
+  let buy1Low: number | undefined = rawFirstBuyPoint?.hasSignal ? rawFirstBuyPoint.stopLoss : undefined
+  let buy1Date: string | undefined = rawFirstBuyPoint?.hasSignal ? rawFirstBuyPoint.date : undefined
+  if (buy1Low === undefined && secondBuyPoint?.hasSignal && secondBuyPoint.buy1Price != null) {
+    buy1Low = secondBuyPoint.buy1Price
+    buy1Date = secondBuyPoint.buy1Date
+  }
+
+  if (hasEnteredState3 && buy1Low != null && buy1Low > 0 && buy1Date) {
+    // 使用三买触发日作为状态机递进基准（三买失败日只是后续确认）
+    const mutexDate = rawThirdBuyPoint?.date
+
+    if (mutexDate && mutexDate > buy1Date) {
+      const mutexIdx = data.findIndex((d) => d.date === mutexDate)
+      if (mutexIdx >= 0) {
+        let brokeNewLow = false
+        for (let i = mutexIdx + 1; i < data.length; i++) {
+          if (data[i].low < buy1Low) {
+            brokeNewLow = true
+            break
           }
         }
+        if (!brokeNewLow) {
+          stateMachineLocked = true
+          // 三买失败额外进入中枢震荡，屏蔽一切买点
+          if (thirdBuyFailed && thirdBuyFailed.hasSignal) {
+            centerOscillation = true
+          }
+        }
+      }
+    }
+  }
+
+  // 应用互斥锁
+  if (stateMachineLocked) {
+    // STATE_3 后绝对禁止二买（无论三买成功还是失败）
+    if (secondBuyPoint?.hasSignal) {
+      secondBuyPoint = null
+    }
+    // 三买失败后进入 CENTER_OSCILLATION，屏蔽一切买点
+    if (centerOscillation) {
+      if (firstBuyPoint?.hasSignal) {
+        firstBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, areaRatio: 0, reasons: [] }
+      }
+      if (thirdBuyPoint?.hasSignal) {
+        thirdBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, absoluteStop: 0, reasons: [] }
       }
     }
   }

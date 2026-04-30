@@ -21,14 +21,14 @@ LOGS_DIR = ROOT_DIR / "logs"
 # CSV 表头（固定顺序，必须与 build_snapshot_data 输出键一致）
 CSV_HEADERS = [
     "时间",
+    "实际交易动作",
+    "大盘状态",
     "代码",
     "名称",
     "现价",
-    "大盘状态",
     "日线风控",
-    "缠论信号",
+    "客观缠论信号",
     "15分信号",
-    "交易信号",
     "决策理由",
     "60m笔方向",
     "日线A中枢ZD",
@@ -89,18 +89,26 @@ def _to_chinese_market_state(state: str) -> str:
 
 
 def _to_chinese_trade_signal(
-    state: str, sell_signals: Optional[Dict[str, bool]] = None
+    state: str, sell_signals: Optional[Dict[str, bool]] = None, reason: str = ""
 ) -> str:
     """
     将交易状态映射为可直接执行的操作指令。
-    - SELL 时优先根据 sell_signals 细分为一卖/二卖/三卖。
-    - 若无缠论卖点但 state == SELL，自动推断为风控驱动的「风控卖出」。
+    - SELL 时优先根据 reason 细分为一卖/二卖/三卖。
+    - 若无缠论卖点但 reason 含顶背驰，说明是跨周期背驰驱动，返回「卖出」。
+    - 若上述皆无但 state == SELL，自动推断为风控驱动的「风控卖出」。
     """
     if state == "SELL" and sell_signals is not None:
-        for key in _SELL_PRIORITY:
-            if sell_signals.get(key):
-                return _SELL_SIGNAL_MAP.get(key, "卖出")
-        # 无缠论卖点但状态为 SELL，说明是风控驱动
+        # 状态机 reason 已明确说明卖点类型，直接映射（避免与失效检查后 sell_signals 不一致）
+        if "一卖确认" in reason:
+            return "一卖"
+        if "二卖确认" in reason:
+            return "二卖"
+        if "三卖确认" in reason:
+            return "三卖"
+        # 跨周期背驰驱动
+        if "顶背驰" in reason:
+            return "卖出"
+        # 风控驱动
         return "风控卖出"
     return _TRADE_SIGNAL_MAP.get(state, str(state))
 
@@ -128,7 +136,7 @@ def _fmt_float4(value: Any) -> str:
 def _h15_signal(analysis: Dict[str, Any]) -> str:
     """
     根据15分钟分析结果生成组合详情信号。
-    组合条件：底背驰 / 顶背驰 / 趋势背驰 / 级别对齐
+    组合条件：底背驰 / 顶背驰 / 趋势底背驰 / 级别对齐
     用 '+' 连接多个同时成立的信号，无信号时返回 "无信号"。
     """
     signals: list[str] = []
@@ -138,55 +146,85 @@ def _h15_signal(analysis: Dict[str, Any]) -> str:
         signals.append("顶背驰")
     h15_trend = analysis.get("h15_trend_div")
     if h15_trend and getattr(h15_trend, "has_signal", False):
-        signals.append("趋势背驰")
+        # 项目中趋势背驰专指趋势底背驰（买点），显示完整语义
+        div_type_label = "趋势底背驰" if getattr(h15_trend, "divergence_type", "") == "trend" else "盘整底背驰"
+        signals.append(div_type_label)
+    # 仅当 15分钟有趋势背驰时才显示级别对齐状态
+    # 无趋势背驰时 is_aligned=True 仅为默认值，不应显示
     h15_align = analysis.get("h15_level_alignment")
-    if h15_align and getattr(h15_align, "is_aligned", False):
+    if (
+        h15_trend
+        and getattr(h15_trend, "has_signal", False)
+        and h15_align
+        and getattr(h15_align, "is_aligned", False)
+    ):
         signals.append("级别对齐")
     return "+".join(signals) if signals else "无信号"
 
 
+def _defense_detail(analysis: Dict[str, Any]) -> str:
+    """
+    防线偏离详情：计算现价与 min(A-ZD, C-ZD) 的偏离幅度。
+    与状态机保持一致，优先使用 latest_close。
+    """
+    try:
+        check_price = float(analysis.get("latest_close") or analysis.get("daily_close"))
+        daily_azd = float(analysis.get("daily_azd"))
+        daily_czd = float(analysis.get("daily_czd"))
+        min_zd = min(daily_azd, daily_czd)
+        if min_zd != 0:
+            deviation = (check_price - min_zd) / min_zd * 100
+            return f"min-ZD({min_zd:.2f})，现价{check_price:.2f}偏离{deviation:+.2f}%"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 def _core_reason(analysis: Dict[str, Any], market_state: str = "") -> str:
     """
-    从状态机分析结果中提取风控驱动的核心原因（简洁版）。
-    匹配优先级（高→低）：大盘危险 > 跌破A-ZD > 跌破C-ZD > 顶背驰 > 买点确认
-    若 reason 被降级覆盖导致丢失核心风控信息，从 market_state 兜底推断。
+    从状态机分析结果中提取风控驱动的核心原因（增强版）。
+    匹配优先级（高→低）：跌破min-ZD > 顶背驰 > 买点确认
+    增强内容：防线偏离幅度、级别对齐详情、笔方向。
     """
     state = analysis.get("state", "")
     reason = analysis.get("reason") or ""
-    if "大盘极度危险" in reason:
-        return "大盘极度危险，强制清仓" if state == "SELL" else "大盘极度危险，禁止开新仓"
-    if "跌破战略底线" in reason or "跌破 A-ZD" in reason:
-        return "跌破战略底线 A-ZD，强制清仓" if state == "SELL" else "跌破战略底线 A-ZD，拉黑"
-    if "跌破战术防线" in reason or "跌破 C-ZD" in reason:
-        return "跌破战术防线 C-ZD，清仓" if state == "SELL" else "跌破战术防线 C-ZD，放弃狙击"
+
+    # 辅助：级别对齐详情
+    def _align_detail() -> str:
+        h15_align = analysis.get("h15_level_alignment")
+        if h15_align:
+            align_reason = getattr(h15_align, "reason", "")
+            if align_reason:
+                return align_reason
+        return ""
+
+    # 辅助：笔方向
+    def _pen_dir() -> str:
+        h60_conditions = analysis.get("h60_conditions") or {}
+        return "向上笔" if h60_conditions.get("last_pen_up") else "向下笔"
+
+    if "跌破战略底线" in reason or "跌破 min-ZD" in reason:
+        detail = _defense_detail(analysis)
+        base = "跌破战略底线，强制清仓" if state == "SELL" else "跌破战略底线，拉黑"
+        return f"{base} | {detail}" if detail else base
+
     if "顶背驰" in reason:
-        return "60分钟向上笔+15分钟顶背驰"
+        align = _align_detail()
+        base = "60分钟向上笔+15分钟顶背驰"
+        return f"{base} | {align}" if align else base
+
     if "一买确认" in reason or "二买确认" in reason or "三买确认" in reason:
         return reason
+
     if "无买卖点" in reason or "中枢震荡" in reason:
-        # 兜底：若 reason 被降级覆盖但 market_state 为 DEAD/DANGER，优先展示风控原因
-        if market_state == "MARKET_DEAD":
-            return "大盘极度危险，强制清仓" if state == "SELL" else "大盘极度危险，禁止开新仓"
-        if market_state == "MARKET_DANGER":
-            if state == "SELL":
-                return "大盘警戒，强制清仓"
-            if state == "HOLD":
-                return "大盘警戒，持仓观望"
-            return "大盘警戒，禁止开新仓"
-        return reason
+        pen_dir = _pen_dir()
+        return f"{reason}，{pen_dir}" if pen_dir else reason
+
     if "持仓中" in reason:
-        return reason
-    if "大盘警戒" in reason:
-        return reason
+        pen_dir = _pen_dir()
+        return f"{reason}，{pen_dir}" if pen_dir else reason
+
     # 最终兜底
-    if market_state == "MARKET_DEAD":
-        return "大盘极度危险，强制清仓" if state == "SELL" else "大盘极度危险，禁止开新仓"
-    if market_state == "MARKET_DANGER":
-        if state == "SELL":
-            return "大盘警戒，强制清仓"
-        if state == "HOLD":
-            return "大盘警戒，持仓观望"
-        return "大盘警戒，禁止开新仓"
     return reason
 
 
@@ -234,7 +272,7 @@ def _daily_risk_level(analysis: Dict[str, Any], price: Any = None) -> str:
 
 def _pen_direction(analysis: Dict[str, Any]) -> str:
     """60分钟最后一笔有效笔方向。"""
-    h60_conditions = analysis.get("h60_conditions", {})
+    h60_conditions = analysis.get("h60_conditions") or {}
     return "向上" if h60_conditions.get("last_pen_up") else "向下"
 
 
@@ -281,7 +319,7 @@ def _has_bottom_fractal(h15_result: Optional[Dict[str, Any]]) -> str:
         return "否"
 
 
-def _build_structured_reason(
+def _build_smart_reason(
     market_state: str,
     analysis: Dict[str, Any],
     chan_sig: str,
@@ -289,13 +327,46 @@ def _build_structured_reason(
     trade_sig: str,
 ) -> str:
     """
-    基于四个维度生成结构化决策理由。
-    格式：【大盘】{大盘状态} | 【日线】{日线风控} | 【缠论】{缠论信号} | 【15分】{15分信号} → {交易信号}（{核心原因}）
+    智能决策理由：将客观缠论信号与实际交易动作结合归因。
+
+    场景映射：
+    - 空仓遇卖点：客观有卖点但动作=观望/IGNORE → "图表触发卖点，但当前空仓，无视卖点，继续观望"
+    - 持仓遇风控：动作=风控卖出 → "防线触发风控，无视个股结构，强制清仓"
+    - 正常背驰卖出：动作=卖出（非风控） → "跨周期顶背驰确认，执行止盈卖出"
+    - 正常买点：动作=买入 → "触发买点，符合开仓条件，执行买入"
+    - 持仓无卖点：动作=持仓 → "持仓中，无明确卖点，继续观望"
     """
-    daily_risk = _daily_risk_level(analysis)
     core = _core_reason(analysis, market_state)
-    market_cn = _to_chinese_market_state(market_state)
-    return f"【大盘】{market_cn} | 【日线】{daily_risk} | 【缠论】{chan_sig} | 【15分】{h15_sig} → {trade_sig}（{core}）"
+    state = analysis.get("state", "IGNORE")
+    is_holding = analysis.get("is_holding", False)
+
+    # 场景 A：空仓遇卖点（客观有卖点，但状态机输出 IGNORE）
+    if state == "IGNORE" and chan_sig and chan_sig not in ("无信号", ""):
+        if any(s in chan_sig for s in ("卖", "顶背驰")):
+            return f"图表触发 {chan_sig}，但当前空仓，无视卖点，继续观望"
+        if any(s in chan_sig for s in ("买", "底背驰")):
+            return f"图表触发 {chan_sig}，但买入条件不满足，继续观望"
+        return f"图表触发 {chan_sig}，但条件不满足，继续观望"
+
+    # 场景 B：持仓遇风控（防线驱动）
+    # 注：core 中已包含防线偏离详情（_core_reason 的"跌破战略底线"分支），此处不再重复拼接
+    if trade_sig == "风控卖出":
+        return f"防线触发风控，无视个股结构，强制清仓（{core}）"
+
+    # 场景 C：正常背驰/卖点卖出（非风控）
+    if trade_sig in ("卖出", "一卖", "二卖", "三卖"):
+        return f"{core}，执行止盈卖出"
+
+    # 场景 D：正常买点
+    if trade_sig in ("一买", "二买", "三买"):
+        return f"触发 {trade_sig}，符合开仓条件，执行买入"
+
+    # 场景 E：持仓无卖点
+    if trade_sig == "持仓":
+        return core  # core 中已包含持仓相关描述，避免前缀重复
+
+    # 兜底
+    return f"【日线】{_daily_risk_level(analysis)} | 【缠论】{chan_sig} | 【15分】{h15_sig} → {trade_sig}（{core}）"
 
 
 def build_snapshot_data(
@@ -317,34 +388,33 @@ def build_snapshot_data(
     h60_result = copy.deepcopy(h60_result) if h60_result else None
     h15_result = copy.deepcopy(h15_result) if h15_result else None
 
-    # 现价：优先取15分钟最后一根收盘价，其次日线收盘价
-    price = analysis.get("daily_close")
-    if h15_result and h15_result.get("data"):
-        try:
-            price = h15_result["data"][-1].get("close", price)
-        except Exception:
-            pass
+    # 现价：直接使用状态机已计算好的 latest_close（优先级 15m > 60m > 日线），避免与决策逻辑分歧
+    price = analysis.get("latest_close") or analysis.get("daily_close")
 
     dif, dea = _h15_macd(h15_result)
 
     chan_sig = _chan_signal(buy_signals, sell_signals)
     h15_sig = _h15_signal(analysis)
-    trade_sig = _to_chinese_trade_signal(analysis.get("state", "IGNORE"), sell_signals)
-    structured_reason = _build_structured_reason(
+    trade_sig = _to_chinese_trade_signal(
+        analysis.get("state", "IGNORE"),
+        sell_signals,
+        analysis.get("reason", ""),
+    )
+    smart_reason = _build_smart_reason(
         market_state, analysis, chan_sig, h15_sig, trade_sig
     )
 
     return {
         "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "实际交易动作": trade_sig,
+        "大盘状态": _to_chinese_market_state(market_state),
         "代码": str(code),
         "名称": str(name),
         "现价": _fmt_float(price),
-        "大盘状态": _to_chinese_market_state(market_state),
         "日线风控": _daily_risk_level(analysis, price),
-        "缠论信号": chan_sig,
+        "客观缠论信号": chan_sig,
         "15分信号": h15_sig,
-        "交易信号": trade_sig,
-        "决策理由": structured_reason,
+        "决策理由": smart_reason,
         "60m笔方向": _pen_direction(analysis),
         "日线A中枢ZD": _fmt_float(analysis.get("daily_azd")),
         "日线C中枢ZD": _fmt_float(analysis.get("daily_czd")),
@@ -355,10 +425,35 @@ def build_snapshot_data(
     }
 
 
+def _read_last_csv_time(path: Path) -> Optional[str]:
+    """读取 CSV 最后一行的第一个字段（时间戳），通过 seek 到文件末尾避免全文件扫描。"""
+    try:
+        with open(path, "rb") as f:
+            # 定位到文件末尾前 4KB（足够覆盖最后一行）
+            f.seek(0, 2)
+            file_size = f.tell()
+            seek_pos = max(0, file_size - 4096)
+            f.seek(seek_pos)
+            # 如果是从文件中间开始读，先丢弃第一行（可能不完整）
+            if seek_pos > 0:
+                f.readline()
+            lines = f.read().decode("utf-8-sig").splitlines()
+            # 从后往前找第一个非空行
+            for line in reversed(lines):
+                line = line.strip()
+                if line:
+                    # 取第一个逗号前的内容即时间戳
+                    return line.split(",")[0] if "," in line else line
+    except Exception:
+        logging.debug("csv_logger: 读取最后一行时间戳失败", exc_info=True)
+    return None
+
+
 def log_snapshot(data_dict: Dict[str, Any]) -> None:
     """
     将快照字典追加写入 CSV。文件不存在时自动写入表头。
     若检测到表头变更（字段增减），自动备份旧文件并重建新表头。
+    时间戳变化时自动插入空行分隔，提升可读性。
     所有异常被静默捕获，绝不阻塞主交易逻辑。
     """
     try:
@@ -387,6 +482,15 @@ def log_snapshot(data_dict: Dict[str, Any]) -> None:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
             if not file_exists:
                 writer.writeheader()
+            else:
+                # 时间戳变化时插入空行分隔（跳过表头行）
+                last_time = _read_last_csv_time(path)
+                if last_time and last_time != time_str:
+                    try:
+                        datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
+                        f.write("\r\n")  # 与 csv.writer 默认换行符保持一致
+                    except ValueError:
+                        pass  # last_time 是表头或其他非时间戳文本，跳过
             writer.writerow(data_dict)
     except Exception:
         logging.warning("csv_logger: 快照写入失败", exc_info=True)

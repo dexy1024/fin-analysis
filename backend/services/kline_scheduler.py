@@ -212,7 +212,7 @@ def _check_positions_stop_loss() -> None:
 
 
 def run_scheduled_slot(include_daily: bool) -> None:
-    """单次槽位任务：可选全量日线同步 → 全量 60m → 全量 15m → 持仓止损检查 → 双防线雷达（读本地，不写网）。"""
+    """单次槽位任务：可选全量日线同步 → 全量 60m → 全量 15m → 持仓止损检查 → 双防线雷达 → 买卖信号。"""
     timestamp = datetime.now(TZ_SH).isoformat()
     logging.info("kline_scheduler: 槽位开始 include_daily=%s", include_daily)
     if include_daily:
@@ -240,14 +240,6 @@ def run_scheduled_slot(include_daily: bool) -> None:
         logging.info("kline_scheduler: 买卖信号已写入 %s", buy_sell_path)
     except _SCHEDULER_EXPECTED_EXCEPTIONS:
         logging.exception("kline_scheduler: 买卖信号计算失败")
-
-    # 作战指令引擎（无头决策报告生成）
-    try:
-        from services.trade_command_engine import run_trade_command_engine
-        report_path = run_trade_command_engine()
-        logging.info("kline_scheduler: 作战指令报告已生成 %s", report_path)
-    except _SCHEDULER_EXPECTED_EXCEPTIONS:
-        logging.exception("kline_scheduler: 作战指令引擎失败")
 
     # 调度完成后广播 SSE 消息
     try:
@@ -348,9 +340,31 @@ def _scheduler_worker_loop() -> None:
     try:
         if slot_type == 'main':
             run_scheduled_slot(include_daily)
+            # 主槽位也触发状态机快照，确保15分钟CSV不漏
+            try:
+                from services.trade_command_engine import run_trade_command_engine
+                run_trade_command_engine(generate_report=False)
+                logging.info("kline_scheduler: 主槽位状态机快照已写入 CSV")
+            except Exception:
+                logging.exception("kline_scheduler: 主槽位状态机快照失败")
         else:
             _sync_all_15m()
             logging.info("kline_scheduler: 15m 独立同步完成")
+            # 15分钟独立槽位：触发状态机快照（不写 Markdown 报告）
+            try:
+                from services.trade_command_engine import run_trade_command_engine
+                run_trade_command_engine(generate_report=False)
+                logging.info("kline_scheduler: 15m 状态机快照已写入 CSV")
+            except Exception:
+                logging.exception("kline_scheduler: 15m 状态机快照失败")
+            # 14:46 槽位发送邮件通知（收盘前最后一根15分钟K线结束后）
+            try:
+                now_hm = datetime.now(TZ_SH)
+                if now_hm.hour == 14 and now_hm.minute == 46:
+                    from services.email_notifier import send_snapshot_alert
+                    send_snapshot_alert(slot_time=now_hm)
+            except Exception:
+                logging.exception("kline_scheduler: 邮件通知发送失败")
         global _last_slot_time, _slot_execution_count
         with _slot_lock:
             _last_slot_time = datetime.now(TZ_SH)

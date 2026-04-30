@@ -23,6 +23,15 @@ if [ -d "${HOME}/.local/bin" ]; then
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
+# 加载项目级环境变量（.env 中放置敏感配置）
+ENV_FILE="${ROOT_DIR}/.env"
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${ENV_FILE}"
+  set +a
+fi
+
 # 设置代理（Clash Verge）
 export HTTP_PROXY="http://127.0.0.1:7897"
 export HTTPS_PROXY="http://127.0.0.1:7897"
@@ -57,14 +66,14 @@ PYTHON_FOR_BACKEND="$(pick_python_with_uvicorn)"
 graceful_kill_port() {
   local port=$1
   local pids
-  pids=$(lsof -ti:${port} 2>/dev/null)
+  pids=$(lsof -ti:${port} 2>/dev/null || true)
   if [ -n "${pids}" ]; then
     echo "Sending SIGTERM to processes on port ${port}: ${pids}"
     echo "${pids}" | xargs kill -15 2>/dev/null || true
     # 等待最多 5 秒让进程优雅退出
     for i in 1 2 3 4 5; do
       sleep 1
-      pids=$(lsof -ti:${port} 2>/dev/null)
+      pids=$(lsof -ti:${port} 2>/dev/null || true)
       if [ -z "${pids}" ]; then
         echo "Port ${port} cleared gracefully"
         return 0
@@ -79,11 +88,11 @@ graceful_kill_port() {
 graceful_kill_pattern() {
   local pattern=$1
   local pids
-  pids=$(pgrep -f "${pattern}" 2>/dev/null)
+  pids=$(pgrep -f "${pattern}" 2>/dev/null || true)
   if [ -n "${pids}" ]; then
     echo "${pids}" | xargs kill -15 2>/dev/null || true
     sleep 2
-    pids=$(pgrep -f "${pattern}" 2>/dev/null)
+    pids=$(pgrep -f "${pattern}" 2>/dev/null || true)
     if [ -n "${pids}" ]; then
       echo "${pids}" | xargs kill -9 2>/dev/null || true
     fi
@@ -114,6 +123,17 @@ echo "Ports cleared successfully"
 timestamp="$(date +"%Y%m%d_%H%M%S")"
 backend_log="${LOG_DIR}/backend_${timestamp}.log"
 frontend_log="${LOG_DIR}/frontend_${timestamp}.log"
+
+# 检查邮件通知环境变量配置
+if [ -z "${EMAIL_SENDER:-}" ] || [ -z "${EMAIL_PASSWORD:-}" ] || [ -z "${EMAIL_RECIPIENT:-}" ]; then
+  echo
+  echo "【提示】邮件通知功能未配置，14:46 快照后将不会推送邮件。"
+  echo "      如需启用，请在启动前设置以下环境变量："
+  echo "      export EMAIL_SENDER=\"your_qq@qq.com\""
+  echo "      export EMAIL_PASSWORD=\"your_qq_auth_code\""
+  echo "      export EMAIL_RECIPIENT=\"recipient@example.com\""
+  echo
+fi
 
 echo "Starting backend on port ${BACKEND_PORT} (python: ${PYTHON_FOR_BACKEND}, workers: 2)..."
 nohup bash -lc "cd \"${BACKEND_DIR}\" && \"${PYTHON_FOR_BACKEND}\" -m gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:${BACKEND_PORT} --timeout 120 --access-logfile -" >"${backend_log}" 2>&1 &

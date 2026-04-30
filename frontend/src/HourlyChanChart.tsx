@@ -1427,13 +1427,13 @@ export function HourlyChanChart({
                         data: [[thirdSellPoint.date, thirdSellPoint.price]] as [string, number][],
                         symbol: 'diamond',
                         symbolSize: 12,
-                        itemStyle: { color: '#111827' }, // 黑色
+                        itemStyle: { color: '#ef4444' }, // 红色（与清仓卖一致）
                         label: {
                           show: true,
                           formatter: '三卖·清仓',
                           position: 'top',
                           distance: 15,
-                          color: '#111827',
+                          color: '#ef4444',
                           fontWeight: 'bold',
                           fontSize: 20,
                         },
