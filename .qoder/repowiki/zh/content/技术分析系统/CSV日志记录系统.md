@@ -14,7 +14,16 @@
 - [watchlist.json](file://backend/data/watchlist.json)
 - [observation.json](file://backend/data/observation.json)
 - [README.md](file://README.md)
+- [snapshots_2026.csv](file://logs/snapshots_2026.csv)
 </cite>
+
+## 更新摘要
+**变更内容**
+- 更新了时间戳处理机制，支持更精细的时间分隔和空行分隔
+- 增强了智能决策理由生成器，提供更详细的交易决策解释
+- 改进了表头兼容性处理，自动备份旧文件并重建新表头
+- 新增了更全面的信号映射和格式化函数
+- 优化了CSV文件组织结构，提升可读性和维护性
 
 ## 目录
 1. [项目概述](#项目概述)
@@ -36,6 +45,7 @@
 - **多级别缠论分析**：支持日线、60分钟、15分钟多级别的技术分析
 - **双防线雷达系统**：提供风险预警和投资机会识别
 - **CSV日志记录**：标准化的数据输出格式，支持Excel直接打开
+- **智能决策理由**：提供详细的交易决策解释和分析依据
 
 ## 系统架构
 
@@ -80,7 +90,7 @@ LOGGER --> LOGS
 
 ### 模块设计原理
 
-CSV日志记录系统采用"按年分文件"的设计理念，确保日志文件大小可控，便于管理和查询。
+CSV日志记录系统采用"按年分文件"的设计理念，确保日志文件大小可控，便于管理和查询。系统新增了智能决策理由生成器，提供更详细的交易决策解释。
 
 ```mermaid
 classDiagram
@@ -95,7 +105,7 @@ class CSVLogger {
 }
 class DataFormatter {
 +_to_chinese_market_state(state) str
-+_to_chinese_trade_signal(state, signals) str
++_to_chinese_trade_signal(state, signals, reason) str
 +_h15_signal(analysis) str
 +_chan_signal(buy_signals, sell_signals) str
 +_daily_risk_level(analysis, price) str
@@ -106,49 +116,58 @@ class FileHandler {
 +_ensure_logs_dir() Path
 +log_snapshot(data_dict) None
 }
+class SmartReasonGenerator {
++_core_reason(analysis, market_state) str
++_build_smart_reason(market_state, analysis, chan_sig, h15_sig, trade_sig) str
++_defense_detail(analysis) str
++_align_detail() str
++_pen_dir() str
+}
 CSVLogger --> DataFormatter : "使用"
 CSVLogger --> FileHandler : "使用"
+CSVLogger --> SmartReasonGenerator : "使用"
 ```
 
 **类图来源**
 - [csv_logger.py:22-40](file://backend/utils/csv_logger.py#L22-L40)
 - [csv_logger.py:301-355](file://backend/utils/csv_logger.py#L301-L355)
 - [csv_logger.py:358-393](file://backend/utils/csv_logger.py#L358-L393)
+- [csv_logger.py:322-370](file://backend/utils/csv_logger.py#L322-L370)
 
 ### 数据结构设计
 
-系统定义了固定的CSV表头，确保数据的一致性和可解析性：
+系统定义了固定的CSV表头，确保数据的一致性和可解析性。表头经过优化，增加了更多分析维度：
 
 | 字段名称 | 数据类型 | 描述 |
 |---------|---------|------|
-| 时间 | 字符串 | 格式化的时间戳 |
+| 时间 | 字符串 | 格式化的时间戳（精确到秒） |
+| 实际交易动作 | 字符串 | 最终执行的交易决策 |
+| 大盘状态 | 字符串 | 市场整体状态（安全/警戒/极度危险） |
 | 代码 | 字符串 | 股票代码 |
 | 名称 | 字符串 | 股票名称 |
-| 现价 | 数值 | 当前价格 |
-| 大盘状态 | 字符串 | 市场整体状态 |
-| 日线风控 | 字符串 | 日线级别风控状态 |
-| 缠论信号 | 字符串 | 缠论技术信号 |
-| 15分信号 | 字符串 | 15分钟级别信号 |
-| 交易信号 | 字符串 | 最终交易决策 |
-| 决策理由 | 字符串 | 详细决策说明 |
-| 60m笔方向 | 字符串 | 60分钟笔的方向 |
-| 日线A中枢ZD | 数值 | A中枢支撑位 |
-| 日线C中枢ZD | 数值 | C中枢支撑位 |
-| 锁定ZG | 数值 | 中枢阻力位 |
-| 15m_DIF | 数值 | 15分钟DIF指标 |
-| 15m_DEA | 数值 | 15分钟DEA指标 |
-| 底分型成立 | 字符串 | 是否出现底分型 |
+| 现价 | 数值 | 当前价格（保留2位小数） |
+| 日线风控 | 字符串 | 日线级别风控状态（安全/日线破位） |
+| 客观缠论信号 | 字符串 | 缠论技术信号（一买/二买/三买/一卖/二卖/三卖/无信号） |
+| 15分信号 | 字符串 | 15分钟级别信号（底背驰/顶背驰/级别对齐等） |
+| 决策理由 | 字符串 | 详细决策说明和分析依据 |
+| 60m笔方向 | 字符串 | 60分钟笔的方向（向上/向下） |
+| 日线A中枢ZD | 数值 | A中枢支撑位（保留2位小数） |
+| 日线C中枢ZD | 数值 | C中枢支撑位（保留2位小数） |
+| 锁定ZG | 数值 | 中枢阻力位（保留2位小数） |
+| 15m_DIF | 数值 | 15分钟DIF指标（保留4位小数） |
+| 15m_DEA | 数值 | 15分钟DEA指标（保留4位小数） |
+| 底分型成立 | 字符串 | 是否出现底分型（是/否） |
 
 **表头定义来源**
 - [csv_logger.py:22-40](file://backend/utils/csv_logger.py#L22-L40)
 
 ### 数据格式化策略
 
-系统实现了多层次的数据格式化机制：
+系统实现了多层次的数据格式化机制，包括智能决策理由生成：
 
 ```mermaid
 flowchart TD
-RAW[原始分析数据] --> FORMAT1[数值格式化<br/>保留2位小数]
+RAW[原始分析数据] --> FORMAT1[数值格式化<br/>保留2位/4位小数]
 RAW --> FORMAT2[信号映射<br/>英文转中文]
 RAW --> FORMAT3[风险等级计算<br/>基于价格关系]
 RAW --> FORMAT4[结构化描述<br/>组合多个维度]
@@ -156,19 +175,40 @@ FORMAT1 --> CLEAN[清洗处理<br/>空值处理]
 FORMAT2 --> CLEAN
 FORMAT3 --> CLEAN
 FORMAT4 --> CLEAN
-CLEAN --> OUTPUT[CSV行字典]
+CLEAN --> SMART_REASON[智能决策理由生成]
+SMART_REASON --> OUTPUT[CSV行字典]
 ```
 
 **格式化流程来源**
 - [csv_logger.py:108-126](file://backend/utils/csv_logger.py#L108-L126)
 - [csv_logger.py:128-191](file://backend/utils/csv_logger.py#L128-L191)
 - [csv_logger.py:284-299](file://backend/utils/csv_logger.py#L284-L299)
+- [csv_logger.py:322-370](file://backend/utils/csv_logger.py#L322-L370)
+
+### 智能决策理由生成器
+
+系统新增了智能决策理由生成器，提供详细的交易决策解释：
+
+```mermaid
+flowchart TD
+INPUT[输入参数] --> CORE_REASON[核心风控原因<br/>跌破min-ZD/顶背驰/买点确认]
+INPUT --> STATE_CHECK[状态检查<br/>空仓/持仓/风控]
+INPUT --> SCENARIO[场景分类<br/>空仓遇卖点/持仓遇风控/正常背驰卖出/正常买点/持仓无卖点]
+CORE_REASON --> SCENARIO
+STATE_CHECK --> SCENARIO
+SCENARIO --> BUILD_REASON[构建详细理由<br/>包含级别对齐/笔方向/防线偏离]
+BUILD_REASON --> OUTPUT[最终决策理由]
+```
+
+**智能理由生成来源**
+- [csv_logger.py:322-370](file://backend/utils/csv_logger.py#L322-L370)
+- [csv_logger.py:183-229](file://backend/utils/csv_logger.py#L183-L229)
 
 ## 数据流分析
 
 ### 定时任务触发流程
 
-系统通过定时任务驱动CSV日志记录：
+系统通过定时任务驱动CSV日志记录，新增了智能决策理由生成和表头兼容性检查：
 
 ```mermaid
 sequenceDiagram
@@ -180,7 +220,9 @@ participant File as CSV文件
 Scheduler->>Engine : 触发15分钟槽位
 Engine->>Engine : 计算状态机
 Engine->>Logger : 生成快照数据
-Logger->>File : 写入CSV行
+Logger->>Logger : 生成智能决策理由
+Logger->>Logger : 检查表头兼容性
+Logger->>File : 写入CSV行含空行分隔
 File-->>Logger : 确认写入
 Logger-->>Engine : 记录完成
 Note over Scheduler,File : 每日16 : 01触发完整流程
@@ -192,7 +234,7 @@ Note over Scheduler,File : 每日16 : 01触发完整流程
 
 ### 数据采集与处理
 
-系统采用多源数据融合的方式：
+系统采用多源数据融合的方式，新增了智能决策理由生成：
 
 ```mermaid
 graph LR
@@ -201,22 +243,26 @@ DAILY[日线数据]
 H60[60分钟数据]
 H15[15分钟数据]
 INDEX[上证指数]
-end
+ANALYSIS[状态机分析结果]
+END
 subgraph "处理层"
 ANALYZER[状态机分析器]
 FORMATTER[数据格式化器]
+SMART_REASON[智能决策理由生成器]
 VALIDATOR[数据验证器]
-end
+END
 subgraph "输出层"
 CSV[CSV文件]
 JSON[JSON摘要]
 MD[Markdown报告]
-end
+END
 DAILY --> ANALYZER
 H60 --> ANALYZER
 H15 --> ANALYZER
 INDEX --> ANALYZER
+ANALYSIS --> SMART_REASON
 ANALYZER --> FORMATTER
+SMART_REASON --> FORMATTER
 FORMATTER --> VALIDATOR
 VALIDATOR --> CSV
 VALIDATOR --> JSON
@@ -239,21 +285,26 @@ VALIDATOR --> MD
 
 ### 文件I/O优化
 
+系统新增了智能文件处理机制：
+
 ```mermaid
 flowchart TD
 WRITE[写入请求] --> CHECK[检查文件是否存在]
 CHECK --> |不存在| HEADER[写入表头]
 CHECK --> |存在| COMPARE[比较表头一致性]
 COMPARE --> |不一致| BACKUP[备份旧文件]
-COMPARE --> |一致| APPEND[追加写入]
+COMPARE --> |一致| CHECK_TIMESTAMP[检查时间戳变化]
 BACKUP --> CREATE[创建新文件]
 CREATE --> HEADER
-HEADER --> APPEND
+CHECK_TIMESTAMP --> |时间戳变化| INSERT_EMPTY_LINE[插入空行分隔]
+CHECK_TIMESTAMP --> |时间戳相同| APPEND[追加写入]
+INSERT_EMPTY_LINE --> APPEND
 APPEND --> SUCCESS[写入成功]
 ```
 
 **性能优化来源**
 - [csv_logger.py:364-393](file://backend/utils/csv_logger.py#L364-L393)
+- [csv_logger.py:428-497](file://backend/utils/csv_logger.py#L428-L497)
 
 ### 并发安全性
 
@@ -262,6 +313,7 @@ APPEND --> SUCCESS[写入成功]
 - **文件锁机制**：使用fcntl实现跨进程文件锁定
 - **线程安全**：所有共享资源使用RLock保护
 - **原子操作**：写入操作采用原子性保证
+- **异常静默处理**：确保日志记录不影响主业务流程
 
 ## 错误处理与可靠性
 
@@ -287,6 +339,7 @@ CONTINUE --> END
 - **表头兼容性**：自动检测表头变更并备份旧文件
 - **数据验证**：对关键字段进行格式验证
 - **回滚机制**：写入失败时自动回滚到之前状态
+- **智能恢复**：支持部分字段缺失的情况
 
 ### 监控与告警
 
@@ -295,6 +348,7 @@ CONTINUE --> END
 - **心跳检测**：定期更新调度器状态文件
 - **异常日志**：详细记录所有异常信息
 - **健康检查**：提供调度器状态查询接口
+- **文件完整性检查**：监控CSV文件的完整性
 
 ## 扩展性设计
 
@@ -308,15 +362,18 @@ subgraph "核心模块"
 LOGGER[CSV日志记录器]
 ANALYZER[数据分析器]
 FORMATTER[数据格式化器]
-end
+SMART_REASON[智能决策理由生成器]
+END
 subgraph "扩展模块"
 NEW_LOGGER[新的日志记录器]
 CUSTOM_ANALYZER[自定义分析器]
 EXT_FORMATTER[扩展格式化器]
-end
+CUSTOM_REASON[自定义理由生成器]
+END
 LOGGER -.-> NEW_LOGGER
 ANALYZER -.-> CUSTOM_ANALYZER
 FORMATTER -.-> EXT_FORMATTER
+SMART_REASON -.-> CUSTOM_REASON
 ```
 
 ### 配置灵活性
@@ -324,6 +381,7 @@ FORMATTER -.-> EXT_FORMATTER
 - **动态配置**：支持运行时调整日志级别和输出格式
 - **插件机制**：可扩展新的数据源和分析算法
 - **环境适配**：支持不同部署环境的配置需求
+- **智能兼容**：自动处理表头变更和格式升级
 
 ## 故障排查指南
 
@@ -335,6 +393,8 @@ FORMATTER -.-> EXT_FORMATTER
 | 表头不匹配 | 数据结构变更 | 系统自动备份旧文件并创建新表头 |
 | 数据格式异常 | 输入数据格式错误 | 检查上游数据源的格式规范 |
 | 性能下降 | 缓存过多或文件过大 | 清理历史文件和优化缓存策略 |
+| 决策理由不准确 | 分析参数配置错误 | 检查智能决策理由生成器配置 |
+| 时间戳混乱 | 系统时间设置错误 | 校准系统时间并检查时区设置 |
 
 ### 调试工具
 
@@ -343,6 +403,7 @@ FORMATTER -.-> EXT_FORMATTER
 - **状态查询**：通过API查询调度器和日志记录器状态
 - **手动触发**：支持手动运行雷达和交易引擎
 - **日志分析**：详细的日志记录便于问题定位
+- **CSV文件检查**：验证CSV文件的完整性和格式正确性
 
 **调试入口来源**
 - [run_defense_radar.py:22-31](file://backend/run_defense_radar.py#L22-L31)
@@ -350,11 +411,15 @@ FORMATTER -.-> EXT_FORMATTER
 
 ## 总结
 
-CSV日志记录系统是一个设计精良的金融数据分析基础设施，具有以下突出特点：
+CSV日志记录系统是一个设计精良的金融数据分析基础设施，经过大幅增强后具有以下突出特点：
 
-1. **可靠性**：采用多重防护机制，确保系统稳定运行
-2. **可扩展性**：模块化设计支持功能扩展和定制化需求
-3. **性能优化**：通过缓存、并发控制等手段优化系统性能
-4. **易用性**：提供友好的API接口和详细的文档支持
+1. **智能化决策支持**：新增智能决策理由生成器，提供详细的交易决策解释
+2. **可靠性增强**：采用多重防护机制，确保系统稳定运行
+3. **可扩展性提升**：模块化设计支持功能扩展和定制化需求
+4. **性能优化**：通过缓存、并发控制等手段优化系统性能
+5. **易用性改进**：提供友好的API接口和详细的文档支持
+6. **智能文件管理**：自动处理表头变更和时间戳分隔，提升可读性
 
-该系统为金融数据分析提供了坚实的基础，能够满足复杂的投资决策支持需求。通过CSV格式的标准化输出，系统确保了数据的可移植性和可分析性，为后续的数据挖掘和机器学习应用奠定了良好的基础。
+该系统为金融数据分析提供了坚实的基础，能够满足复杂的投资决策支持需求。通过CSV格式的标准化输出和智能决策理由生成，系统确保了数据的可移植性、可分析性和可解释性，为后续的数据挖掘、机器学习应用和投资决策支持奠定了良好的基础。
+
+**更新** 本次更新重点增强了时间戳处理机制、智能决策理由生成和文件组织结构，显著提升了系统的可读性和实用性。

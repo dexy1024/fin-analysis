@@ -82,6 +82,51 @@ def _read_latest_snapshot_records(csv_path: Path) -> List[dict]:
     return records
 
 
+def _read_snapshot_records_by_slot(
+    csv_path: Path, slot_time: datetime
+) -> List[dict]:
+    """
+    根据 slot_time 读取当天对应时间窗口（±5 分钟）的所有记录。
+    返回列表，每个元素为字段名到值的字典。
+    如果未找到匹配记录，返回空列表（由调用方决定是否 fallback）。
+    """
+    records: List[dict] = []
+    if not csv_path.is_file():
+        return records
+
+    try:
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return records
+
+            all_rows = list(reader)
+            if not all_rows:
+                return records
+
+            # 构建日期前缀和 ±5 分钟边界（统一为 naive datetime 以便与 CSV 时间比较）
+            date_prefix = slot_time.strftime("%Y-%m-%d")
+            slot_naive = slot_time.replace(tzinfo=None)
+            lower_bound = slot_naive.replace(second=0, microsecond=0)
+            upper_bound = lower_bound.replace(minute=lower_bound.minute + 5)
+
+            # 收集落在时间窗口内的记录（同一天、同一小时、分钟在 [MM, MM+5] 区间）
+            for row in all_rows:
+                t = row.get("时间", "").strip()
+                if not t.startswith(date_prefix):
+                    continue
+                try:
+                    row_dt = datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+                    if lower_bound <= row_dt <= upper_bound:
+                        records.append(row)
+                except ValueError:
+                    continue
+    except Exception:
+        logging.warning("email_notifier: 按槽位读取 CSV 失败", exc_info=True)
+
+    return records
+
+
 def _filter_alert_records(records: List[dict]) -> List[Tuple[str, str, str]]:
     """
     筛选出「实际交易动作」不是"持仓"和"观望"的标的。
@@ -143,7 +188,17 @@ def send_snapshot_alert(
     if csv_path is None:
         csv_path = LOGS_DIR / f"snapshots_{now.year}.csv"
 
-    records = _read_latest_snapshot_records(csv_path)
+    # 优先根据 slot_time 读取对应时间窗口（±5 分钟）的数据
+    if slot_time is not None:
+        records = _read_snapshot_records_by_slot(csv_path, slot_time)
+        if not records:
+            logging.info(
+                "email_notifier: 未找到 %s 对应时间窗口的 CSV 记录，fallback 到最新时间戳",
+                slot_time.strftime("%Y-%m-%d %H:%M"),
+            )
+            records = _read_latest_snapshot_records(csv_path)
+    else:
+        records = _read_latest_snapshot_records(csv_path)
     alerts = _filter_alert_records(records)
 
     # 从记录中提取最新时间戳并格式化为 YYYYMMDDHH
