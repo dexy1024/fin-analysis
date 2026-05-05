@@ -1,9 +1,12 @@
 {
-  "generated_at": "2026-05-03T12:46:29",
+  "generated_at": "2026-05-05T10:33:10",
   "broken_codes": [
     "000538",
     "000858",
-    "hk01810"
+    "hk01810",
+    "hk00700",
+    "hk01024",
+    "hk06862"
   ],
   "details": [
     {
@@ -331,16 +334,64 @@
       "name": "小米集团",
       "is_broken": true,
       "a_zd": 32.78,
-      "c_zd": 31.52,
-      "last_price": 29.02
+      "c_zd": 30.26,
+      "last_price": 30.14
+    },
+    {
+      "code": "hk03690",
+      "name": "美团",
+      "is_broken": false,
+      "a_zd": 78.7,
+      "c_zd": 83.75,
+      "last_price": 82.9
+    },
+    {
+      "code": "hk03896",
+      "name": "金山云",
+      "is_broken": false,
+      "a_zd": 7.58,
+      "c_zd": 7.8,
+      "last_price": 7.86
+    },
+    {
+      "code": "hk00700",
+      "name": "腾讯",
+      "is_broken": true,
+      "a_zd": 494.6,
+      "c_zd": 486.2,
+      "last_price": 470.0
+    },
+    {
+      "code": "hk09988",
+      "name": "阿里巴巴",
+      "is_broken": false,
+      "a_zd": 129.6,
+      "c_zd": 122.5,
+      "last_price": 132.4
+    },
+    {
+      "code": "hk01024",
+      "name": "快手",
+      "is_broken": true,
+      "a_zd": 48.9,
+      "c_zd": 44.22,
+      "last_price": 43.92
+    },
+    {
+      "code": "hk06618",
+      "name": "京东健康",
+      "is_broken": false,
+      "a_zd": 41.9,
+      "c_zd": 46.1,
+      "last_price": 45.18
     },
     {
       "code": "hk06862",
       "name": "海底捞",
-      "is_broken": false,
+      "is_broken": true,
       "a_zd": 14.22,
       "c_zd": 14.16,
-      "last_price": 14.36
+      "last_price": 14.13
     }
   ]
 }

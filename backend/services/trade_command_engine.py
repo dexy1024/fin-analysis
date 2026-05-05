@@ -865,16 +865,17 @@ def _compute_market_state(
 
 
 def _build_buy_hint_for_holding(
-    second_buy: bool, third_buy: bool, first_buy: bool
+    second_buy: bool, third_buy: bool, first_buy: bool, h15_top_div: bool = False
 ) -> str:
     """
     为持仓标的构建买点提示文案。
     优先级：二买 > 三买 > 一买
+    15分钟顶背驰时，抑制"可加仓"提示，改为观望等待。
     """
     if second_buy:
-        return "当前存在二买信号（可加仓）"
+        return "二买信号（等待15分回调结束）" if h15_top_div else "当前存在二买信号（可加仓）"
     if third_buy:
-        return "当前存在三买信号（可加仓）"
+        return "三买信号（等待15分回调结束）" if h15_top_div else "当前存在三买信号（可加仓）"
     if first_buy:
         return "当前存在一买信号（左侧试探）"
     return ""
@@ -1099,7 +1100,7 @@ def _classify_symbol_state(
     elif is_holding and h60_conditions["last_pen_up"]:
         state = "HOLD"
         buy_hint = _build_buy_hint_for_holding(
-            h60_second_buy, h60_third_buy, h60_first_buy
+            h60_second_buy, h60_third_buy, h60_first_buy, h15_top_div
         )
         if buy_hint:
             reason = f"持仓中，安全向上笔，{buy_hint}"
@@ -1109,7 +1110,7 @@ def _classify_symbol_state(
     elif is_holding:
         state = "HOLD"
         buy_hint = _build_buy_hint_for_holding(
-            h60_second_buy, h60_third_buy, h60_first_buy
+            h60_second_buy, h60_third_buy, h60_first_buy, h15_top_div
         )
         if buy_hint:
             reason = f"持仓中，{buy_hint}，无明确卖点，继续持仓"

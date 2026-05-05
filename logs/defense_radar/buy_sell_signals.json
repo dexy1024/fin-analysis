@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-03T13:11:59",
+  "generated_at": "2026-05-05T10:34:05",
   "buy_codes": [
     "688981",
     "601225",
@@ -7,7 +7,8 @@
     "588200",
     "588000",
     "600177",
-    "688041"
+    "688041",
+    "hk03896"
   ],
   "sell_codes": [
     "000429"
@@ -416,6 +417,66 @@
     {
       "code": "hk01810",
       "name": "小米集团",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk03690",
+      "name": "美团",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk03896",
+      "name": "金山云",
+      "first_buy": false,
+      "second_buy": true,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk00700",
+      "name": "腾讯",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk09988",
+      "name": "阿里巴巴",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk01024",
+      "name": "快手",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk06618",
+      "name": "京东健康",
       "first_buy": false,
       "second_buy": false,
       "third_buy": false,
