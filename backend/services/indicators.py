@@ -186,6 +186,8 @@ def _refresh_daily_cache_for_kline_symbol(symbol: str) -> None:
         load_index_daily_dataframe(api_sym, force_refresh=True)
     elif src == "a_share":
         load_a_share_daily_dataframe(api_sym, force_refresh=True)
+    elif src == "hk":
+        load_hk_daily_dataframe(symbol, force_refresh=True)
 
 
 def _kline_adjust_label(symbol: str) -> str:

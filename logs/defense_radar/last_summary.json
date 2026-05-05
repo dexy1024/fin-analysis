@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-30T16:04:11",
+  "generated_at": "2026-05-03T12:11:15",
   "symbols": [
     {
       "code": "510300",
@@ -134,7 +134,7 @@
       "full_trigger": false,
       "in_c_central": true,
       "has_bottom_div_in_switch": false,
-      "boll_buy": true
+      "boll_buy": false
     },
     {
       "code": "513360",
@@ -568,7 +568,7 @@
       "blue_triangle_strict": true,
       "full_trigger": false,
       "in_c_central": false,
-      "has_bottom_div_in_switch": false,
+      "has_bottom_div_in_switch": true,
       "boll_buy": false
     },
     {

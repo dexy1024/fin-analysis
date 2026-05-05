@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-30T16:04:11",
+  "generated_at": "2026-05-03T12:46:29",
   "broken_codes": [
     "000538",
     "000858",
@@ -332,7 +332,7 @@
       "is_broken": true,
       "a_zd": 32.78,
       "c_zd": 31.52,
-      "last_price": 29.04
+      "last_price": 29.02
     },
     {
       "code": "hk06862",
@@ -340,7 +340,7 @@
       "is_broken": false,
       "a_zd": 14.22,
       "c_zd": 14.16,
-      "last_price": 14.31
+      "last_price": 14.36
     }
   ]
 }
