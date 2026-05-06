@@ -68,5 +68,19 @@
     "sell_date": null,
     "sell_price": null,
     "sell_reason": null
+  },
+  {
+    "code": "hk01810",
+    "name": "小米集团",
+    "signal_type": "first_buy",
+    "buy_date": "2026-05-05 14:59",
+    "buy_price": 28.8,
+    "amount": 10000.0,
+    "tactical_stop": 28.8,
+    "strategic_stop": 28.8,
+    "status": "holding",
+    "sell_date": null,
+    "sell_price": null,
+    "sell_reason": null
   }
 ]

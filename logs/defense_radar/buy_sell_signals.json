@@ -1,17 +1,13 @@
 {
-  "generated_at": "2026-05-05T10:34:05",
+  "generated_at": "2026-05-06T16:04:40",
   "buy_codes": [
-    "688981",
-    "601225",
-    "002415",
-    "588200",
-    "588000",
-    "600177",
-    "688041",
-    "hk03896"
+    "159755",
+    "512400"
   ],
   "sell_codes": [
-    "000429"
+    "512400",
+    "000429",
+    "hk03896"
   ],
   "details": [
     {
@@ -28,17 +24,7 @@
       "code": "688981",
       "name": "中芯国际",
       "first_buy": false,
-      "second_buy": true,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "601225",
-      "name": "陕西煤业",
-      "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -75,30 +61,20 @@
       "third_sell": false
     },
     {
-      "code": "000001",
-      "name": "平安银行",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
-      "code": "000651",
-      "name": "格力电器",
-      "first_buy": false,
-      "second_buy": false,
-      "third_buy": false,
-      "first_sell": false,
-      "second_sell": false,
-      "third_sell": false
-    },
-    {
       "code": "002415",
       "name": "海康威视",
       "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "hk01810",
+      "name": "小米集团",
+      "first_buy": false,
+      "second_buy": false,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -128,7 +104,7 @@
       "code": "588200",
       "name": "科创芯片ETF",
       "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -138,7 +114,7 @@
       "code": "159755",
       "name": "电池ETF",
       "first_buy": false,
-      "second_buy": false,
+      "second_buy": true,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -198,7 +174,7 @@
       "code": "588000",
       "name": "科创50ETF",
       "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -208,11 +184,11 @@
       "code": "512400",
       "name": "有色金属ETF",
       "first_buy": false,
-      "second_buy": false,
+      "second_buy": true,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
-      "third_sell": false
+      "third_sell": true
     },
     {
       "code": "512690",
@@ -308,7 +284,7 @@
       "code": "600177",
       "name": "雅戈尔",
       "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -338,7 +314,17 @@
       "code": "688041",
       "name": "海光信息",
       "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "601225",
+      "name": "陕西煤业",
+      "first_buy": false,
+      "second_buy": false,
       "third_buy": false,
       "first_sell": false,
       "second_sell": false,
@@ -415,8 +401,18 @@
       "third_sell": false
     },
     {
-      "code": "hk01810",
-      "name": "小米集团",
+      "code": "000001",
+      "name": "平安银行",
+      "first_buy": false,
+      "second_buy": false,
+      "third_buy": false,
+      "first_sell": false,
+      "second_sell": false,
+      "third_sell": false
+    },
+    {
+      "code": "000651",
+      "name": "格力电器",
       "first_buy": false,
       "second_buy": false,
       "third_buy": false,
@@ -438,9 +434,9 @@
       "code": "hk03896",
       "name": "金山云",
       "first_buy": false,
-      "second_buy": true,
+      "second_buy": false,
       "third_buy": false,
-      "first_sell": false,
+      "first_sell": true,
       "second_sell": false,
       "third_sell": false
     },

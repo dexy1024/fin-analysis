@@ -138,27 +138,36 @@ def _h15_signal(analysis: Dict[str, Any]) -> str:
     根据15分钟分析结果生成组合详情信号。
     组合条件：底背驰 / 顶背驰 / 趋势底背驰 / 级别对齐
     用 '+' 连接多个同时成立的信号，无信号时返回 "无信号"。
+    互斥规则：按60分钟笔方向过滤，向上笔时只保留顶背驰，向下笔时只保留底背驰类信号。
     """
     signals: list[str] = []
-    if analysis.get("h15_bottom_div"):
-        signals.append("底背驰")
-    if analysis.get("h15_top_div"):
-        signals.append("顶背驰")
-    h15_trend = analysis.get("h15_trend_div")
-    if h15_trend and getattr(h15_trend, "has_signal", False):
-        # 项目中趋势背驰专指趋势底背驰（买点），显示完整语义
-        div_type_label = "趋势底背驰" if getattr(h15_trend, "divergence_type", "") == "trend" else "盘整底背驰"
-        signals.append(div_type_label)
-    # 仅当 15分钟有趋势背驰时才显示级别对齐状态
-    # 无趋势背驰时 is_aligned=True 仅为默认值，不应显示
-    h15_align = analysis.get("h15_level_alignment")
-    if (
-        h15_trend
-        and getattr(h15_trend, "has_signal", False)
-        and h15_align
-        and getattr(h15_align, "is_aligned", False)
-    ):
-        signals.append("级别对齐")
+
+    # 获取60分钟笔方向
+    h60_conditions = analysis.get("h60_conditions") or {}
+    last_pen_up = h60_conditions.get("last_pen_up", False)
+
+    if last_pen_up:
+        # 向上笔：只保留顶背驰（卖点信号）
+        if analysis.get("h15_top_div"):
+            signals.append("顶背驰")
+    else:
+        # 向下笔：只保留底背驰类信号（买点信号）
+        if analysis.get("h15_bottom_div"):
+            signals.append("底背驰")
+        h15_trend = analysis.get("h15_trend_div")
+        if h15_trend and getattr(h15_trend, "has_signal", False):
+            div_type_label = "趋势底背驰" if getattr(h15_trend, "divergence_type", "") == "trend" else "盘整底背驰"
+            signals.append(div_type_label)
+        # 仅当 15分钟有趋势背驰时才显示级别对齐状态
+        h15_align = analysis.get("h15_level_alignment")
+        if (
+            h15_trend
+            and getattr(h15_trend, "has_signal", False)
+            and h15_align
+            and getattr(h15_align, "is_aligned", False)
+        ):
+            signals.append("级别对齐")
+
     return "+".join(signals) if signals else "无信号"
 
 
