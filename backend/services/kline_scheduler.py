@@ -358,11 +358,11 @@ def _scheduler_worker_loop() -> None:
             except Exception:
                 logging.exception("kline_scheduler: 15m 状态机快照失败")
             # 14:46 槽位发送邮件通知（收盘前最后一根15分钟K线结束后）
+            # 使用调度时间 when 判断，避免槽位执行耗时导致错过发送窗口
             try:
-                now_hm = datetime.now(TZ_SH)
-                if now_hm.hour == 14 and now_hm.minute == 46:
+                if when.hour == 14 and when.minute == 46:
                     from services.email_notifier import send_snapshot_alert
-                    send_snapshot_alert(slot_time=now_hm)
+                    send_snapshot_alert(slot_time=when)
             except Exception:
                 logging.exception("kline_scheduler: 邮件通知发送失败")
         global _last_slot_time, _slot_execution_count

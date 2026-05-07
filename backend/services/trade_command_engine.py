@@ -419,6 +419,8 @@ def _detect_15m_trend_bottom_divergence(
     if len(down_pens) < 2:
         return empty
 
+    date_to_idx = _build_date_to_idx(data)
+
     # ============================================================
     # 分支A：趋势背驰（>=2个向下中枢）
     # ============================================================
@@ -463,22 +465,25 @@ def _detect_15m_trend_bottom_divergence(
                         # 底分型确认
                         c_end_date = c_pen.get("end_date", "")
                         if _has_bottom_fractal_at_date(fractals, c_end_date):
-                            return TrendDivergenceResult(
-                                has_signal=True,
-                                divergence_type="trend",
-                                div_date=c_end_date,
-                                div_price=c_pen.get("end_price", 0),
-                                b_area=b_area,
-                                c_area=c_area,
-                                area_ratio=c_area / b_area,
-                                hub_count=len(downward_hubs),
-                                hub_b_low=hub_b_low,
-                                current_low=c_low,
-                                reasons=(
-                                    f"趋势背驰: c段面积({c_area:.3f}) < b段面积({b_area:.3f}), "
-                                    f"c_low={c_low:.2f} < hub_b_low={hub_b_low:.2f}"
-                                ),
-                            )
+                            # 时间邻近性：背驰点距离当前不超过20根K线
+                            c_end_idx = date_to_idx.get(c_end_date)
+                            if c_end_idx is not None and len(data) - 1 - c_end_idx <= 20:
+                                return TrendDivergenceResult(
+                                    has_signal=True,
+                                    divergence_type="trend",
+                                    div_date=c_end_date,
+                                    div_price=c_pen.get("end_price", 0),
+                                    b_area=b_area,
+                                    c_area=c_area,
+                                    area_ratio=c_area / b_area,
+                                    hub_count=len(downward_hubs),
+                                    hub_b_low=hub_b_low,
+                                    current_low=c_low,
+                                    reasons=(
+                                        f"趋势背驰: c段面积({c_area:.3f}) < b段面积({b_area:.3f}), "
+                                        f"c_low={c_low:.2f} < hub_b_low={hub_b_low:.2f}"
+                                    ),
+                                )
 
     # ============================================================
     # 分支B：盘整背驰（仅1个向下中枢）
@@ -514,22 +519,25 @@ def _detect_15m_trend_bottom_divergence(
                 if a_area > 0 and b_area > 0 and b_area < a_area:
                     b_end_date = b_pen.get("end_date", "")
                     if _has_bottom_fractal_at_date(fractals, b_end_date):
-                        return TrendDivergenceResult(
-                            has_signal=True,
-                            divergence_type="pan",
-                            div_date=b_end_date,
-                            div_price=b_pen.get("end_price", 0),
-                            b_area=b_area,
-                            c_area=a_area,  # 这里a_area对应进入段
-                            area_ratio=b_area / a_area,
-                            hub_count=len(downward_hubs),
-                            hub_b_low=hub_a_low,
-                            current_low=min(b_pen.get("start_price", 0), b_pen.get("end_price", 0)),
-                            reasons=(
-                                f"盘整背驰: b段面积({b_area:.3f}) < a段面积({a_area:.3f}), "
-                                f"b_low={min(b_pen.get('start_price',0), b_pen.get('end_price',0)):.2f} < hub_low={hub_a_low:.2f}"
-                            ),
-                        )
+                        # 时间邻近性：背驰点距离当前不超过20根K线
+                        b_end_idx = date_to_idx.get(b_end_date)
+                        if b_end_idx is not None and len(data) - 1 - b_end_idx <= 20:
+                            return TrendDivergenceResult(
+                                has_signal=True,
+                                divergence_type="pan",
+                                div_date=b_end_date,
+                                div_price=b_pen.get("end_price", 0),
+                                b_area=b_area,
+                                c_area=a_area,  # 这里a_area对应进入段
+                                area_ratio=b_area / a_area,
+                                hub_count=len(downward_hubs),
+                                hub_b_low=hub_a_low,
+                                current_low=min(b_pen.get("start_price", 0), b_pen.get("end_price", 0)),
+                                reasons=(
+                                    f"盘整背驰: b段面积({b_area:.3f}) < a段面积({a_area:.3f}), "
+                                    f"b_low={min(b_pen.get('start_price',0), b_pen.get('end_price',0)):.2f} < hub_low={hub_a_low:.2f}"
+                                ),
+                            )
 
     return empty
 
@@ -1085,17 +1093,28 @@ def _classify_symbol_state(
     elif h60_conditions["last_pen_up"] and h60_conditions.get("macd_sell") and h15_top_div:
         state = "SELL" if is_holding else "IGNORE"
         reason = "60分钟红柱缩短+15分钟顶背驰"
-    # === 优先级 4：60m 一/二/三卖 -> SELL ===
+    # === 优先级 4：60m 一/二/三卖 + 15m 顶背驰 -> 才可视为实际减仓动作（否则仅战役级预警）===
     elif any(h60_sell_signals.values()):
-        state = "SELL" if is_holding else "IGNORE"
-        if h60_sell_signals["first_sell"]:
-            reason = "60分钟一卖确认，趋势转折"
-        elif h60_sell_signals["second_sell"]:
-            reason = "60分钟二卖确认，反弹无力"
-        elif h60_sell_signals["third_sell"]:
-            reason = "60分钟三卖确认，中枢破位"
+        if h15_top_div:
+            state = "SELL" if is_holding else "IGNORE"
+            if h60_sell_signals["first_sell"]:
+                reason = "60分钟一卖+15分钟顶背驰，趋势转折可减仓"
+            elif h60_sell_signals["second_sell"]:
+                reason = "60分钟二卖+15分钟顶背驰，反弹无力可减仓"
+            elif h60_sell_signals["third_sell"]:
+                reason = "60分钟三卖+15分钟顶背驰，中枢破位可减仓"
+            else:
+                reason = "60分钟卖点+15分钟顶背驰确认"
         else:
-            reason = "60分钟卖点确认"
+            state = "HOLD" if is_holding else "IGNORE"
+            if h60_sell_signals["first_sell"]:
+                reason = "60分钟一卖已现，等待15分钟顶背驰（动能衰竭）确认后再减仓"
+            elif h60_sell_signals["second_sell"]:
+                reason = "60分钟二卖已现，等待15分钟顶背驰确认后再减仓"
+            elif h60_sell_signals["third_sell"]:
+                reason = "60分钟三卖已现，等待15分钟顶背驰确认后再减仓"
+            else:
+                reason = "60分钟卖点已现，等待15分钟背驰确认后再执行卖出"
     # === 优先级 5：持仓中 + 安全向上笔 -> HOLD ===
     elif is_holding and h60_conditions["last_pen_up"]:
         state = "HOLD"
@@ -1514,6 +1533,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
 
     holding_codes = _load_holding_codes()
     holding_amounts = _load_holding_amounts()
+    logging.info("trade_command_engine: 持仓识别 loaded %d 个: %s", len(holding_codes), sorted(holding_codes))
     daily_start = _daily_start_date()
     h60_start = _h60_start_date()
     h15_start = _h15_start_date()
