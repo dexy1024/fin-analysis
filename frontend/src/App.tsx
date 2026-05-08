@@ -1060,7 +1060,7 @@ function App() {
 
   /** 拉取单个 tab 的 60 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch60ForTab = useCallback(async (tabKey: ChartTabKey) => {
-    const h60Start = startDateDaysAgo(79)
+    const h60Start = startDateDaysAgo(50)
     const tab = fullChartTabs.find((t) => t.key === tabKey)
     if (!tab) return
     try {
@@ -1077,7 +1077,7 @@ function App() {
 
   /** 拉取单个 tab 的 15 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch15ForTab = useCallback(async (tabKey: ChartTabKey) => {
-    const h15Start = startDateDaysAgo(35)
+    const h15Start = startDateDaysAgo(25)
     const tab = fullChartTabs.find((t) => t.key === tabKey)
     if (!tab) return
     try {
@@ -1094,7 +1094,7 @@ function App() {
 
   /** 仅拉上证 60m（本地）；首屏用，不依赖 dailyTab，避免切 Tab 时整页重复请求上证 */
   const refreshIndex60Only = useCallback(async () => {
-    const h60Start = startDateDaysAgo(79)
+    const h60Start = startDateDaysAgo(50)
     try {
       const h60 = await fetch60Local('sh000001', h60Start)
       setIndexKline60(h60)
@@ -1106,7 +1106,7 @@ function App() {
 
   /** 仅拉上证 15m（本地）；首屏用 */
   const refreshIndex15Only = useCallback(async () => {
-    const h15Start = startDateDaysAgo(35)
+    const h15Start = startDateDaysAgo(25)
     try {
       const h15 = await fetch15Local('sh000001', h15Start)
       setIndexKline15(h15)
@@ -1213,8 +1213,8 @@ function App() {
     const timer = setTimeout(() => {
       void (async () => {
         const dailyStart = startDateDaysAgo(380)
-        const h60Start = startDateDaysAgo(79)
-        const h15Start = startDateDaysAgo(35)
+        const h60Start = startDateDaysAgo(50)
+        const h15Start = startDateDaysAgo(25)
         // 只预加载当前可见的 tab，避免加载被用户关闭/隐藏的 tab
         let tabsToLoad = visibleChartTabs.filter(
           (tab) => !loadedKeysRef.current.has(tab.key + '_daily') || !loadedKeysRef.current.has(tab.key + '_60m') || !loadedKeysRef.current.has(tab.key + '_15m')
