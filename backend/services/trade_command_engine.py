@@ -1647,7 +1647,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     analysis["state"] = state
             else:
                 # 15分钟有信号，继续检查60分钟条件
-                # 二买必须同时满足：日线支撑 + MACD买入 + 价格高于一买低点
+                # 二买必须同时满足：日线支撑 + 价格高于一买低点（去除MACD过滤）
                 if buy_signals["second_buy"] and second_buy_info:
                     filter_reasons: List[str] = []
                     check_price_v = analysis.get("latest_close") or analysis.get("daily_close")
@@ -1656,9 +1656,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     if check_price_v is not None and daily_azd_v is not None and daily_czd_v is not None:
                         if float(check_price_v) < min(float(daily_azd_v), float(daily_czd_v)):
                             filter_reasons.append("价格跌破日线支撑")
-                    h60_conds = analysis.get("h60_conditions", {})
-                    if not h60_conds.get("macd_buy"):
-                        filter_reasons.append("MACD未满足买入条件")
+                    # 买点检测：不做MACD过滤
                     buy1_stop = second_buy_info.get("buy1_stop")
                     stop_loss_v = second_buy_info.get("stop_loss")
                     if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) <= float(buy1_stop):
