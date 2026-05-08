@@ -244,18 +244,23 @@ def _chan_signal(
     """
     根据独立的买卖点检测结果生成纯缠论信号。
     不受状态机/风控影响，仅反映当前60分钟K线结构上的缠论买卖点。
-    卖点优先级：一卖 > 二卖 > 三卖
-    买点优先级：二买 > 三买 > 一买
+    同时检测到多个信号时，用'+'连接显示所有信号。
     """
+    signals: list[str] = []
+    
+    # 卖点信号（按优先级顺序）
     if sell_signals is not None:
         for key in _SELL_PRIORITY:
             if sell_signals.get(key):
-                return _SELL_SIGNAL_MAP.get(key, "")
+                signals.append(_SELL_SIGNAL_MAP.get(key, ""))
+    
+    # 买点信号（按优先级顺序）
     if buy_signals is not None:
         for key in _BUY_PRIORITY:
             if buy_signals.get(key):
-                return _BUY_SIGNAL_MAP.get(key, "")
-    return "无信号"
+                signals.append(_BUY_SIGNAL_MAP.get(key, ""))
+    
+    return "+".join(signals) if signals else "无信号"
 
 
 def _daily_risk_level(analysis: Dict[str, Any], price: Any = None) -> str:

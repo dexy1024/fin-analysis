@@ -1313,24 +1313,9 @@ export function computeHourlyBuySellState(
   )
   let thirdBuyPoint = rawThirdBuyPoint
 
-  // ===== 严格绑定买点渲染与右侧自检条件（核心拦截逻辑） =====
-  // 一买：必须同时满足 keepDailySupport && hasBottomDivInSwitch（无背驰绝不画一买！）
-  if (firstBuyPoint?.hasSignal && (!flags.keepDailySupport || !flags.hasBottomDivInSwitch)) {
-    firstBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, areaRatio: 0, reasons: [] }
-  }
-
-  // 二买：必须同时满足 keepDailySupport && macdBuy && 低点 > 一买低点（不创新低）
-  if (
-    secondBuyPoint?.hasSignal &&
-    (!flags.keepDailySupport || !flags.macdBuy || secondBuyPoint.price <= secondBuyPoint.buy1Price!)
-  ) {
-    secondBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, reasons: [] }
-  }
-
-  // 三买：必须同时满足 keepDailySupport && !inCCentral（价格突破中枢ZG，不在C中枢内）
-  if (thirdBuyPoint?.hasSignal && (!flags.keepDailySupport || flags.inCCentral)) {
-    thirdBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, absoluteStop: 0, reasons: [] }
-  }
+  // ===== 买点信号：不做条件过滤，检测到什么就显示什么 =====
+  // 客观缠论信号应保持原始检测结果，与CSV保持一致
+  // 右侧自检条件仅用于参考展示，不拦截买点渲染
 
   // 检测第一类卖点（一卖）
   let firstSellPoint = detectFirstSellPoint(
