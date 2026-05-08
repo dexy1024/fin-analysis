@@ -111,7 +111,8 @@ def _h60_start_date() -> str:
 
 
 def _h15_start_date() -> str:
-    return (datetime.now(TZ_SH) - timedelta(days=30)).strftime("%Y-%m-%d")
+    """15分钟：每天 16 根，250 根 ≈ 16 个交易日 ≈ 25 个自然日。与 trade_command_engine 保持一致。"""
+    return (datetime.now(TZ_SH) - timedelta(days=25)).strftime("%Y-%m-%d")
 
 
 # 15分钟独立同步槽位：交易时间内每根15分钟K线结束后1分钟触发
