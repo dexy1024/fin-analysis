@@ -1621,17 +1621,11 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
             h15_trend_div = analysis.get("h15_trend_div")
             h15_level_alignment = analysis.get("h15_level_alignment")
             # 买点检测：不做15分钟过滤，60分钟信号直接展示
-            # 二买必须同时满足：日线支撑 + 价格高于一买低点（去除MACD过滤）
-                if buy_signals["second_buy"] and second_buy_info:
-                    filter_reasons: List[str] = []
-                    check_price_v = analysis.get("latest_close") or analysis.get("daily_close")
-                    daily_azd_v = analysis.get("daily_azd")
-                    daily_czd_v = analysis.get("daily_czd")
-                    if check_price_v is not None and daily_azd_v is not None and daily_czd_v is not None:
-                        if float(check_price_v) < min(float(daily_azd_v), float(daily_czd_v)):
-                            filter_reasons.append("价格跌破日线支撑")
-                    # 买点检测：不做MACD过滤
-                    buy1_stop = second_buy_info.get("buy1_stop")
+            # 二买必须同时满足：价格高于一买低点（去除日线支撑和MACD过滤）
+            if buy_signals["second_buy"] and second_buy_info:
+                filter_reasons: List[str] = []
+                # 买点检测：不做日线支撑和MACD过滤
+                buy1_stop = second_buy_info.get("buy1_stop")
                     stop_loss_v = second_buy_info.get("stop_loss")
                     if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) <= float(buy1_stop):
                         filter_reasons.append("二买价格未高于一买低点")
@@ -1660,16 +1654,11 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                         else:
                             analysis["h60_buy_type"] = None
 
-                # 三买必须同时满足：日线支撑 + 不在C中枢内（突破中枢ZG）
-                if buy_signals["third_buy"] and third_buy_info:
-                    filter_reasons3: List[str] = []
-                    check_price_v3 = analysis.get("latest_close") or analysis.get("daily_close")
-                    daily_azd_v3 = analysis.get("daily_azd")
-                    daily_czd_v3 = analysis.get("daily_czd")
-                    if check_price_v3 is not None and daily_azd_v3 is not None and daily_czd_v3 is not None:
-                        if float(check_price_v3) < min(float(daily_azd_v3), float(daily_czd_v3)):
-                            filter_reasons3.append("价格跌破日线支撑")
-                    h60_conds3 = analysis.get("h60_conditions", {})
+            # 三买必须同时满足：不在C中枢内（突破中枢ZG，去除日线支撑过滤）
+            if buy_signals["third_buy"] and third_buy_info:
+                filter_reasons3: List[str] = []
+                # 买点检测：不做日线支撑过滤
+                h60_conds3 = analysis.get("h60_conditions", {})
                     if h60_conds3.get("in_c_central"):
                         filter_reasons3.append("价格仍在C中枢内（未突破ZG）")
                     if filter_reasons3:
@@ -1697,16 +1686,11 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                         else:
                             analysis["h60_buy_type"] = None
 
-                # 一买必须同时满足：日线支撑 + 有底背驰
-                if buy_signals["first_buy"] and first_buy_info:
-                    filter_reasons1: List[str] = []
-                    check_price_v1 = analysis.get("latest_close") or analysis.get("daily_close")
-                    daily_azd_v1 = analysis.get("daily_azd")
-                    daily_czd_v1 = analysis.get("daily_czd")
-                    if check_price_v1 is not None and daily_azd_v1 is not None and daily_czd_v1 is not None:
-                        if float(check_price_v1) < min(float(daily_azd_v1), float(daily_czd_v1)):
-                            filter_reasons1.append("价格跌破日线支撑")
-                    h60_conds1 = analysis.get("h60_conditions", {})
+            # 一买必须同时满足：有底背驰（去除日线支撑过滤）
+            if buy_signals["first_buy"] and first_buy_info:
+                filter_reasons1: List[str] = []
+                # 买点检测：不做日线支撑过滤
+                h60_conds1 = analysis.get("h60_conditions", {})
                     if not h60_conds1.get("has_bottom_div_in_switch"):
                         filter_reasons1.append("无底背驰确认")
                     if filter_reasons1:
