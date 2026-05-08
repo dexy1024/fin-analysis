@@ -1620,34 +1620,8 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
             h15_bottom_div = analysis.get("h15_bottom_div", False)
             h15_trend_div = analysis.get("h15_trend_div")
             h15_level_alignment = analysis.get("h15_level_alignment")
-            h60_conds = analysis.get("h60_conditions", {})
-            # 向下笔时才考虑底背驰买点，向上笔时底背驰不触发买点
-            if h60_conds.get("last_pen_up", False):
-                h15_micro_buy = False
-            else:
-                h15_micro_buy = h15_bottom_div or (
-                    h15_trend_div and getattr(h15_trend_div, "has_signal", False)
-                    and h15_level_alignment and getattr(h15_level_alignment, "is_aligned", False)
-                )
-            
-            if not h15_micro_buy:
-                # 15分钟无买点信号，所有买点都不成立
-                for buy_type in ["first_buy", "second_buy", "third_buy"]:
-                    if buy_signals[buy_type]:
-                        buy_signals[buy_type] = False
-                if state != "SELL":
-                    if code in holding_codes:
-                        state = "HOLD"
-                        analysis["h60_buy_type"] = None
-                        analysis["reason"] = "持仓中，无明确买点，继续观望（15分钟无买点信号）"
-                    else:
-                        state = "IGNORE"
-                        analysis["h60_buy_type"] = None
-                        analysis["reason"] = "中枢震荡，无买卖点（15分钟无买点信号）"
-                    analysis["state"] = state
-            else:
-                # 15分钟有信号，继续检查60分钟条件
-                # 二买必须同时满足：日线支撑 + 价格高于一买低点（去除MACD过滤）
+            # 买点检测：不做15分钟过滤，60分钟信号直接展示
+            # 二买必须同时满足：日线支撑 + 价格高于一买低点（去除MACD过滤）
                 if buy_signals["second_buy"] and second_buy_info:
                     filter_reasons: List[str] = []
                     check_price_v = analysis.get("latest_close") or analysis.get("daily_close")
