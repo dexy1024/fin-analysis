@@ -407,12 +407,13 @@ def _detect_first_sell_point(
     if b_pen is None:
         return False, None
 
-    c_high = max(c_pen["start_price"], c_pen["end_price"])
+    # c段高点取笔终点的收盘价（与前端显示一致）
+    c_high = c_pen["end_price"]
+    
     hub_b_high = float(hub_b.get("zg", 0))
     if c_high <= hub_b_high:
         return False, None
 
-    date_to_idx = _build_date_to_idx(data)
     hub_b_start_idx = date_to_idx.get(hub_b["start_date"])
     hub_b_end_idx = date_to_idx.get(hub_b["end_date"])
     if hub_b_start_idx is None or hub_b_end_idx is None:
