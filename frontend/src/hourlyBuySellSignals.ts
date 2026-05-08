@@ -314,16 +314,6 @@ function detectFirstBuyPoint(
     const hubBLow = hubB.zd
     if (cLow >= hubBLow) return emptyResult
 
-    // 绝对新低检查：c段必须是自A中枢开始以来所有向下笔的绝对最低点
-    const allDownPensSinceA = downPens.filter(
-      (p) => p.start_date >= hubA.start_date && p.end_date <= cPen.end_date,
-    )
-    for (const pen of allDownPensSinceA) {
-      if (pen === cPen) continue
-      const penLow = Math.min(pen.start_price, pen.end_price)
-      if (penLow <= cLow) return emptyResult
-    }
-
     if (!checkMacdRetracedZero(hubB)) return emptyResult
 
     const bArea = calcGreenArea(bPen)
@@ -515,10 +505,7 @@ function detectSecondBuyPoint(
     reasons: [
       `一买低点: ${cLow.toFixed(2)} (${cPen.end_date})`,
       `回踩低点: ${retracementLow.toFixed(2)}`,
-      `回撤深度: ${(retracementDepth * 100).toFixed(1)}%`,
-      macdWeaker
-        ? `MACD绿柱缩小: ${retracementArea.toFixed(4)} < ${cArea.toFixed(4)}`
-        : 'MACD黄白线上方（强势二买）',
+      '二买结构确认',
       `止损线: ${stopLoss.toFixed(2)}`,
       '[右侧确认] 建议加仓至 50% (约 2.5万)',
     ],
@@ -631,13 +618,11 @@ function detectThirdBuyPoint(
     reasons: [
       `突破中枢上沿 ZG: ${zg.toFixed(2)}`,
       `悬空回踩: ${pullbackLow.toFixed(2)} > ${zg.toFixed(2)}`,
-      hasBreakoutMomentum ? '突破动能充足' : '',
-      macdWaterAbove ? 'MACD水上漂: DIF>0, DEA>0' : '',
-      macdGreenSmall ? '回踩绿柱极小' : '',
+      '三买结构确认',
       `战术止损: ${stopLoss.toFixed(2)}`,
       `绝对止损(ZG): ${zg.toFixed(2)}`,
       '[主升加速] 建议重仓至 80%-100% (约 4-5万)',
-    ].filter(Boolean),
+    ],
   }
 }
 
@@ -876,13 +861,8 @@ function detectSecondSellPoint(
     reasons: [
       `一卖高点: ${cHigh.toFixed(2)} (${cPen.end_date})`,
       `反弹高点: ${reboundHigh.toFixed(2)}`,
-      macdWeaker
-        ? `MACD红柱缩小: ${reboundArea.toFixed(4)} < ${cArea.toFixed(4)}`
-        : 'MACD黄白线下方（弱势二卖）',
+      '二卖结构确认',
       `止损线: ${stopLoss.toFixed(2)}`,
-      ...(tier === 'weak' ? ['【防卖飞】日线强势，建议仅减仓1/3'] : []),
-      ...(tier === 'half' ? ['【做T降本】日线震荡，建议卖出1/2'] : []),
-      ...(tier === 'clear' ? ['【大逃亡】日线弱势，建议无条件清仓'] : []),
     ],
   }
 }
@@ -997,7 +977,7 @@ function detectThirdSellPoint(
     reasons: [
       `跌破中枢下沿 ZD: ${zd.toFixed(2)}`,
       `悬空反抽: ${reboundHigh.toFixed(2)} < ${zd.toFixed(2)}`,
-      'MACD水下沉: DIF<0, DEA<0',
+      '三卖结构确认',
       `战术止损: ${stopLoss.toFixed(2)}`,
       `绝对止损(ZD): ${zd.toFixed(2)}`,
     ],
