@@ -268,16 +268,8 @@ def _detect_second_buy_point(
         if m is not None and m.get("dif", 0) > 0 and m.get("dea", 0) > 0:
             macd_above_zero = True
 
-    if not macd_weaker and not macd_above_zero:
-        return False, None
-
-    # 回撤深度过滤
-    rally_high = max(pens_effective[rally_idx]["start_price"], pens_effective[rally_idx]["end_price"])
-    if rally_high <= c_low:
-        return False, None
-    retracement_depth = (rally_high - retracement_low) / (rally_high - c_low)
-    if retracement_depth > 0.8:
-        return False, None
+    # 买点检测：不做MACD和回撤深度过滤，检测到什么就显示什么
+    # 客观缠论信号应保持原始检测结果
 
     # 止损线
     stop_loss = (
@@ -361,34 +353,10 @@ def _detect_third_buy_point(
     if not has_bottom:
         return False, None
 
-    # 突破动能校验
-    breakout_start_idx = date_to_idx.get(breakout_pen["start_date"])
-    has_breakout_momentum = False
-    if breakout_start_idx is not None and breakout_end_idx is not None:
-        red_area = 0.0
-        dif_crossed_zero = False
-        prev_dif = None
-        for i in range(breakout_start_idx, breakout_end_idx + 1):
-            m = data[i].get("macd")
-            if m is not None:
-                if m.get("macd", 0) > 0:
-                    red_area += m["macd"]
-                if prev_dif is not None and prev_dif <= 0 and m.get("dif", 0) > 0:
-                    dif_crossed_zero = True
-                prev_dif = m.get("dif")
-        has_breakout_momentum = red_area > 0.5 or dif_crossed_zero
-    if not has_breakout_momentum:
-        return False, None
+    # 买点检测：不做突破动能和MACD过滤，检测到什么就显示什么
+    # 客观缠论信号应保持原始检测结果
 
-    # MACD 动能过滤（水上漂）：回踩终点 DIF>0 且 DEA>0
     pullback_end_idx = date_to_idx.get(pullback_pen["end_date"])
-    macd_water_above = False
-    if pullback_end_idx is not None:
-        m = data[pullback_end_idx].get("macd")
-        if m is not None and m.get("dif", 0) > 0 and m.get("dea", 0) > 0:
-            macd_water_above = True
-    if not macd_water_above:
-        return False, None
 
     # 止损线
     stop_loss = (
@@ -580,8 +548,8 @@ def _detect_second_sell_point(
         if m is not None and m.get("dif", 0) < 0 and m.get("dea", 0) < 0:
             macd_below_zero = True
 
-    if not macd_weaker and not macd_below_zero:
-        return False, None
+    # 卖点检测：不做MACD过滤，检测到什么就显示什么
+    # 客观缠论信号应保持原始检测结果
 
     stop_loss = (
         data[rebound_end_idx]["high"]
@@ -653,15 +621,10 @@ def _detect_third_sell_point(
     if not has_top:
         return False
 
-    rebound_end_idx = date_to_idx.get(rebound_pen["end_date"])
-    macd_water_below = False
-    if rebound_end_idx is not None:
-        m = data[rebound_end_idx].get("macd")
-        if m is not None and m.get("dif", 0) < 0 and m.get("dea", 0) < 0:
-            macd_water_below = True
+    # 卖点检测：不做MACD过滤，检测到什么就显示什么
+    # 客观缠论信号应保持原始检测结果
 
-    if not macd_water_below:
-        return False
+    rebound_end_idx = date_to_idx.get(rebound_pen["end_date"])
 
     # 时间邻近性检查（与一卖/二卖保持一致，只显示最近20根K线内的信号）
     if rebound_end_idx is not None:
