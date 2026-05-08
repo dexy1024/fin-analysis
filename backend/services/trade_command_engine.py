@@ -1630,14 +1630,15 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
             h15_trend_div = analysis.get("h15_trend_div")
             h15_level_alignment = analysis.get("h15_level_alignment")
             # 买点检测：不做15分钟过滤，60分钟信号直接展示
-            # 二买必须同时满足：价格高于一买低点（去除日线支撑和MACD过滤）
+            # 二买必须同时满足：回踩不创新低（去除日线支撑和MACD过滤）
             if buy_signals["second_buy"] and second_buy_info:
                 filter_reasons: List[str] = []
                 # 买点检测：不做日线支撑和MACD过滤
                 buy1_stop = second_buy_info.get("buy1_stop")
                 stop_loss_v = second_buy_info.get("stop_loss")
-                if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) <= float(buy1_stop):
-                    filter_reasons.append("二买价格未高于一买低点")
+                # 与前端对齐：回踩低点 < 一买低点才算创新低（等于不算）
+                if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) < float(buy1_stop):
+                    filter_reasons.append("二买价格低于一买低点（创新低）")
                 if filter_reasons:
                     buy_signals["second_buy"] = False
                     if state != "SELL":

@@ -845,16 +845,19 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
                         )
 
     # 应用过滤条件（与前端 computeHourlyBuySellState 一致）
-    # 一买：keepDailySupport && hasBottomDivInSwitch
-    if details["first_buy"] and (not keep_daily_support or not has_bottom_div_in_switch):
-        details["first_buy"] = False
+    # 注：买点信号不做条件过滤，检测到什么就显示什么
+    # 客观缠论信号应保持原始检测结果，与CSV和前端一致展示
 
-    # 二买：keepDailySupport && macdBuy
-    if details["second_buy"] and (not keep_daily_support or not macd_buy):
-        details["second_buy"] = False
+    # 二买仅检查：回踩不创新低（与前端 hourlyBuySellSignals.ts 对齐）
+    # 前端条件：retracementLow < cLow 才算创新低（等于不算）
+    if details["second_buy"] and second_buy_info:
+        buy1_stop = second_buy_info.get("buy1_stop")
+        stop_loss_v = second_buy_info.get("stop_loss")
+        if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) < float(buy1_stop):
+            details["second_buy"] = False
 
-    # 三买：keepDailySupport && !inCCentral
-    if details["third_buy"] and (not keep_daily_support or in_c_central):
+    # 三买仅检查：不在C中枢内（去除日线支撑过滤）
+    if details["third_buy"] and in_c_central:
         details["third_buy"] = False
 
     # ========== 买点失效检查（与前端一致） ==========
