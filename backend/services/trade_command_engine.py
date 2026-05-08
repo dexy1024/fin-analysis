@@ -1022,44 +1022,8 @@ def _classify_symbol_state(
                 except Exception:
                     logging.exception("trade_command_engine: %s 三卖检测异常", code)
 
-            # ========== 卖点失效检查（前移至状态机之前，与前端对齐） ==========
-            # 规则1：一卖触发后，若后续K线高点突破一卖最高点，则一卖结构被破坏
-            if h60_sell_signals["first_sell"] and first_sell_info:
-                sell1_high = first_sell_info.get("high", 0)
-                sell1_date = first_sell_info.get("date", "")
-                sell1_idx = -1
-                for i, d in enumerate(h60_data):
-                    if d.get("date") == sell1_date:
-                        sell1_idx = i
-                        break
-                if sell1_idx >= 0:
-                    for i in range(sell1_idx + 1, len(h60_data)):
-                        if h60_data[i].get("high", 0) > sell1_high:
-                            h60_sell_signals["first_sell"] = False
-                            break
-
-            # 规则2：二卖依赖一卖存在，一卖失效则二卖必须同步失效
-            if h60_sell_signals["second_sell"] and not h60_sell_signals["first_sell"]:
-                h60_sell_signals["second_sell"] = False
-
-            # 规则3：二卖触发后，若后续K线高点突破一卖最高点，说明多头已破坏M头结构，二卖失效
-            if (
-                h60_sell_signals["second_sell"]
-                and h60_sell_signals["first_sell"]
-                and second_sell_info
-            ):
-                sell1_high = first_sell_info.get("high", 0) if first_sell_info else 0
-                sell2_date = second_sell_info.get("date", "")
-                sell2_idx = -1
-                for i, d in enumerate(h60_data):
-                    if d.get("date") == sell2_date:
-                        sell2_idx = i
-                        break
-                if sell2_idx >= 0:
-                    for i in range(sell2_idx + 1, len(h60_data)):
-                        if h60_data[i].get("high", 0) > sell1_high:
-                            h60_sell_signals["second_sell"] = False
-                            break
+            # 卖点信号：不做失效过滤，检测到什么信号就记录什么
+            # 客观缠论信号应保持原始检测结果，供CSV和前端一致展示
 
     # 15分钟分析
     h15_bottom_div = False

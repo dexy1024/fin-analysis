@@ -1338,54 +1338,8 @@ export function computeHourlyBuySellState(
     dailyMacd,
   )
 
-  // ========== 卖点信号动态失效与宏观过滤重算 ==========
-  // 规则1：一卖触发后，若后续K线高点突破一卖最高点，则一卖结构被破坏，信号失效
-  if (firstSellPoint?.hasSignal) {
-    const sell1High = firstSellPoint.high
-    const sell1Idx = data.findIndex((d) => d.date === firstSellPoint.date)
-    if (sell1Idx >= 0) {
-      for (let i = sell1Idx + 1; i < data.length; i++) {
-        if (data[i].high > sell1High) {
-          firstSellPoint = { hasSignal: false, date: '', price: 0, high: 0, stopLoss: 0, areaRatio: 0, reasons: [] }
-          break
-        }
-      }
-    }
-  }
-
-  // 规则2：二卖依赖一卖存在，一卖失效则二卖必须同步失效
-  if (secondSellPoint?.hasSignal && !firstSellPoint?.hasSignal) {
-    secondSellPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, reasons: [] }
-  }
-
-  // 规则3：二卖触发后，若后续K线高点突破一卖最高点，说明多头已破坏M头结构，二卖失效
-  if (secondSellPoint?.hasSignal && firstSellPoint?.hasSignal) {
-    const sell1High = firstSellPoint.high
-    const sell2Idx = data.findIndex((d) => d.date === secondSellPoint.date)
-    if (sell2Idx >= 0) {
-      for (let i = sell2Idx + 1; i < data.length; i++) {
-        if (data[i].high > sell1High) {
-          secondSellPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, reasons: [] }
-          break
-        }
-      }
-    }
-  }
-
-  // 规则4：动态tier重算——使用当前最新价格重新评估宏观过滤等级
-  // 确保即使笔结构未变，UI文本也会随最新价格实时更新（防主升浪中仍显示"清仓"）
-  if (firstSellPoint?.hasSignal) {
-    firstSellPoint = {
-      ...firstSellPoint,
-      tier: classifySellTier(last.close, dailyCZd, dailyAZd, dailyMacd),
-    }
-  }
-  if (secondSellPoint?.hasSignal) {
-    secondSellPoint = {
-      ...secondSellPoint,
-      tier: classifySellTier(last.close, dailyCZd, dailyAZd, dailyMacd),
-    }
-  }
+  // 卖点信号：不做失效过滤，检测到什么就显示什么
+  // 客观缠论信号应保持原始检测结果，与CSV保持一致
 
   // 检测第三类卖点（三卖）
   const thirdSellPoint = detectThirdSellPoint(
@@ -1442,192 +1396,22 @@ export function computeHourlyBuySellState(
     }
   }
 
-  // ========== 止损失效检查 ==========
-  let firstBuyFailed: FirstBuyPointSignal | null = null
-  let secondBuyFailed: SecondBuyPointSignal | null = null
+  // 买点信号：不做失效过滤，检测到什么就显示什么
+  // 客观缠论信号应保持原始检测结果，与CSV保持一致
 
-  // 一买失效检查：买入后收盘价跌破止损线（用收盘价而非最低价，避免下影线扫损）
-  // 注意：不抹除历史信号，而是标记 isDestroyed=true，保留原位用于战场留痕复盘
-  if (firstBuyPoint?.hasSignal && !firstBuyPoint.suppressed) {
-    const buyIdx = data.findIndex((d) => d.date === firstBuyPoint.date)
-    if (buyIdx >= 0) {
-      for (let i = buyIdx + 1; i < data.length; i++) {
-        if (data[i].close < firstBuyPoint.stopLoss) {
-          firstBuyFailed = {
-            ...firstBuyPoint,
-            date: data[i].date,
-            price: firstBuyPoint.stopLoss,
-            reasons: [
-              ...firstBuyPoint.reasons,
-              `一买失败: ${data[i].date} 收盘价跌破止损线 ${firstBuyPoint.stopLoss.toFixed(2)}`,
-            ],
-          }
-          firstBuyPoint = {
-            ...firstBuyPoint,
-            isDestroyed: true,
-            reasons: [
-              ...firstBuyPoint.reasons,
-              `【已失效】${data[i].date} 收盘价跌破止损线 ${firstBuyPoint.stopLoss.toFixed(2)}，原买点结构被破坏`,
-            ],
-          }
-          break
-        }
-      }
-    }
-  }
+  // 失效标记：不做止损失效检查，统一设为null
+  const firstBuyFailed: FirstBuyPointSignal | null = null
+  const secondBuyFailed: SecondBuyPointSignal | null = null
+  const thirdBuyFailed: ThirdBuyPointSignal | null = null
 
-  // 二买失效检查：买入后收盘价跌破止损线（用收盘价避免下影线扫损）
-  // 注意：不抹除历史信号，而是标记 isDestroyed=true，保留原位用于战场留痕复盘
-  if (secondBuyPoint && secondBuyPoint.hasSignal) {
-    const sbp = secondBuyPoint
-    const buyIdx = data.findIndex((d) => d.date === sbp.date)
-    if (buyIdx >= 0) {
-      for (let i = buyIdx + 1; i < data.length; i++) {
-        if (data[i].close < sbp.stopLoss) {
-          secondBuyFailed = {
-            ...sbp,
-            date: data[i].date,
-            price: sbp.stopLoss,
-            reasons: [
-              ...sbp.reasons,
-              `二买失败: ${data[i].date} 收盘价跌破止损线 ${sbp.stopLoss.toFixed(2)}`,
-            ],
-          }
-          secondBuyPoint = {
-            ...sbp,
-            isDestroyed: true,
-            reasons: [
-              ...sbp.reasons,
-              `【已失效】${data[i].date} 收盘价跌破止损线 ${sbp.stopLoss.toFixed(2)}，原买点结构被破坏`,
-            ],
-          }
-          break
-        }
-      }
-    }
-  }
-
-  // 三买失效检查：基于原始三买信号检查（即使被过滤条件屏蔽，结构破坏仍应触发 CENTER_OSCILLATION）
-  // 注意：不抹除历史信号，而是标记 isDestroyed=true，保留原位用于战场留痕复盘
-  let thirdBuyFailed: ThirdBuyPointSignal | null = null
-  if (rawThirdBuyPoint?.hasSignal) {
-    const buyIdx = data.findIndex((d) => d.date === rawThirdBuyPoint.date)
-    if (buyIdx >= 0) {
-      for (let i = buyIdx + 1; i < data.length; i++) {
-        if (data[i].close < rawThirdBuyPoint.stopLoss) {
-          thirdBuyFailed = {
-            ...rawThirdBuyPoint,
-            date: data[i].date,
-            price: rawThirdBuyPoint.stopLoss,
-            reasons: [
-              ...rawThirdBuyPoint.reasons,
-              `三买失败·止损: ${data[i].date} 收盘价跌破战术止损线 ${rawThirdBuyPoint.stopLoss.toFixed(2)}`,
-            ],
-          }
-          // 同步标记过滤后的三买为失效
-          if (thirdBuyPoint?.hasSignal) {
-            thirdBuyPoint = {
-              ...thirdBuyPoint,
-              isDestroyed: true,
-              reasons: [
-                ...thirdBuyPoint.reasons,
-                `【已失效】${data[i].date} 收盘价跌破战术止损线 ${thirdBuyPoint.stopLoss.toFixed(2)}，原买点结构被破坏`,
-              ],
-            }
-          }
-          break
-        }
-      }
-    }
-  }
-
-  // ===== 严格单向状态机互斥（核心修复：禁止时空穿越） =====
-  // 状态机定义：0(初始) -> 1(一买确认) -> 2(二买确认) -> 3(三买确认/尝试中)
-  // 流转方向严格单向，绝对禁止逆向流转（3 变回 2）
-  // 三买失败后进入 CENTER_OSCILLATION，屏蔽一切买点信号
-  // 重置条件：从三买触发日/失败日开始，价格向下跌破上一买的绝对最低点
-
-  let stateMachineLocked = false
-  let centerOscillation = false
-
-  // 确定是否进入过 STATE_3（三买已确认/尝试中/失败）
-  const hasEnteredState3 = rawThirdBuyPoint?.hasSignal || (thirdBuyFailed && thirdBuyFailed.hasSignal)
-
-  // 获取上一买的绝对最低点（优先从 rawFirstBuyPoint，其次从 secondBuyPoint 携带的一买信息）
-  let buy1Low: number | undefined = rawFirstBuyPoint?.hasSignal ? rawFirstBuyPoint.stopLoss : undefined
-  let buy1Date: string | undefined = rawFirstBuyPoint?.hasSignal ? rawFirstBuyPoint.date : undefined
-  if (buy1Low === undefined && secondBuyPoint?.hasSignal && secondBuyPoint.buy1Price != null) {
-    buy1Low = secondBuyPoint.buy1Price
-    buy1Date = secondBuyPoint.buy1Date
-  }
-
-  if (hasEnteredState3 && buy1Low != null && buy1Low > 0 && buy1Date) {
-    // 使用三买触发日作为状态机递进基准（三买失败日只是后续确认）
-    const mutexDate = rawThirdBuyPoint?.date
-
-    if (mutexDate && mutexDate > buy1Date) {
-      const mutexIdx = data.findIndex((d) => d.date === mutexDate)
-      if (mutexIdx >= 0) {
-        let brokeNewLow = false
-        for (let i = mutexIdx + 1; i < data.length; i++) {
-          if (data[i].low < buy1Low) {
-            brokeNewLow = true
-            break
-          }
-        }
-        if (!brokeNewLow) {
-          stateMachineLocked = true
-          // 三买失败额外进入中枢震荡，屏蔽一切买点
-          if (thirdBuyFailed && thirdBuyFailed.hasSignal) {
-            centerOscillation = true
-          }
-        }
-      }
-    }
-  }
-
-  // 应用互斥锁
-  if (stateMachineLocked) {
-    // STATE_3 后绝对禁止二买（无论三买成功还是失败）
-    if (secondBuyPoint?.hasSignal) {
-      secondBuyPoint = null
-    }
-    // 三买失败后进入 CENTER_OSCILLATION，屏蔽一切买点
-    if (centerOscillation) {
-      if (firstBuyPoint?.hasSignal) {
-        firstBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, areaRatio: 0, reasons: [] }
-      }
-      if (thirdBuyPoint?.hasSignal) {
-        thirdBuyPoint = { hasSignal: false, date: '', price: 0, stopLoss: 0, absoluteStop: 0, reasons: [] }
-      }
-    }
-  }
-
-  // ========== 日线破位强制降级：当前价跌破日线最后防线 ==========
-  const dailyDefenseLine = Math.min(
-    dailyCZd ?? Infinity,
-    dailyAZd ?? Infinity,
-  )
-  const isDailyBroken = Number.isFinite(dailyDefenseLine) && last.close < dailyDefenseLine
-
-  if (firstBuyPoint?.hasSignal) {
-    firstBuyPoint = { ...firstBuyPoint, isExecutable: !isDailyBroken }
-  }
-  if (secondBuyPoint?.hasSignal) {
-    secondBuyPoint = { ...secondBuyPoint, isExecutable: !isDailyBroken }
-  }
-  if (thirdBuyPoint?.hasSignal) {
-    thirdBuyPoint = { ...thirdBuyPoint, isExecutable: !isDailyBroken }
-  }
-
-  // 结构信号存在性检查
+  // 信号展示：不做互斥降级，买卖点各自独立显示
   const hasStructuralBuy = firstBuyPoint?.hasSignal || secondBuyPoint?.hasSignal || thirdBuyPoint?.hasSignal
   const hasStructuralSell = firstSellPoint?.hasSignal || secondSellPoint?.hasSignal || thirdSellPoint?.hasSignal
+  const effectiveSellSignalActive = sellSignal || hasStructuralSell
 
-  // 互斥：反向结构信号拥有绝对否决权，降级普通信号为"预警"
-  const showSellMarker = sellSignal && !hasStructuralBuy
-  const showBuyMarker = buySignal && !hasStructuralSell
-  const effectiveSellSignalActive = showSellMarker || hasStructuralSell
+  // 独立显示买卖信号，不互斥
+  const showSellMarker = sellSignal
+  const showBuyMarker = buySignal
 
   if (showSellMarker) {
     return {
