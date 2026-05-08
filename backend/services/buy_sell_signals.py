@@ -414,6 +414,7 @@ def _detect_first_sell_point(
     if c_high <= hub_b_high:
         return False, None
 
+    date_to_idx = _build_date_to_idx(data)
     hub_b_start_idx = date_to_idx.get(hub_b["start_date"])
     hub_b_end_idx = date_to_idx.get(hub_b["end_date"])
     if hub_b_start_idx is None or hub_b_end_idx is None:
@@ -507,11 +508,14 @@ def _detect_second_sell_point(
     if c_end_idx is None or last_idx - c_end_idx > max_lookback_bars:
         return False, None
 
+    # 一卖c段终点必须有顶分型（与前端保持一致）
     has_sell1_top = any(
         f["type"] == "top" and f["date"] == c_pen["end_date"]
         for f in (fractals or [])
     )
     if not has_sell1_top:
+        logging.debug("_detect_second_sell_point: 一卖顶分型检查失败，c_pen_end=%s, fractals=%s",
+                      c_pen["end_date"], [f.get("date") for f in (fractals or []) if f.get("type") == "top"])
         return False, None
 
     rebound_high = max(rebound_pen["start_price"], rebound_pen["end_price"])
@@ -519,6 +523,7 @@ def _detect_second_sell_point(
     if rebound_high > c_high:
         return False, None
 
+    # 反弹终点有顶分型
     has_top = any(
         f["type"] == "top" and f["date"] == rebound_pen["end_date"]
         for f in (fractals or [])
@@ -881,6 +886,8 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
         details["third_buy"] = False
 
     # ========== 卖点失效检查（与前端 computeHourlyBuySellState 一致） ==========
+    # 注：卖点信号不做失效过滤，检测到什么就显示什么
+    # 客观缠论信号应保持原始检测结果，与CSV和前端一致展示
     # 规则1：一卖触发后，若后续K线高点突破一卖最高点，则一卖结构被破坏
     if details["first_sell"] and first_sell_info:
         sell1_high = first_sell_info.get("high", 0)
@@ -896,9 +903,9 @@ def _detect_buy_sell_for_symbol(code: str, name: str = "") -> Tuple[bool, bool, 
                     details["first_sell"] = False
                     break
 
-    # 规则2：二卖依赖一卖存在，一卖失效则二卖必须同步失效
-    if details["second_sell"] and not details["first_sell"]:
-        details["second_sell"] = False
+    # 规则2（已移除）：二卖不再强制依赖一卖存在
+    # 二卖检测函数内部已检查一卖c段顶分型，满足缠论定义即可
+    # 客观缠论信号应保持独立检测结果
 
     # 规则3：二卖触发后，若后续K线高点突破一卖最高点，说明多头已破坏M头结构，二卖失效
     if details["second_sell"] and details["first_sell"] and second_sell_info:

@@ -1025,6 +1025,15 @@ def _classify_symbol_state(
             # 卖点信号：不做失效过滤，检测到什么信号就记录什么
             # 客观缠论信号应保持原始检测结果，供CSV和前端一致展示
 
+            # DEBUG: 记录卖点检测结果
+            if h60_sell_signals.get("second_sell"):
+                logging.debug(
+                    "trade_command_engine: %s 二卖检测通过 (一卖=%s, 二卖=%s)",
+                    code,
+                    h60_sell_signals.get("first_sell"),
+                    h60_sell_signals.get("second_sell"),
+                )
+
     # 15分钟分析
     h15_bottom_div = False
     h15_top_div = False
@@ -1641,18 +1650,18 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                             state = "BUY_1"
                             new_reason = "左侧一买确认，轻仓试探。"
                             analysis["h60_buy_type"] = "first_buy"
-                            else:
-                                if code in holding_codes:
-                                    state = "HOLD"
-                                    new_reason = "持仓中，无明确买点，继续观望"
-                                else:
-                                    state = "IGNORE"
-                                    new_reason = "中枢震荡，无买卖点"
-                                analysis["h60_buy_type"] = None
-                            analysis["state"] = state
-                            analysis["reason"] = f"{new_reason}（二买不成立：{'；'.join(filter_reasons)}）"
                         else:
+                            if code in holding_codes:
+                                state = "HOLD"
+                                new_reason = "持仓中，无明确买点，继续观望"
+                            else:
+                                state = "IGNORE"
+                                new_reason = "中枢震荡，无买卖点"
                             analysis["h60_buy_type"] = None
+                        analysis["state"] = state
+                        analysis["reason"] = f"{new_reason}（二买不成立：{'；'.join(filter_reasons)}）"
+                    else:
+                        analysis["h60_buy_type"] = None
 
             # 三买必须同时满足：不在C中枢内（突破中枢ZG，去除日线支撑过滤）
             if buy_signals["third_buy"] and third_buy_info:
