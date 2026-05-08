@@ -458,6 +458,15 @@ def detect_first_buy_point(
             logging.debug(f"[{code}] 无底分型: date={c_end_date}")
             return None
         
+        # 6. 时间邻近性检查（与前端保持一致，只显示最近20根K线内的信号）
+        date_to_idx = {item["date"]: i for i, item in enumerate(data)}
+        c_end_idx = date_to_idx.get(c_end_date)
+        if c_end_idx is not None:
+            bars_since_end = len(data) - 1 - c_end_idx
+            if bars_since_end > 20:
+                logging.debug(f"[{code}] 一买信号超期: bars_since_end={bars_since_end}")
+                return None
+        
         # 找到底分型最低价作为止损线
         stop_loss = c_low
         for item in data:

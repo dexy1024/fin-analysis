@@ -152,6 +152,14 @@ def _detect_first_buy_point(
     if not has_bottom_fractal(data, c_end_date):
         return False, None
 
+    # 7. 时间邻近性检查（与前端保持一致，只显示最近20根K线内的信号）
+    date_to_idx = _build_date_to_idx(data)
+    c_end_idx = date_to_idx.get(c_end_date)
+    if c_end_idx is not None:
+        bars_since_end = len(data) - 1 - c_end_idx
+        if bars_since_end > 20:
+            return False, None
+
     # 止损线：底分型最低价
     stop_loss = c_low
     for item in data:
