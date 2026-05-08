@@ -494,42 +494,12 @@ function detectSecondBuyPoint(
   )
   if (!hasBottomFractal) return emptyResult
 
-  // 步骤6：MACD动能过滤
-  const calcGreenArea = (pen: IndexPen): number => {
-    const sIdx = dateToIdx.get(pen.start_date)
-    const eIdx = dateToIdx.get(pen.end_date)
-    if (sIdx == null || eIdx == null || sIdx > eIdx) return 0
-    let area = 0
-    for (const item of data.slice(sIdx, eIdx + 1)) {
-      const m = item.macd?.macd
-      if (m != null && m < 0) area += Math.abs(m)
-    }
-    return area
-  }
+  // 买点检测：不做MACD和回撤深度过滤，检测到什么就显示什么
+  // 客观缠论信号应保持原始检测结果
 
-  const cArea = calcGreenArea(cPen)
-  const retracementArea = calcGreenArea(retracementPen)
-  const macdWeaker = retracementArea < cArea
-
-  // 或者MACD黄白线在0轴上方（强势二买）
   const retracementEndIdx = dateToIdx.get(retracementPen.end_date)
-  let macdAboveZero = false
-  if (retracementEndIdx != null) {
-    const m = data[retracementEndIdx].macd
-    if (m != null && m.dif > 0 && m.dea > 0) {
-      macdAboveZero = true
-    }
-  }
 
-  if (!macdWeaker && !macdAboveZero) return emptyResult
-
-  // 步骤9：回撤深度过滤（新增）
-  const rallyHigh = Math.max(pensEffective[rallyIdx].start_price, pensEffective[rallyIdx].end_price)
-  if (rallyHigh <= cLow) return emptyResult
-  const retracementDepth = (rallyHigh - retracementLow) / (rallyHigh - cLow)
-  if (retracementDepth > 0.8) return emptyResult
-
-  // 步骤10：输出二买信号
+  // 输出二买信号
   const stopLoss =
     retracementEndIdx != null && retracementEndIdx >= 0 && retracementEndIdx < data.length
       ? data[retracementEndIdx].low
@@ -641,49 +611,10 @@ function detectThirdBuyPoint(
   )
   if (!hasBottomFractal) return emptyResult
 
-  // 7. 突破动能校验（新增）：突破向上笔必须有MACD红柱支撑或DIF上穿0轴
-  const breakoutStartIdx = dateToIdx.get(breakoutPen.start_date)
-  // breakoutEndIdx 已在步骤4中定义，直接复用
-  let hasBreakoutMomentum = false
-  if (breakoutStartIdx != null && breakoutEndIdx != null) {
-    let redArea = 0
-    let difCrossedZero = false
-    let prevDif: number | null = null
-    for (let i = breakoutStartIdx; i <= breakoutEndIdx; i++) {
-      const m = data[i].macd
-      if (m != null) {
-        if (m.macd > 0) redArea += m.macd
-        if (prevDif != null && prevDif <= 0 && m.dif > 0) difCrossedZero = true
-        prevDif = m.dif
-      }
-    }
-    hasBreakoutMomentum = redArea > 0.5 || difCrossedZero
-  }
-  if (!hasBreakoutMomentum) return emptyResult
+  // 买点检测：不做突破动能和MACD过滤，检测到什么就显示什么
+  // 客观缠论信号应保持原始检测结果
 
-  // 8. MACD 动能过滤（水上漂）：回踩终点 DIF>0 且 DEA>0
   const pullbackEndIdx = dateToIdx.get(pullbackPen.end_date)
-  let macdWaterAbove = false
-  let macdGreenSmall = false
-  if (pullbackEndIdx != null) {
-    const m = data[pullbackEndIdx].macd
-    if (m != null && m.dif > 0 && m.dea > 0) {
-      macdWaterAbove = true
-    }
-    // 计算回踩期间的绿柱面积（极小甚至不出绿柱）
-    const sIdx = dateToIdx.get(pullbackPen.start_date)
-    if (sIdx != null && sIdx <= pullbackEndIdx) {
-      let greenArea = 0
-      for (const item of data.slice(sIdx, pullbackEndIdx + 1)) {
-        const macdVal = item.macd?.macd
-        if (macdVal != null && macdVal < 0) greenArea += Math.abs(macdVal)
-      }
-      // 绿柱面积极小（相对于中枢后突破期间的平均红柱可忽略）
-      macdGreenSmall = greenArea < 0.5
-    }
-  }
-
-  if (!macdWaterAbove) return emptyResult
 
   // 止损线
   const stopLoss =
@@ -924,35 +855,10 @@ function detectSecondSellPoint(
   )
   if (!hasTopFractal) return emptyResult
 
-  // MACD动能过滤
-  const calcRedArea = (pen: IndexPen): number => {
-    const sIdx = dateToIdx.get(pen.start_date)
-    const eIdx = dateToIdx.get(pen.end_date)
-    if (sIdx == null || eIdx == null || sIdx > eIdx) return 0
-    let area = 0
-    for (const item of data.slice(sIdx, eIdx + 1)) {
-      const m = item.macd?.macd
-      if (m != null && m > 0) area += Math.abs(m)
-    }
-    return area
-  }
+  // 卖点检测：不做MACD过滤，检测到什么就显示什么
+  // 客观缠论信号应保持原始检测结果
 
-  const cArea = calcRedArea(cPen)
-  const reboundArea = calcRedArea(reboundPen)
-  const macdWeaker = reboundArea < cArea
-
-  // 或者MACD黄白线在0轴下方（弱势二卖）
   const reboundEndIdx = dateToIdx.get(reboundPen.end_date)
-  let macdBelowZero = false
-  if (reboundEndIdx != null) {
-    const m = data[reboundEndIdx].macd
-    if (m != null && m.dif < 0 && m.dea < 0) {
-      macdBelowZero = true
-    }
-  }
-
-  if (!macdWeaker && !macdBelowZero) return emptyResult
-
   const stopLoss =
     reboundEndIdx != null && reboundEndIdx >= 0 && reboundEndIdx < data.length
       ? data[reboundEndIdx].high
@@ -1066,17 +972,10 @@ function detectThirdSellPoint(
   )
   if (!hasTopFractal) return emptyResult
 
-  // 7. MACD 水下沉：DIF<0 且 DEA<0
-  const reboundEndIdx = dateToIdx.get(reboundPen.end_date)
-  let macdWaterBelow = false
-  if (reboundEndIdx != null) {
-    const m = data[reboundEndIdx].macd
-    if (m != null && m.dif < 0 && m.dea < 0) {
-      macdWaterBelow = true
-    }
-  }
+  // 卖点检测：不做MACD过滤，检测到什么就显示什么
+  // 客观缠论信号应保持原始检测结果
 
-  if (!macdWaterBelow) return emptyResult
+  const reboundEndIdx = dateToIdx.get(reboundPen.end_date)
 
   // 时间邻近性检查（与一卖/二卖保持一致，只显示最近20根K线内的信号）
   if (reboundEndIdx != null) {
