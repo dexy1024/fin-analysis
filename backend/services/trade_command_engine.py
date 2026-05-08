@@ -1666,11 +1666,15 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     and h15_level_alignment and getattr(h15_level_alignment, "is_aligned", False)
                 )
             
+            # 分离：buy_signals 用于客观缠论信号展示（保持原样）
+            # effective_signals 用于实际交易决策（受15分钟过滤）
+            effective_signals = dict(buy_signals)
+            
             if not h15_micro_buy:
-                # 15分钟无买点信号，所有买点都不成立
+                # 15分钟无买点信号，有效买点全部失效（但不影响客观信号展示）
                 for buy_type in ["first_buy", "second_buy", "third_buy"]:
-                    if buy_signals[buy_type]:
-                        buy_signals[buy_type] = False
+                    if effective_signals[buy_type]:
+                        effective_signals[buy_type] = False
                 if state != "SELL":
                     if code in holding_codes:
                         state = "HOLD"
@@ -1682,9 +1686,9 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                         analysis["reason"] = "中枢震荡，无买卖点（15分钟无买点信号）"
                     analysis["state"] = state
             else:
-                # 15分钟有信号，继续检查60分钟条件
+                # 15分钟有信号，继续检查60分钟条件（使用effective_signals）
                 # 二买必须同时满足：日线支撑 + MACD买入 + 价格高于一买低点
-                if buy_signals["second_buy"] and second_buy_info:
+                if effective_signals["second_buy"] and second_buy_info:
                     filter_reasons: List[str] = []
                     check_price_v = analysis.get("latest_close") or analysis.get("daily_close")
                     daily_azd_v = analysis.get("daily_azd")
@@ -1700,14 +1704,14 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) <= float(buy1_stop):
                         filter_reasons.append("二买价格未高于一买低点")
                     if filter_reasons:
-                        buy_signals["second_buy"] = False
+                        effective_signals["second_buy"] = False
                         if state != "SELL":
                             # 按优先级重新评估 state：二买 > 三买 > 一买
-                            if buy_signals["third_buy"]:
+                            if effective_signals["third_buy"]:
                                 state = "BUY_3"
                                 new_reason = "三买突破确认，顺势跟进。"
                                 analysis["h60_buy_type"] = "third_buy"
-                            elif buy_signals["first_buy"]:
+                            elif effective_signals["first_buy"]:
                                 state = "BUY_1"
                                 new_reason = "左侧一买确认，轻仓试探。"
                                 analysis["h60_buy_type"] = "first_buy"
@@ -1725,7 +1729,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                             analysis["h60_buy_type"] = None
 
                 # 三买必须同时满足：日线支撑 + 不在C中枢内（突破中枢ZG）
-                if buy_signals["third_buy"] and third_buy_info:
+                if effective_signals["third_buy"] and third_buy_info:
                     filter_reasons3: List[str] = []
                     check_price_v3 = analysis.get("latest_close") or analysis.get("daily_close")
                     daily_azd_v3 = analysis.get("daily_azd")
@@ -1737,14 +1741,14 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     if h60_conds3.get("in_c_central"):
                         filter_reasons3.append("价格仍在C中枢内（未突破ZG）")
                     if filter_reasons3:
-                        buy_signals["third_buy"] = False
+                        effective_signals["third_buy"] = False
                         if state != "SELL":
                             # 按优先级重新评估 state：二买 > 三买 > 一买
-                            if buy_signals["second_buy"]:
+                            if effective_signals["second_buy"]:
                                 state = "BUY_2"
                                 new_reason = "右侧二买确认，底部确立！"
                                 analysis["h60_buy_type"] = "second_buy"
-                            elif buy_signals["first_buy"]:
+                            elif effective_signals["first_buy"]:
                                 state = "BUY_1"
                                 new_reason = "左侧一买确认，轻仓试探。"
                                 analysis["h60_buy_type"] = "first_buy"
@@ -1762,7 +1766,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                             analysis["h60_buy_type"] = None
 
                 # 一买必须同时满足：日线支撑 + 有底背驰
-                if buy_signals["first_buy"] and first_buy_info:
+                if effective_signals["first_buy"] and first_buy_info:
                     filter_reasons1: List[str] = []
                     check_price_v1 = analysis.get("latest_close") or analysis.get("daily_close")
                     daily_azd_v1 = analysis.get("daily_azd")
@@ -1774,14 +1778,14 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     if not h60_conds1.get("has_bottom_div_in_switch"):
                         filter_reasons1.append("无底背驰确认")
                     if filter_reasons1:
-                        buy_signals["first_buy"] = False
+                        effective_signals["first_buy"] = False
                         if state != "SELL":
                             # 按优先级重新评估 state：二买 > 三买 > 一买
-                            if buy_signals["second_buy"]:
+                            if effective_signals["second_buy"]:
                                 state = "BUY_2"
                                 new_reason = "右侧二买确认，底部确立！"
                                 analysis["h60_buy_type"] = "second_buy"
-                            elif buy_signals["third_buy"]:
+                            elif effective_signals["third_buy"]:
                                 state = "BUY_3"
                                 new_reason = "三买突破确认，顺势跟进。"
                                 analysis["h60_buy_type"] = "third_buy"
@@ -1798,8 +1802,8 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                         else:
                             analysis["h60_buy_type"] = None
 
-            # 显式同步过滤后的买点信号回 analysis，避免隐式副作用依赖
-            analysis["buy_signals"] = buy_signals
+            # 显式同步：buy_signals保持原始60分钟信号用于客观展示
+            # effective_signals用于实际交易决策（已受15分钟过滤）
 
             # ========== 持仓标的统一转换：买点状态转为HOLD，但保留买点信息 ==========
             if code in holding_codes and state in ("BUY_1", "BUY_2", "BUY_3"):
@@ -1833,6 +1837,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     h15_result=h15_result,
                     sell_signals=analysis["h60_sell_signals"],
                     buy_signals=buy_signals,
+                    effective_buy_signals=effective_signals,  # 传递过滤后的有效信号，与前端保持一致
                 )
                 log_snapshot(snapshot)
             except Exception:

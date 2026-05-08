@@ -388,10 +388,15 @@ def build_snapshot_data(
     h15_result: Optional[Dict[str, Any]],
     sell_signals: Optional[Dict[str, bool]] = None,
     buy_signals: Optional[Dict[str, bool]] = None,
+    effective_buy_signals: Optional[Dict[str, bool]] = None,
 ) -> Dict[str, Any]:
     """
     将状态机分析结果拍平为 CSV 行字典。
     返回的字典中全为标量（字符串/数字），无内存引用污染。
+    
+    Args:
+        effective_buy_signals: 经过15分钟条件过滤后的有效买点信号，
+                               若提供则用于客观缠论信号展示，与前端逻辑保持一致
     """
     analysis = copy.deepcopy(analysis)
     h60_result = copy.deepcopy(h60_result) if h60_result else None
@@ -402,7 +407,9 @@ def build_snapshot_data(
 
     dif, dea = _h15_macd(h15_result)
 
-    chan_sig = _chan_signal(buy_signals, sell_signals)
+    # 优先使用过滤后的有效信号，与前端保持一致；若未提供则回退到原始信号
+    signals_for_chan = effective_buy_signals if effective_buy_signals is not None else buy_signals
+    chan_sig = _chan_signal(signals_for_chan, sell_signals)
     h15_sig = _h15_signal(analysis)
     trade_sig = _to_chinese_trade_signal(
         analysis.get("state", "IGNORE"),
