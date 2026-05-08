@@ -1763,6 +1763,25 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
             # 显式同步过滤后的买点信号回 analysis，避免隐式副作用依赖
             analysis["buy_signals"] = buy_signals
 
+            # ========== 持仓标的统一转换：买点状态转为HOLD，但保留买点信息 ==========
+            if code in holding_codes and state in ("BUY_1", "BUY_2", "BUY_3"):
+                # 记录买点类型用于决策理由
+                buy_type_names = {
+                    "BUY_1": "一买",
+                    "BUY_2": "二买",
+                    "BUY_3": "三买",
+                }
+                buy_type_name = buy_type_names.get(state, "")
+                # 获取当前的reason（可能包含买点确认信息）
+                current_reason = analysis.get("reason", "")
+                # 转换为持仓状态，但保留买点参考信息
+                state = "HOLD"
+                analysis["state"] = state
+                if buy_type_name:
+                    analysis["reason"] = f"持仓中，符合{buy_type_name}条件，可参考加仓（主状态：持仓）"
+                else:
+                    analysis["reason"] = f"持仓中，有买点信号，可参考加仓（主状态：持仓）"
+
             # 写入15分钟级快照日志（无侵入式，异常不阻塞主逻辑）
             try:
                 from utils.csv_logger import build_snapshot_data, log_snapshot
