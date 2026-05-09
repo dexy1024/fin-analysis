@@ -259,61 +259,77 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
 
     # ========== 逻辑 1：底背驰判断 ==========
     if current_direction == "down":
-        # 条件1：方向与空间 - 当前笔最低价 < 对比笔最低价（创新低）
-        current_low = min(
-            float(current_pen.get("start_price", 0)),
-            float(current_pen.get("end_price", 0))
-        )
-        compare_low = min(
-            float(compare_pen.get("start_price", 0)),
-            float(compare_pen.get("end_price", 0))
-        )
-        if current_low < compare_low:
-            # 条件2：动能衰竭（满足其一即可）
-            # 面积背驰：当前绿柱面积 < 对比笔绿柱面积
-            current_area = calc_macd_area(current_pen, is_green=True)
-            compare_area = calc_macd_area(compare_pen, is_green=True)
-            area_divergence = current_area > 0 and compare_area > 0 and current_area < compare_area
+        # 必须先计算MACD面积，确保当前笔有实际的下跌动能
+        current_area = calc_macd_area(current_pen, is_green=True)
+        compare_area = calc_macd_area(compare_pen, is_green=True)
 
-            # 黄白线背离：当前DIF最低值 > 对比笔DIF最低值
-            current_dif_min = get_dif_extreme(current_pen, find_max=False)
-            compare_dif_min = get_dif_extreme(compare_pen, find_max=False)
-            dif_divergence = current_dif_min > compare_dif_min
+        # 严格条件：当前笔必须有绿柱（有实际的下跌动能）
+        if current_area <= 0:
+            # 当前笔没有绿柱，说明是假下跌（实际在上涨），不能形成底背驰
+            pass  # 继续后续逻辑，最终会返回"无信号"
+        else:
+            # 条件1：方向与空间 - 当前笔最低价 < 对比笔最低价（创新低）
+            current_low = min(
+                float(current_pen.get("start_price", 0)),
+                float(current_pen.get("end_price", 0))
+            )
+            compare_low = min(
+                float(compare_pen.get("start_price", 0)),
+                float(compare_pen.get("end_price", 0))
+            )
+            if current_low < compare_low:
+                # 条件2：动能衰竭（满足其一即可）
+                # 面积背驰：当前绿柱面积 < 对比笔绿柱面积（必须两笔都有绿柱）
+                area_divergence = compare_area > 0 and current_area < compare_area
 
-            # 条件3：右侧确认 - 底分型
-            has_bottom = has_fractal_at_end(current_pen, "bottom")
+                # 黄白线背离：当前DIF最低值 > 对比笔DIF最低值（要求对比笔也有下跌动能）
+                current_dif_min = get_dif_extreme(current_pen, find_max=False)
+                compare_dif_min = get_dif_extreme(compare_pen, find_max=False)
+                # 只有当对比笔也有绿柱时，DIF比较才有意义
+                dif_divergence = compare_area > 0 and current_dif_min > compare_dif_min
 
-            if has_bottom and (area_divergence or dif_divergence):
-                return "底背驰"
+                # 条件3：右侧确认 - 底分型
+                has_bottom = has_fractal_at_end(current_pen, "bottom")
+
+                if has_bottom and (area_divergence or dif_divergence):
+                    return "底背驰"
 
     # ========== 逻辑 2：顶背驰判断 ==========
     if current_direction == "up":
-        # 条件1：方向与空间 - 当前笔最高价 > 对比笔最高价（创新高）
-        current_high = max(
-            float(current_pen.get("start_price", 0)),
-            float(current_pen.get("end_price", 0))
-        )
-        compare_high = max(
-            float(compare_pen.get("start_price", 0)),
-            float(compare_pen.get("end_price", 0))
-        )
-        if current_high > compare_high:
-            # 条件2：动能衰竭（满足其一即可）
-            # 面积背驰：当前红柱面积 < 对比笔红柱面积
-            current_area = calc_macd_area(current_pen, is_green=False)
-            compare_area = calc_macd_area(compare_pen, is_green=False)
-            area_divergence = current_area > 0 and compare_area > 0 and current_area < compare_area
+        # 必须先计算MACD面积，确保当前笔有实际的上涨动能
+        current_area = calc_macd_area(current_pen, is_green=False)
+        compare_area = calc_macd_area(compare_pen, is_green=False)
 
-            # 黄白线背离：当前DIF最高值 < 对比笔DIF最高值
-            current_dif_max = get_dif_extreme(current_pen, find_max=True)
-            compare_dif_max = get_dif_extreme(compare_pen, find_max=True)
-            dif_divergence = current_dif_max < compare_dif_max
+        # 严格条件：当前笔必须有红柱（有实际的上涨动能）
+        if current_area <= 0:
+            # 当前笔没有红柱，说明是假上涨（实际在下跌），不能形成顶背驰
+            pass  # 继续后续逻辑，最终会返回"无信号"
+        else:
+            # 条件1：方向与空间 - 当前笔最高价 > 对比笔最高价（创新高）
+            current_high = max(
+                float(current_pen.get("start_price", 0)),
+                float(current_pen.get("end_price", 0))
+            )
+            compare_high = max(
+                float(compare_pen.get("start_price", 0)),
+                float(compare_pen.get("end_price", 0))
+            )
+            if current_high > compare_high:
+                # 条件2：动能衰竭（满足其一即可）
+                # 面积背驰：当前红柱面积 < 对比笔红柱面积（必须两笔都有红柱）
+                area_divergence = compare_area > 0 and current_area < compare_area
 
-            # 条件3：右侧确认 - 顶分型
-            has_top = has_fractal_at_end(current_pen, "top")
+                # 黄白线背离：当前DIF最高值 < 对比笔DIF最高值（要求对比笔也有上涨动能）
+                current_dif_max = get_dif_extreme(current_pen, find_max=True)
+                compare_dif_max = get_dif_extreme(compare_pen, find_max=True)
+                # 只有当对比笔也有红柱时，DIF比较才有意义
+                dif_divergence = compare_area > 0 and current_dif_max < compare_dif_max
 
-            if has_top and (area_divergence or dif_divergence):
-                return "顶背驰"
+                # 条件3：右侧确认 - 顶分型
+                has_top = has_fractal_at_end(current_pen, "top")
+
+                if has_top and (area_divergence or dif_divergence):
+                    return "顶背驰"
 
     # ========== 逻辑 3：无信号 ==========
     return "无信号"
