@@ -602,6 +602,23 @@ def build_snapshot_data(
     h60_result = copy.deepcopy(h60_result) if h60_result else None
     h15_result = copy.deepcopy(h15_result) if h15_result else None
 
+    # 重新获取15分钟数据，确保非交易日数据一致性
+    # 避免使用可能过期的内存缓存数据
+    if h15_result:
+        try:
+            from services.indicators import get_index_kline
+            from datetime import timedelta
+            h15_start = (timestamp - timedelta(days=25)).strftime("%Y-%m-%d")
+            h15_result = get_index_kline(
+                symbol=code,
+                start_date=h15_start,
+                end_date=None,
+                period="15",
+                refresh=True,  # 强制刷新，确保数据一致性
+            )
+        except Exception:
+            pass  # 重新获取失败则使用传入的数据
+
     # 现价：直接使用状态机已计算好的 latest_close（优先级 15m > 60m > 日线），避免与决策逻辑分歧
     price = analysis.get("latest_close") or analysis.get("daily_close")
 
