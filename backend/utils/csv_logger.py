@@ -109,54 +109,47 @@ def _to_chinese_market_state(state: str) -> str:
 
 
 def _to_chinese_trade_signal(
-    state: str, sell_signals: Optional[Dict[str, bool]] = None, reason: str = "",
-    chan_sig: str = "", pen_direction: str = ""
+    state: str,
+    sell_signals: Optional[Dict[str, bool]] = None,
+    reason: str = "",
+    chan_sig: str = "",
+    pen_direction: str = "",
+    h15_sig: str = "",
+    price_alignment: str = "",
 ) -> str:
     """
-    基于「客观缠论信号 + 60m笔方向」确定实际交易动作。
+    基于4条件判断确定实际交易动作：
 
-    全局规则：
-    - 60m笔方向向下（寻底模式）：屏蔽所有卖点，只允许评估买点（一买/二买/三买）
-    - 60m笔方向向上（冲顶模式）：屏蔽所有买点，只允许评估卖点（一卖/二卖/三卖）
+    满仓出击（买入）终极条件：
+    - 60m客观缠论信号 包含 "买" (一买/二买/三买)
+    - 60m笔方向 == "向下"
+    - 15分信号 == "底背驰"
+    - 区间价格对齐 == "是"
+    → 执行：买入
 
-    优先级：
-    - 买点：二买 > 一买 > 三买
-    - 卖点：二卖 > 一卖 > 三卖
+    鸣金收兵（卖出）终极条件：
+    - 60m客观缠论信号 包含 "卖" (一卖/二卖/三卖)
+    - 60m笔方向 == "向上"
+    - 15分信号 == "顶背驰"
+    - 区间价格对齐 == "是"
+    → 执行：卖出
+
+    喝茶观望：上述4个条件任一不满足 → 观望
     """
     # 检查信号组成
-    has_first_buy = "一买" in chan_sig
-    has_second_buy = "二买" in chan_sig
-    has_third_buy = "三买" in chan_sig
-    has_first_sell = "一卖" in chan_sig
-    has_second_sell = "二卖" in chan_sig
-    has_third_sell = "三卖" in chan_sig
+    has_buy = "买" in chan_sig
+    has_sell = "卖" in chan_sig
 
-    # 全局规则 1：60m笔方向向下（寻底模式）
-    # 屏蔽所有卖点，只评估买点
-    if pen_direction == "向下":
-        if has_second_buy:
-            return "二买"
-        if has_first_buy:
-            return "一买"
-        if has_third_buy:
-            return "三买"
-        # 无买点时观望
-        return "观望"
+    # 买入条件判断（4条件必须全部满足）
+    if has_buy and pen_direction == "向下" and h15_sig == "底背驰" and price_alignment == "是":
+        return "买入"
 
-    # 全局规则 2：60m笔方向向上（冲顶模式）
-    # 屏蔽所有买点，只评估卖点
-    if pen_direction == "向上":
-        if has_second_sell:
-            return "二卖"
-        if has_first_sell:
-            return "一卖"
-        if has_third_sell:
-            return "三卖"
-        # 无卖点时观望
-        return "观望"
+    # 卖出条件判断（4条件必须全部满足）
+    if has_sell and pen_direction == "向上" and h15_sig == "顶背驰" and price_alignment == "是":
+        return "卖出"
 
-    # 兜底：根据状态机状态
-    return _TRADE_SIGNAL_MAP.get(state, str(state))
+    # 任一条件不满足 → 观望
+    return "观望"
 
 
 def _fmt_float(value: Any) -> str:
@@ -630,69 +623,58 @@ def _build_smart_reason(
     h15_sig: str,
     trade_sig: str,
     pen_direction: str,
+    price_alignment: str,
 ) -> str:
     """
-    决策理由生成：说明缠论信号 + 60m笔方向 → 最终结论
+    决策理由生成：基于4条件判断生成交易理由。
 
-    格式：客观缠论信号为{信号}，60分钟笔方向{向上/向下}，因此实际交易动作是{交易动作}
+    满仓出击（买入）条件：
+    - 60m信号含"买" + 60m笔向下 + 15分底背驰 + 区间价格对齐是
+    → 理由：宏观战略锁定，微观动能衰竭，时空完美共振！
+
+    鸣金收兵（卖出）条件：
+    - 60m信号含"卖" + 60m笔向上 + 15分顶背驰 + 区间价格对齐是
+    → 理由：宏观遇阻，微观多头力竭，时空完美共振！
+
+    喝茶观望：任一条件不满足 → 理由：4条件未全部满足，继续观望
     """
     # 检查信号组成
-    has_first_buy = "一买" in chan_sig
-    has_second_buy = "二买" in chan_sig
-    has_third_buy = "三买" in chan_sig
-    has_first_sell = "一卖" in chan_sig
-    has_second_sell = "二卖" in chan_sig
-    has_third_sell = "三卖" in chan_sig
+    has_buy = "买" in chan_sig
+    has_sell = "卖" in chan_sig
 
-    # 构建信号描述
-    signals = []
-    if has_first_sell:
-        signals.append("一卖")
-    if has_second_sell:
-        signals.append("二卖")
-    if has_third_sell:
-        signals.append("三卖")
-    if has_first_buy:
-        signals.append("一买")
-    if has_second_buy:
-        signals.append("二买")
-    if has_third_buy:
-        signals.append("三买")
+    # 买入成功
+    if trade_sig == "买入":
+        return "宏观战略锁定，微观动能衰竭，时空完美共振！"
 
-    sig_desc = "、".join(signals) if signals else "无信号"
+    # 卖出成功
+    if trade_sig == "卖出":
+        return "宏观遇阻，微观多头力竭，时空完美共振！"
 
-    # 根据笔方向和交易动作生成结论说明（使用实际的 pen_direction）
-    mode_desc = "寻底模式" if pen_direction == "向下" else "冲顶模式"
+    # 观望情况：分析哪个条件不满足
+    reasons = []
 
-    if trade_sig == "二买":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是二买（笔方向向下时优先买点）"
+    if not (has_buy or has_sell):
+        reasons.append("无买卖信号")
+    elif has_buy and pen_direction != "向下":
+        reasons.append(f"买点但笔方向{pen_direction}")
+    elif has_sell and pen_direction != "向上":
+        reasons.append(f"卖点但笔方向{pen_direction}")
 
-    if trade_sig == "二卖":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是二卖（笔方向向上时优先卖点）"
+    if h15_sig == "无信号":
+        reasons.append("15分无背驰")
+    elif has_buy and h15_sig != "底背驰":
+        reasons.append(f"15分{h15_sig}非底背驰")
+    elif has_sell and h15_sig != "顶背驰":
+        reasons.append(f"15分{h15_sig}非顶背驰")
 
-    if trade_sig == "一买":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是一买（趋势底背驰买入）"
+    if price_alignment != "是":
+        reasons.append(f"区间价格对齐{price_alignment}")
 
-    if trade_sig == "一卖":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是一卖（趋势顶背驰卖出）"
-
-    if trade_sig == "三买":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是三买（突破回踩买入）"
-
-    if trade_sig == "三卖":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是三卖（跌破反抽卖出）"
-
-    if trade_sig == "持仓":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}，无明确买卖点，持仓观望"
-
-    if trade_sig == "观望":
-        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}，中枢震荡，观望"
-
-    if trade_sig == "风控卖出":
-        return "跌破战略底线，触发风控，强制清仓"
+    if reasons:
+        return f"4条件未全部满足（{'；'.join(reasons)}），继续观望"
 
     # 兜底
-    return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}，实际交易动作是{trade_sig}"
+    return "条件未全部满足，继续观望"
 
 
 def build_snapshot_data(
@@ -722,22 +704,28 @@ def build_snapshot_data(
     chan_sig = _chan_signal(buy_signals, sell_signals)
     h15_sig = _h15_signal(h15_result)
     pen_dir = _pen_direction(analysis)
+
+    # 先计算区间价格对齐（4条件判断需要）
+    price_alignment = _price_alignment(h15_sig, pen_dir, h15_result, h60_result)
+
+    # 基于4条件判断确定交易信号
     trade_sig = _to_chinese_trade_signal(
         analysis.get("state", "IGNORE"),
         sell_signals,
         analysis.get("reason", ""),
         chan_sig,
         pen_dir,
+        h15_sig,
+        price_alignment,
     )
+
+    # 基于4条件判断生成决策理由
     smart_reason = _build_smart_reason(
-        market_state, analysis, chan_sig, h15_sig, trade_sig, pen_dir
+        market_state, analysis, chan_sig, h15_sig, trade_sig, pen_dir, price_alignment
     )
 
     # 判断是否持仓（从 watchlist.json 的 holdings 中检查）
     is_holding = _check_is_holding(code)
-
-    # 计算区间价格对齐
-    price_alignment = _price_alignment(h15_sig, pen_dir, h15_result, h60_result)
 
     return {
         "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
