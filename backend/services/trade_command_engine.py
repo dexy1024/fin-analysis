@@ -1596,7 +1596,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                 start_date=h15_start,
                 end_date=None,
                 period="15",
-                refresh=False,
+                refresh=True,  # 强制刷新，确保与调度器同步的数据一致
             )
         except Exception as e:  # noqa: BLE001
             logging.warning("trade_command_engine: 15m拉取失败 %s: %s", code, e)
