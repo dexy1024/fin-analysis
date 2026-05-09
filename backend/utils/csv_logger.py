@@ -175,10 +175,13 @@ def _fmt_float4(value: Any) -> str:
 def _get_60m_trade_action(chan_sig: str, pen_direction: str) -> str:
     has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
+    # 当同时存在买卖信号时，只看卖信号，忽略买信号
+    if has_sell:
+        if pen_direction == "向上":
+            return "卖出"
+        return "观望"
     if has_buy and pen_direction == "向下":
         return "买入"
-    if has_sell and pen_direction == "向上":
-        return "卖出"
     return "观望"
 
 
