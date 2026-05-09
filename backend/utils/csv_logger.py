@@ -178,7 +178,7 @@ def _fmt_float4(value: Any) -> str:
         return str(value) if value != "" else ""
 
 
-def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) -> str:
+def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     """
     独立计算15分钟背驰信号，仅依赖15分钟K线、笔和MACD数据。
 
@@ -186,10 +186,6 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) 
     - 底背驰：当前向下笔 + 价格创新低 + 动能衰竭(面积背驰或黄白线背离) + 底分型确认
     - 顶背驰：当前向上笔 + 价格创新高 + 动能衰竭(面积背驰或黄白线背离) + 顶分型确认
     - 不满足时返回 "无信号"
-
-    全局规则过滤：
-    - 60分钟向上（冲顶模式）：只允许评估顶背驰（卖点信号）
-    - 60分钟向下（寻底模式）：只允许评估底背驰（买点信号）
     """
     if not h15_result:
         return "无信号"
@@ -261,18 +257,8 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) 
                 return True
         return False
 
-    # ========== 全局规则过滤 ==========
-    # 60分钟向上（冲顶模式）：只允许评估顶背驰（卖点信号）
-    # 60分钟向下（寻底模式）：只允许评估底背驰（买点信号）
-    if h60_pen_up:
-        # 冲顶模式：忽略底背驰判断，只允许顶背驰
-        pass
-    else:
-        # 寻底模式：忽略顶背驰判断，只允许底背驰
-        pass
-
     # ========== 逻辑 1：底背驰判断 ==========
-    if current_direction == "down" and not h60_pen_up:
+    if current_direction == "down":
         # 必须先计算MACD面积，确保当前笔有实际的下跌动能
         current_area = calc_macd_area(current_pen, is_green=True)
         compare_area = calc_macd_area(compare_pen, is_green=True)
@@ -282,11 +268,11 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) 
             # 当前笔没有绿柱，说明是假下跌（实际在上涨），不能形成底背驰
             pass  # 继续后续逻辑，最终会返回"无信号"
         else:
-            # 检查是否创出全局新低：如果当前笔绿柱面积大于所有历史同向笔，则不是背驰
-            all_same_dir_areas = [calc_macd_area(p, is_green=True) for p in same_dir_pens[:-1]]  # 排除当前笔
-            max_historical_area = max(all_same_dir_areas) if all_same_dir_areas else 0
-            if current_area > max_historical_area:
-                # 当前笔绿柱面积创出全局新高，下跌动能正在加强，绝对不是底背驰
+            # 检查是否动能加速：取最近3个同向笔，如果当前笔面积最大，则不是背驰
+            recent_3_areas = [calc_macd_area(p, is_green=True) for p in same_dir_pens[-3:]]  # 最近3个（含当前笔）
+            max_recent_area = max(recent_3_areas) if recent_3_areas else 0
+            if current_area >= max_recent_area:
+                # 当前笔绿柱面积在最近3笔中最大（含相等），动能正在加强，绝对不是底背驰
                 pass  # 继续后续逻辑，最终会返回"无信号"
             else:
                 # 条件1：方向与空间 - 当前笔最低价 < 对比笔最低价（创新低）
@@ -316,7 +302,7 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) 
                         return "底背驰"
 
     # ========== 逻辑 2：顶背驰判断 ==========
-    if current_direction == "up" and h60_pen_up:
+    if current_direction == "up":
         # 必须先计算MACD面积，确保当前笔有实际的上涨动能
         current_area = calc_macd_area(current_pen, is_green=False)
         compare_area = calc_macd_area(compare_pen, is_green=False)
@@ -326,11 +312,11 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) 
             # 当前笔没有红柱，说明是假上涨（实际在下跌），不能形成顶背驰
             pass  # 继续后续逻辑，最终会返回"无信号"
         else:
-            # 检查是否创出全局新高：如果当前笔红柱面积大于所有历史同向笔，则不是背驰
-            all_same_dir_areas = [calc_macd_area(p, is_green=False) for p in same_dir_pens[:-1]]  # 排除当前笔
-            max_historical_area = max(all_same_dir_areas) if all_same_dir_areas else 0
-            if current_area > max_historical_area:
-                # 当前笔红柱面积创出全局新高，动能正在加强，绝对不是顶背驰
+            # 检查是否动能加速：取最近3个同向笔，如果当前笔面积最大，则不是背驰
+            recent_3_areas = [calc_macd_area(p, is_green=False) for p in same_dir_pens[-3:]]  # 最近3个（含当前笔）
+            max_recent_area = max(recent_3_areas) if recent_3_areas else 0
+            if current_area >= max_recent_area:
+                # 当前笔红柱面积在最近3笔中最大（含相等），动能正在加强，绝对不是顶背驰
                 pass  # 继续后续逻辑，最终会返回"无信号"
             else:
                 # 条件1：方向与空间 - 当前笔最高价 > 对比笔最高价（创新高）
@@ -622,10 +608,7 @@ def build_snapshot_data(
     dif, dea = _h15_macd(h15_result)
 
     chan_sig = _chan_signal(buy_signals, sell_signals)
-    # 获取60分钟笔方向，传递给15分信号计算函数进行过滤
-    h60_conditions = analysis.get("h60_conditions") or {}
-    h60_pen_up = h60_conditions.get("last_pen_up", False)
-    h15_sig = _h15_signal(h15_result, h60_pen_up)
+    h15_sig = _h15_signal(h15_result)
     pen_dir = _pen_direction(analysis)
     trade_sig = _to_chinese_trade_signal(
         analysis.get("state", "IGNORE"),
