@@ -22,6 +22,7 @@ LOGS_DIR = ROOT_DIR / "logs"
 CSV_HEADERS = [
     "时间",
     "实际交易动作",
+    "60m交易",
     "是否持仓",
     "大盘状态",
     "代码",
@@ -730,6 +731,7 @@ def build_snapshot_data(
     return {
         "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "实际交易动作": trade_sig,
+        "60m交易": trade_sig,
         "是否持仓": is_holding,
         "大盘状态": _to_chinese_market_state(market_state),
         "代码": str(code),
