@@ -172,6 +172,16 @@ def _fmt_float4(value: Any) -> str:
     except (TypeError, ValueError):
         return str(value) if value != "" else ""
 
+def _get_60m_trade_action(chan_sig: str, pen_direction: str) -> str:
+    has_buy = "买" in chan_sig
+    has_sell = "卖" in chan_sig
+    if has_buy and pen_direction == "向下":
+        return "买入"
+    if has_sell and pen_direction == "向上":
+        return "卖出"
+    return "观望"
+
+
 
 def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -731,7 +741,7 @@ def build_snapshot_data(
     return {
         "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "实际交易动作": trade_sig,
-        "60m交易": trade_sig,
+        "60m交易": _get_60m_trade_action(chan_sig, pen_dir),
         "是否持仓": is_holding,
         "大盘状态": _to_chinese_market_state(market_state),
         "代码": str(code),
