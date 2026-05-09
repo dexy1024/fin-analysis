@@ -31,6 +31,7 @@ CSV_HEADERS = [
     "客观缠论信号",
     "60m笔方向",
     "15分信号",
+    "区间价格对齐",
     "决策理由",
     "日线A中枢ZD",
     "日线C中枢ZD",
@@ -38,7 +39,6 @@ CSV_HEADERS = [
     "15m_DIF",
     "15m_DEA",
     "底分型成立",
-    "区间价格对齐",
 ]
 
 # 状态映射：英文 → 中文
@@ -751,6 +751,7 @@ def build_snapshot_data(
         "客观缠论信号": chan_sig,
         "60m笔方向": _pen_direction(analysis),
         "15分信号": h15_sig,
+        "区间价格对齐": price_alignment,
         "决策理由": smart_reason,
         "日线A中枢ZD": _fmt_float(analysis.get("daily_azd")),
         "日线C中枢ZD": _fmt_float(analysis.get("daily_czd")),
@@ -758,7 +759,6 @@ def build_snapshot_data(
         "15m_DIF": dif,
         "15m_DEA": dea,
         "底分型成立": _has_bottom_fractal(h15_result),
-        "区间价格对齐": price_alignment,
     }
 
 
