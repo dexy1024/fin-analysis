@@ -178,7 +178,7 @@ def _fmt_float4(value: Any) -> str:
         return str(value) if value != "" else ""
 
 
-def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
+def _h15_signal(h15_result: Optional[Dict[str, Any]], h60_pen_up: bool = False) -> str:
     """
     独立计算15分钟背驰信号，仅依赖15分钟K线、笔和MACD数据。
 
@@ -186,6 +186,10 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     - 底背驰：当前向下笔 + 价格创新低 + 动能衰竭(面积背驰或黄白线背离) + 底分型确认
     - 顶背驰：当前向上笔 + 价格创新高 + 动能衰竭(面积背驰或黄白线背离) + 顶分型确认
     - 不满足时返回 "无信号"
+
+    全局规则过滤：
+    - 60分钟向上（冲顶模式）：只允许评估顶背驰（卖点信号）
+    - 60分钟向下（寻底模式）：只允许评估底背驰（买点信号）
     """
     if not h15_result:
         return "无信号"
@@ -257,8 +261,18 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
                 return True
         return False
 
+    # ========== 全局规则过滤 ==========
+    # 60分钟向上（冲顶模式）：只允许评估顶背驰（卖点信号）
+    # 60分钟向下（寻底模式）：只允许评估底背驰（买点信号）
+    if h60_pen_up:
+        # 冲顶模式：忽略底背驰判断，只允许顶背驰
+        pass
+    else:
+        # 寻底模式：忽略顶背驰判断，只允许底背驰
+        pass
+
     # ========== 逻辑 1：底背驰判断 ==========
-    if current_direction == "down":
+    if current_direction == "down" and not h60_pen_up:
         # 必须先计算MACD面积，确保当前笔有实际的下跌动能
         current_area = calc_macd_area(current_pen, is_green=True)
         compare_area = calc_macd_area(compare_pen, is_green=True)
@@ -302,7 +316,7 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
                         return "底背驰"
 
     # ========== 逻辑 2：顶背驰判断 ==========
-    if current_direction == "up":
+    if current_direction == "up" and h60_pen_up:
         # 必须先计算MACD面积，确保当前笔有实际的上涨动能
         current_area = calc_macd_area(current_pen, is_green=False)
         compare_area = calc_macd_area(compare_pen, is_green=False)
@@ -608,7 +622,10 @@ def build_snapshot_data(
     dif, dea = _h15_macd(h15_result)
 
     chan_sig = _chan_signal(buy_signals, sell_signals)
-    h15_sig = _h15_signal(h15_result)
+    # 获取60分钟笔方向，传递给15分信号计算函数进行过滤
+    h60_conditions = analysis.get("h60_conditions") or {}
+    h60_pen_up = h60_conditions.get("last_pen_up", False)
+    h15_sig = _h15_signal(h15_result, h60_pen_up)
     pen_dir = _pen_direction(analysis)
     trade_sig = _to_chinese_trade_signal(
         analysis.get("state", "IGNORE"),
