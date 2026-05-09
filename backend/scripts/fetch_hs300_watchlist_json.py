@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 从新浪沪深300节点拉取成份 code + name，写入 backend/data/watchlist_hs300.json
-（结构与 backend/data/watchlist.json 一致：仅 holdings 数组每项含 code、name）。
+（结构与 backend/data/watchlist.json 一致：holdings 每行形如 `{ "code": "…", "name": "…" }`）。
 
 接口：vip.stock.finance.sina.com.cn/.../Market_Center.getHQNodeData ，node=hs300 。
 
@@ -119,8 +119,7 @@ def fetch_hs300_holdings() -> list[dict[str, str]]:
 
 
 def _write_watchlist_hs300_json(comment: str, holdings: list[dict[str, str]]) -> None:
-    """holdings 每项单独一行，形如 {\"code\": \"000001\",\"name\": \"…\"}"""
-    sep = (",", ": ")
+    """与 watchlist.json 同款排版：每项一行 `<4sp>{ \"code\": \"…\", \"name\": \"…\" }`。最后一项不加逗号。"""
     chunks: list[str] = [
         "{\n",
         '  "_comment": ' + json.dumps(comment, ensure_ascii=False) + ",\n",
@@ -128,9 +127,13 @@ def _write_watchlist_hs300_json(comment: str, holdings: list[dict[str, str]]) ->
     ]
     last_i = len(holdings) - 1
     for i, h in enumerate(holdings):
-        line = json.dumps(h, ensure_ascii=False, separators=sep)
-        suf = ",\n" if i != last_i else "\n"
-        chunks.append("    " + line + suf)
+        qc = json.dumps(h["code"], ensure_ascii=False)
+        qn = json.dumps(h["name"], ensure_ascii=False)
+        line = f'    {{ "code": {qc}, "name": {qn} }}'
+        if i != last_i:
+            line += ","
+        line += "\n"
+        chunks.append(line)
     chunks.append("  ]\n")
     chunks.append("}\n")
     text = "".join(chunks)
