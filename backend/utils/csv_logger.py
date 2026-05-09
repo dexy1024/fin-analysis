@@ -178,42 +178,145 @@ def _fmt_float4(value: Any) -> str:
         return str(value) if value != "" else ""
 
 
-def _h15_signal(analysis: Dict[str, Any]) -> str:
+def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     """
-    根据15分钟分析结果生成组合详情信号。
-    组合条件：底背驰 / 顶背驰 / 趋势底背驰 / 级别对齐
-    用 '+' 连接多个同时成立的信号，无信号时返回 "无信号"。
-    互斥规则：按60分钟笔方向过滤，向上笔时只保留顶背驰，向下笔时只保留底背驰类信号。
+    独立计算15分钟背驰信号，仅依赖15分钟K线、笔和MACD数据。
+
+    规则：
+    - 底背驰：当前向下笔 + 价格创新低 + 动能衰竭(面积背驰或黄白线背离) + 底分型确认
+    - 顶背驰：当前向上笔 + 价格创新高 + 动能衰竭(面积背驰或黄白线背离) + 顶分型确认
+    - 不满足时返回 "无信号"
     """
-    signals: list[str] = []
+    if not h15_result:
+        return "无信号"
 
-    # 获取60分钟笔方向
-    h60_conditions = analysis.get("h60_conditions") or {}
-    last_pen_up = h60_conditions.get("last_pen_up", False)
+    data = h15_result.get("data", [])
+    pens = h15_result.get("pens", [])
+    pens_effective = h15_result.get("pens_effective", [])
+    fractals = h15_result.get("fractals", [])
 
-    if last_pen_up:
-        # 向上笔：只保留顶背驰（卖点信号）
-        if analysis.get("h15_top_div"):
-            signals.append("顶背驰")
-    else:
-        # 向下笔：只保留底背驰类信号（买点信号）
-        if analysis.get("h15_bottom_div"):
-            signals.append("底背驰")
-        h15_trend = analysis.get("h15_trend_div")
-        if h15_trend and getattr(h15_trend, "has_signal", False):
-            div_type_label = "趋势底背驰" if getattr(h15_trend, "divergence_type", "") == "trend" else "盘整底背驰"
-            signals.append(div_type_label)
-        # 仅当 15分钟有趋势背驰时才显示级别对齐状态
-        h15_align = analysis.get("h15_level_alignment")
-        if (
-            h15_trend
-            and getattr(h15_trend, "has_signal", False)
-            and h15_align
-            and getattr(h15_align, "is_aligned", False)
-        ):
-            signals.append("级别对齐")
+    if not data or len(data) < 3 or not pens_effective:
+        return "无信号"
 
-    return "+".join(signals) if signals else "无信号"
+    # 构建日期到索引的映射
+    date_to_idx = {item["date"]: i for i, item in enumerate(data)}
+
+    # 获取有效笔（至少完成两根K线）
+    effective_pens = [p for p in pens_effective if p.get("direction") in ("up", "down")]
+    if len(effective_pens) < 2:
+        return "无信号"
+
+    # 当前笔：最新的一笔
+    current_pen = effective_pens[-1]
+    current_direction = current_pen.get("direction")
+
+    # 同向对比笔：与当前笔方向相同的前一笔
+    same_dir_pens = [p for p in effective_pens if p.get("direction") == current_direction]
+    if len(same_dir_pens) < 2:
+        return "无信号"
+    compare_pen = same_dir_pens[-2]
+
+    # 辅助函数：计算笔的MACD面积
+    def calc_macd_area(pen: Dict[str, Any], is_green: bool) -> float:
+        s_idx = date_to_idx.get(pen.get("start_date"))
+        e_idx = date_to_idx.get(pen.get("end_date"))
+        if s_idx is None or e_idx is None or s_idx > e_idx:
+            return 0.0
+        area = 0.0
+        for item in data[s_idx:e_idx + 1]:
+            m = item.get("macd", {}).get("macd")
+            if m is not None:
+                if is_green and m < 0:
+                    area += abs(m)
+                elif not is_green and m > 0:
+                    area += abs(m)
+        return area
+
+    # 辅助函数：计算笔内DIF极值
+    def get_dif_extreme(pen: Dict[str, Any], find_max: bool) -> float:
+        s_idx = date_to_idx.get(pen.get("start_date"))
+        e_idx = date_to_idx.get(pen.get("end_date"))
+        if s_idx is None or e_idx is None or s_idx > e_idx:
+            return 0.0
+        dif_values = [
+            item.get("macd", {}).get("dif")
+            for item in data[s_idx:e_idx + 1]
+            if item.get("macd", {}).get("dif") is not None
+        ]
+        if not dif_values:
+            return 0.0
+        return max(dif_values) if find_max else min(dif_values)
+
+    # 辅助函数：检查笔末端是否有分型
+    def has_fractal_at_end(pen: Dict[str, Any], fractal_type: str) -> bool:
+        pen_end_date = pen.get("end_date")
+        if not pen_end_date or not fractals:
+            return False
+        for f in fractals:
+            if f.get("type") == fractal_type and f.get("date") == pen_end_date:
+                return True
+        return False
+
+    # ========== 逻辑 1：底背驰判断 ==========
+    if current_direction == "down":
+        # 条件1：方向与空间 - 当前笔最低价 < 对比笔最低价（创新低）
+        current_low = min(
+            float(current_pen.get("start_price", 0)),
+            float(current_pen.get("end_price", 0))
+        )
+        compare_low = min(
+            float(compare_pen.get("start_price", 0)),
+            float(compare_pen.get("end_price", 0))
+        )
+        if current_low < compare_low:
+            # 条件2：动能衰竭（满足其一即可）
+            # 面积背驰：当前绿柱面积 < 对比笔绿柱面积
+            current_area = calc_macd_area(current_pen, is_green=True)
+            compare_area = calc_macd_area(compare_pen, is_green=True)
+            area_divergence = current_area > 0 and compare_area > 0 and current_area < compare_area
+
+            # 黄白线背离：当前DIF最低值 > 对比笔DIF最低值
+            current_dif_min = get_dif_extreme(current_pen, find_max=False)
+            compare_dif_min = get_dif_extreme(compare_pen, find_max=False)
+            dif_divergence = current_dif_min > compare_dif_min
+
+            # 条件3：右侧确认 - 底分型
+            has_bottom = has_fractal_at_end(current_pen, "bottom")
+
+            if has_bottom and (area_divergence or dif_divergence):
+                return "底背驰"
+
+    # ========== 逻辑 2：顶背驰判断 ==========
+    if current_direction == "up":
+        # 条件1：方向与空间 - 当前笔最高价 > 对比笔最高价（创新高）
+        current_high = max(
+            float(current_pen.get("start_price", 0)),
+            float(current_pen.get("end_price", 0))
+        )
+        compare_high = max(
+            float(compare_pen.get("start_price", 0)),
+            float(compare_pen.get("end_price", 0))
+        )
+        if current_high > compare_high:
+            # 条件2：动能衰竭（满足其一即可）
+            # 面积背驰：当前红柱面积 < 对比笔红柱面积
+            current_area = calc_macd_area(current_pen, is_green=False)
+            compare_area = calc_macd_area(compare_pen, is_green=False)
+            area_divergence = current_area > 0 and compare_area > 0 and current_area < compare_area
+
+            # 黄白线背离：当前DIF最高值 < 对比笔DIF最高值
+            current_dif_max = get_dif_extreme(current_pen, find_max=True)
+            compare_dif_max = get_dif_extreme(compare_pen, find_max=True)
+            dif_divergence = current_dif_max < compare_dif_max
+
+            # 条件3：右侧确认 - 顶分型
+            has_top = has_fractal_at_end(current_pen, "top")
+
+            if has_top and (area_divergence or dif_divergence):
+                return "顶背驰"
+
+    # ========== 逻辑 3：无信号 ==========
+    return "无信号"
 
 
 def _defense_detail(analysis: Dict[str, Any]) -> str:
@@ -475,7 +578,7 @@ def build_snapshot_data(
     dif, dea = _h15_macd(h15_result)
 
     chan_sig = _chan_signal(buy_signals, sell_signals)
-    h15_sig = _h15_signal(analysis)
+    h15_sig = _h15_signal(h15_result)
     pen_dir = _pen_direction(analysis)
     trade_sig = _to_chinese_trade_signal(
         analysis.get("state", "IGNORE"),
