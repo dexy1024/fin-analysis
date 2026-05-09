@@ -22,15 +22,16 @@ LOGS_DIR = ROOT_DIR / "logs"
 CSV_HEADERS = [
     "时间",
     "实际交易动作",
+    "是否持仓",
     "大盘状态",
     "代码",
     "名称",
     "现价",
     "日线风控",
     "客观缠论信号",
+    "60m笔方向",
     "15分信号",
     "决策理由",
-    "60m笔方向",
     "日线A中枢ZD",
     "日线C中枢ZD",
     "锁定ZG",
@@ -78,6 +79,24 @@ def _ensure_logs_dir() -> Path:
     return LOGS_DIR
 
 
+def _check_is_holding(code: str) -> str:
+    """
+    检查标的是否在 watchlist.json 的 holdings 中。
+    返回: "是" 或 "否"
+    """
+    try:
+        watchlist_path = ROOT_DIR / "backend" / "data" / "watchlist.json"
+        if watchlist_path.is_file():
+            import json
+            data = json.loads(watchlist_path.read_text(encoding="utf-8"))
+            holdings = data.get("holdings", [])
+            if any(str(item.get("code", "")).strip() == str(code).strip() for item in holdings):
+                return "是"
+    except Exception:
+        pass
+    return "否"
+
+
 def _get_csv_path(timestamp: Optional[datetime] = None) -> Path:
     """按年分文件：logs/snapshots_YYYY.csv"""
     year = (timestamp or datetime.now()).strftime("%Y")
@@ -89,27 +108,53 @@ def _to_chinese_market_state(state: str) -> str:
 
 
 def _to_chinese_trade_signal(
-    state: str, sell_signals: Optional[Dict[str, bool]] = None, reason: str = ""
+    state: str, sell_signals: Optional[Dict[str, bool]] = None, reason: str = "",
+    chan_sig: str = "", pen_direction: str = ""
 ) -> str:
     """
-    将交易状态映射为可直接执行的操作指令。
-    - SELL 时优先根据 reason 细分为一卖/二卖/三卖。
-    - 若无缠论卖点但 reason 含顶背驰，说明是跨周期背驰驱动，返回「卖出」。
-    - 若上述皆无但 state == SELL，自动推断为风控驱动的「风控卖出」。
+    基于「客观缠论信号 + 60m笔方向」确定实际交易动作。
+
+    全局规则：
+    - 60m笔方向向下（寻底模式）：屏蔽所有卖点，只允许评估买点（一买/二买/三买）
+    - 60m笔方向向上（冲顶模式）：屏蔽所有买点，只允许评估卖点（一卖/二卖/三卖）
+
+    优先级：
+    - 买点：二买 > 一买 > 三买
+    - 卖点：二卖 > 一卖 > 三卖
     """
-    if state == "SELL" and sell_signals is not None:
-        # 状态机 reason 已明确说明卖点类型，直接映射（避免与失效检查后 sell_signals 不一致）
-        if "一卖确认" in reason:
-            return "一卖"
-        if "二卖确认" in reason:
+    # 检查信号组成
+    has_first_buy = "一买" in chan_sig
+    has_second_buy = "二买" in chan_sig
+    has_third_buy = "三买" in chan_sig
+    has_first_sell = "一卖" in chan_sig
+    has_second_sell = "二卖" in chan_sig
+    has_third_sell = "三卖" in chan_sig
+
+    # 全局规则 1：60m笔方向向下（寻底模式）
+    # 屏蔽所有卖点，只评估买点
+    if pen_direction == "向下":
+        if has_second_buy:
+            return "二买"
+        if has_first_buy:
+            return "一买"
+        if has_third_buy:
+            return "三买"
+        # 无买点时观望
+        return "观望"
+
+    # 全局规则 2：60m笔方向向上（冲顶模式）
+    # 屏蔽所有买点，只评估卖点
+    if pen_direction == "向上":
+        if has_second_sell:
             return "二卖"
-        if "三卖确认" in reason:
+        if has_first_sell:
+            return "一卖"
+        if has_third_sell:
             return "三卖"
-        # 跨周期背驰驱动
-        if "顶背驰" in reason:
-            return "卖出"
-        # 风控驱动
-        return "风控卖出"
+        # 无卖点时观望
+        return "观望"
+
+    # 兜底：根据状态机状态
     return _TRADE_SIGNAL_MAP.get(state, str(state))
 
 
@@ -339,48 +384,70 @@ def _build_smart_reason(
     chan_sig: str,
     h15_sig: str,
     trade_sig: str,
+    pen_direction: str,
 ) -> str:
     """
-    智能决策理由：将客观缠论信号与实际交易动作结合归因。
+    决策理由生成：说明缠论信号 + 60m笔方向 → 最终结论
 
-    场景映射：
-    - 空仓遇卖点：客观有卖点但动作=观望/IGNORE → "图表触发卖点，但当前空仓，无视卖点，继续观望"
-    - 持仓遇风控：动作=风控卖出 → "防线触发风控，无视个股结构，强制清仓"
-    - 正常背驰卖出：动作=卖出（非风控） → "跨周期顶背驰确认，执行止盈卖出"
-    - 正常买点：动作=买入 → "触发买点，符合开仓条件，执行买入"
-    - 持仓无卖点：动作=持仓 → "持仓中，无明确卖点，继续观望"
+    格式：客观缠论信号为{信号}，60分钟笔方向{向上/向下}，因此实际交易动作是{交易动作}
     """
-    core = _core_reason(analysis, market_state)
-    state = analysis.get("state", "IGNORE")
-    is_holding = analysis.get("is_holding", False)
+    # 检查信号组成
+    has_first_buy = "一买" in chan_sig
+    has_second_buy = "二买" in chan_sig
+    has_third_buy = "三买" in chan_sig
+    has_first_sell = "一卖" in chan_sig
+    has_second_sell = "二卖" in chan_sig
+    has_third_sell = "三卖" in chan_sig
 
-    # 场景 A：空仓遇卖点（客观有卖点，但状态机输出 IGNORE）
-    if state == "IGNORE" and chan_sig and chan_sig not in ("无信号", ""):
-        if any(s in chan_sig for s in ("卖", "顶背驰")):
-            return f"图表触发 {chan_sig}，但当前空仓，无视卖点，继续观望"
-        if any(s in chan_sig for s in ("买", "底背驰")):
-            return f"图表触发 {chan_sig}，但买入条件不满足，继续观望"
-        return f"图表触发 {chan_sig}，但条件不满足，继续观望"
+    # 构建信号描述
+    signals = []
+    if has_first_sell:
+        signals.append("一卖")
+    if has_second_sell:
+        signals.append("二卖")
+    if has_third_sell:
+        signals.append("三卖")
+    if has_first_buy:
+        signals.append("一买")
+    if has_second_buy:
+        signals.append("二买")
+    if has_third_buy:
+        signals.append("三买")
 
-    # 场景 B：持仓遇风控（防线驱动）
-    # 注：core 中已包含防线偏离详情（_core_reason 的"跌破战略底线"分支），此处不再重复拼接
-    if trade_sig == "风控卖出":
-        return f"防线触发风控，无视个股结构，强制清仓（{core}）"
+    sig_desc = "、".join(signals) if signals else "无信号"
 
-    # 场景 C：正常背驰/卖点卖出（非风控）
-    if trade_sig in ("卖出", "一卖", "二卖", "三卖"):
-        return f"{core}，执行止盈卖出"
+    # 根据笔方向和交易动作生成结论说明（使用实际的 pen_direction）
+    mode_desc = "寻底模式" if pen_direction == "向下" else "冲顶模式"
 
-    # 场景 D：正常买点
-    if trade_sig in ("一买", "二买", "三买"):
-        return f"触发 {trade_sig}，符合开仓条件，执行买入"
+    if trade_sig == "二买":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是二买（笔方向向下时优先买点）"
 
-    # 场景 E：持仓无卖点
+    if trade_sig == "二卖":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是二卖（笔方向向上时优先卖点）"
+
+    if trade_sig == "一买":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是一买（趋势底背驰买入）"
+
+    if trade_sig == "一卖":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是一卖（趋势顶背驰卖出）"
+
+    if trade_sig == "三买":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是三买（突破回踩买入）"
+
+    if trade_sig == "三卖":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}（{mode_desc}），因此实际交易动作是三卖（跌破反抽卖出）"
+
     if trade_sig == "持仓":
-        return core  # core 中已包含持仓相关描述，避免前缀重复
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}，无明确买卖点，持仓观望"
+
+    if trade_sig == "观望":
+        return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}，中枢震荡，观望"
+
+    if trade_sig == "风控卖出":
+        return "跌破战略底线，触发风控，强制清仓"
 
     # 兜底
-    return f"【日线】{_daily_risk_level(analysis)} | 【缠论】{chan_sig} | 【15分】{h15_sig} → {trade_sig}（{core}）"
+    return f"客观缠论信号为{sig_desc}，60分钟笔方向{pen_direction}，实际交易动作是{trade_sig}"
 
 
 def build_snapshot_data(
@@ -409,27 +476,34 @@ def build_snapshot_data(
 
     chan_sig = _chan_signal(buy_signals, sell_signals)
     h15_sig = _h15_signal(analysis)
+    pen_dir = _pen_direction(analysis)
     trade_sig = _to_chinese_trade_signal(
         analysis.get("state", "IGNORE"),
         sell_signals,
         analysis.get("reason", ""),
+        chan_sig,
+        pen_dir,
     )
     smart_reason = _build_smart_reason(
-        market_state, analysis, chan_sig, h15_sig, trade_sig
+        market_state, analysis, chan_sig, h15_sig, trade_sig, pen_dir
     )
+
+    # 判断是否持仓（从 watchlist.json 的 holdings 中检查）
+    is_holding = _check_is_holding(code)
 
     return {
         "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "实际交易动作": trade_sig,
+        "是否持仓": is_holding,
         "大盘状态": _to_chinese_market_state(market_state),
         "代码": str(code),
         "名称": str(name),
         "现价": _fmt_float(price),
         "日线风控": _daily_risk_level(analysis, price),
         "客观缠论信号": chan_sig,
+        "60m笔方向": _pen_direction(analysis),
         "15分信号": h15_sig,
         "决策理由": smart_reason,
-        "60m笔方向": _pen_direction(analysis),
         "日线A中枢ZD": _fmt_float(analysis.get("daily_azd")),
         "日线C中枢ZD": _fmt_float(analysis.get("daily_czd")),
         "锁定ZG": _locked_zg(h60_result),

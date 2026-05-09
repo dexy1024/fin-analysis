@@ -361,10 +361,13 @@ def _detect_third_buy_point(
     if not has_bottom:
         return False, None
 
-    # 买点检测：不做突破动能和MACD过滤，检测到什么就显示什么
-    # 客观缠论信号应保持原始检测结果
-
     pullback_end_idx = date_to_idx.get(pullback_pen["end_date"])
+
+    # 时间邻近性检查（与一买/一卖保持一致，只显示最近20根K线内的信号）
+    if pullback_end_idx is not None:
+        bars_since_end = len(data) - 1 - pullback_end_idx
+        if bars_since_end > 20:
+            return False, None
 
     # 止损线
     stop_loss = (
