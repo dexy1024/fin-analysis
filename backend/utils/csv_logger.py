@@ -38,6 +38,7 @@ CSV_HEADERS = [
     "15m_DIF",
     "15m_DEA",
     "底分型成立",
+    "区间价格对齐",
 ]
 
 # 状态映射：英文 → 中文
@@ -178,17 +179,23 @@ def _fmt_float4(value: Any) -> str:
         return str(value) if value != "" else ""
 
 
-def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
+def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     独立计算15分钟背驰信号，仅依赖15分钟K线、笔和MACD数据。
+    返回包含信号和当前笔极端价格的字典。
 
     规则：
     - 底背驰：当前向下笔 + 价格创新低 + 动能衰竭(面积背驰或黄白线背离) + 底分型确认
     - 顶背驰：当前向上笔 + 价格创新高 + 动能衰竭(面积背驰或黄白线背离) + 顶分型确认
     - 不满足时返回 "无信号"
+
+    返回值：{"signal": str, "extreme_price": Optional[float]}
+    - extreme_price: 底背驰时为当前笔最低价，顶背驰时为当前笔最高价
     """
+    result = {"signal": "无信号", "extreme_price": None}
+
     if not h15_result:
-        return "无信号"
+        return result
 
     data = h15_result.get("data", [])
     pens = h15_result.get("pens", [])
@@ -196,7 +203,7 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     fractals = h15_result.get("fractals", [])
 
     if not data or len(data) < 3 or not pens_effective:
-        return "无信号"
+        return result
 
     # 构建日期到索引的映射
     date_to_idx = {item["date"]: i for i, item in enumerate(data)}
@@ -204,7 +211,7 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     # 获取有效笔（至少完成两根K线）
     effective_pens = [p for p in pens_effective if p.get("direction") in ("up", "down")]
     if len(effective_pens) < 2:
-        return "无信号"
+        return result
 
     # 当前笔：最新的一笔
     current_pen = effective_pens[-1]
@@ -213,7 +220,7 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     # 同向对比笔：与当前笔方向相同的前一笔
     same_dir_pens = [p for p in effective_pens if p.get("direction") == current_direction]
     if len(same_dir_pens) < 2:
-        return "无信号"
+        return result
     compare_pen = same_dir_pens[-2]
 
     # 辅助函数：计算笔的MACD面积
@@ -299,7 +306,9 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
                     has_bottom = has_fractal_at_end(current_pen, "bottom")
 
                     if has_bottom and (area_divergence or dif_divergence):
-                        return "底背驰"
+                        result["signal"] = "底背驰"
+                        result["extreme_price"] = current_low
+                        return result
 
     # ========== 逻辑 2：顶背驰判断 ==========
     if current_direction == "up":
@@ -343,10 +352,83 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
                     has_top = has_fractal_at_end(current_pen, "top")
 
                     if has_top and (area_divergence or dif_divergence):
-                        return "顶背驰"
+                        result["signal"] = "顶背驰"
+                        result["extreme_price"] = current_high
+                        return result
 
     # ========== 逻辑 3：无信号 ==========
-    return "无信号"
+    return result
+
+
+def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
+    """
+    独立计算15分钟背驰信号，返回信号字符串（向后兼容）。
+    """
+    return _h15_signal_detail(h15_result).get("signal", "无信号")
+
+
+def _price_alignment(
+    h15_sig: str,
+    pen_dir: str,
+    h15_result: Optional[Dict[str, Any]],
+    h60_result: Optional[Dict[str, Any]],
+) -> str:
+    """
+    计算「区间价格对齐」字段值。
+
+    逻辑：
+    - 如果 15分信号 == '无信号'，输出 '-'。
+    - 如果 15分信号 == '底背驰' 且 60m笔方向 == '向下'：
+        提取 15m 触发底背驰的向下笔的最低价（15m_low）。
+        提取 60m 当前向下笔的最低价（60m_low）。
+        如果 abs(15m_low - 60m_low) <= 0.01，输出 '是'，否则输出 '否'。
+    - 如果 15分信号 == '顶背驰' 且 60m笔方向 == '向上'：
+        提取 15m 触发顶背驰的向上笔的最高价（15m_high）。
+        提取 60m 当前向上笔的最高价（60m_high）。
+        如果 abs(15m_high - 60m_high) <= 0.01，输出 '是'，否则输出 '否'。
+    - 其他任何方向不匹配的情况，一律输出 '否'。
+    """
+    # 无信号时返回 '-'
+    if h15_sig == "无信号":
+        return "-"
+
+    # 获取15分钟信号详情（包含极端价格）
+    h15_detail = _h15_signal_detail(h15_result)
+    h15_signal_type = h15_detail.get("signal", "无信号")
+    h15_extreme_price = h15_detail.get("extreme_price")
+
+    # 底背驰情况
+    if h15_sig == "底背驰":
+        if pen_dir != "向下":
+            return "否"
+        if h15_extreme_price is None:
+            return "否"
+        # 获取60分钟向下笔的最低价
+        m60_low = _get_60m_pen_extreme_price(h60_result, "向下")
+        if m60_low is None:
+            return "否"
+        # 比较价格差异
+        if abs(h15_extreme_price - m60_low) <= 0.01:
+            return "是"
+        return "否"
+
+    # 顶背驰情况
+    if h15_sig == "顶背驰":
+        if pen_dir != "向上":
+            return "否"
+        if h15_extreme_price is None:
+            return "否"
+        # 获取60分钟向上笔的最高价
+        m60_high = _get_60m_pen_extreme_price(h60_result, "向上")
+        if m60_high is None:
+            return "否"
+        # 比较价格差异
+        if abs(h15_extreme_price - m60_high) <= 0.01:
+            return "是"
+        return "否"
+
+    # 其他情况
+    return "否"
 
 
 def _defense_detail(analysis: Dict[str, Any]) -> str:
@@ -466,6 +548,36 @@ def _pen_direction(analysis: Dict[str, Any]) -> str:
     """60分钟最后一笔有效笔方向。"""
     h60_conditions = analysis.get("h60_conditions") or {}
     return "向上" if h60_conditions.get("last_pen_up") else "向下"
+
+
+def _get_60m_pen_extreme_price(h60_result: Optional[Dict[str, Any]], direction: str) -> Optional[float]:
+    """
+    获取60分钟当前笔的极端价格。
+    - 方向为"向下"时，返回笔的最低价（start_price和end_price的较小值）
+    - 方向为"向上"时，返回笔的最高价（start_price和end_price的较大值）
+    """
+    if not h60_result:
+        return None
+    pens_effective = h60_result.get("pens_effective", [])
+    if not pens_effective:
+        return None
+
+    # 获取最后一笔
+    current_pen = pens_effective[-1]
+    pen_direction = current_pen.get("direction")
+
+    # 检查笔方向是否与预期一致
+    expected_direction = "up" if direction == "向上" else "down"
+    if pen_direction != expected_direction:
+        return None
+
+    start_price = float(current_pen.get("start_price", 0))
+    end_price = float(current_pen.get("end_price", 0))
+
+    if direction == "向下":
+        return min(start_price, end_price)
+    else:  # 向上
+        return max(start_price, end_price)
 
 
 def _locked_zg(h60_result: Optional[Dict[str, Any]]) -> str:
@@ -602,23 +714,6 @@ def build_snapshot_data(
     h60_result = copy.deepcopy(h60_result) if h60_result else None
     h15_result = copy.deepcopy(h15_result) if h15_result else None
 
-    # 重新获取15分钟数据，确保非交易日数据一致性
-    # 避免使用可能过期的内存缓存数据
-    if h15_result:
-        try:
-            from services.indicators import get_index_kline
-            from datetime import timedelta
-            h15_start = (timestamp - timedelta(days=25)).strftime("%Y-%m-%d")
-            h15_result = get_index_kline(
-                symbol=code,
-                start_date=h15_start,
-                end_date=None,
-                period="15",
-                refresh=True,  # 强制刷新，确保数据一致性
-            )
-        except Exception:
-            pass  # 重新获取失败则使用传入的数据
-
     # 现价：直接使用状态机已计算好的 latest_close（优先级 15m > 60m > 日线），避免与决策逻辑分歧
     price = analysis.get("latest_close") or analysis.get("daily_close")
 
@@ -641,6 +736,9 @@ def build_snapshot_data(
     # 判断是否持仓（从 watchlist.json 的 holdings 中检查）
     is_holding = _check_is_holding(code)
 
+    # 计算区间价格对齐
+    price_alignment = _price_alignment(h15_sig, pen_dir, h15_result, h60_result)
+
     return {
         "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "实际交易动作": trade_sig,
@@ -660,6 +758,7 @@ def build_snapshot_data(
         "15m_DIF": dif,
         "15m_DEA": dea,
         "底分型成立": _has_bottom_fractal(h15_result),
+        "区间价格对齐": price_alignment,
     }
 
 
