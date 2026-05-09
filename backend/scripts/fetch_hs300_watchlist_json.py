@@ -104,6 +104,8 @@ def fetch_hs300_holdings() -> list[dict[str, str]]:
             name = row.get("name")
             if not code or not isinstance(name, str) or not name.strip():
                 continue
+            if code.isdigit():
+                code = code.zfill(6)
             holdings[code] = name.strip()
 
         if len(rows) < PAGE_SIZE:
@@ -116,26 +118,41 @@ def fetch_hs300_holdings() -> list[dict[str, str]]:
     return out
 
 
+def _write_watchlist_hs300_json(comment: str, holdings: list[dict[str, str]]) -> None:
+    """holdings 每项单独一行，形如 {\"code\": \"000001\",\"name\": \"…\"}"""
+    sep = (",", ": ")
+    chunks: list[str] = [
+        "{\n",
+        '  "_comment": ' + json.dumps(comment, ensure_ascii=False) + ",\n",
+        '  "holdings": [\n',
+    ]
+    last_i = len(holdings) - 1
+    for i, h in enumerate(holdings):
+        line = json.dumps(h, ensure_ascii=False, separators=sep)
+        suf = ",\n" if i != last_i else "\n"
+        chunks.append("    " + line + suf)
+    chunks.append("  ]\n")
+    chunks.append("}\n")
+    text = "".join(chunks)
+    tmp = OUT_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, OUT_PATH)
+
+
 def main() -> int:
     holdings = fetch_hs300_holdings()
     n = len(holdings)
     if n != 300:
         print(f"警告: 期望 300 只成份，实际 {n} 只（仍写入，请检查网络或新浪接口）", file=sys.stderr)
 
-    payload = {
-        "_comment": (
-            "沪深300成份股名单（仅 code、name）。数据来源：新浪财经 "
-            "Market_Center.getHQNodeData ，node=hs300 。勿手改 holdings；"
-            "刷新请运行：python3 backend/scripts/fetch_hs300_watchlist_json.py"
-        ),
-        "holdings": holdings,
-    }
+    comment = (
+        "沪深300成份股名单（仅 code、name）。数据来源：新浪财经 "
+        "Market_Center.getHQNodeData ，node=hs300 。勿手改 holdings；"
+        "刷新请运行：python3 backend/scripts/fetch_hs300_watchlist_json.py"
+    )
 
-    tmp = OUT_PATH + ".tmp"
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, OUT_PATH)
+    _write_watchlist_hs300_json(comment, holdings)
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
     print(f"已写入 {OUT_PATH} ，共 {n} 条（UTC {ts}）")
