@@ -10,10 +10,12 @@
 
 import copy
 import csv
+import fcntl
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 # 项目根目录（backend/utils/ 的上两级）
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -85,6 +87,19 @@ def _ensure_logs_dir() -> Path:
     return LOGS_DIR
 
 
+@contextmanager
+def _flock_snapshot_csv(path: Path) -> Iterator[None]:
+    """防止 Gunicorn 调度与手动脚本同时追加同一快照 CSV 导致表头检测错乱。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_p = path.with_suffix(path.suffix + ".flock")
+    with open(lock_p, "a+", encoding="utf-8") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
 def _check_is_holding(code: str) -> str:
     """
     检查标的是否在 watchlist.json 的 holdings 中。
@@ -121,36 +136,37 @@ def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
     供 log_snapshot / log_snapshot_hs300 共用。
     """
     time_str = data_dict.get("时间", "")
-    file_exists = path.is_file()
+    with _flock_snapshot_csv(path):
+        file_exists = path.is_file()
 
-    if file_exists and path.stat().st_size > 0:
-        try:
-            with open(path, "r", encoding="utf-8-sig", newline="") as f:
-                reader = csv.reader(f)
-                existing_headers = next(reader, [])
-            if existing_headers and existing_headers != CSV_HEADERS:
-                backup_path = path.with_suffix(
-                    f".csv.bak_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                )
-                path.rename(backup_path)
-                file_exists = False
-                logging.info("csv_logger: 表头变更，已备份旧文件到 %s", backup_path)
-        except Exception:
-            logging.warning("csv_logger: 表头检查失败，跳过兼容性处理", exc_info=True)
+        if file_exists and path.stat().st_size > 0:
+            try:
+                with open(path, "r", encoding="utf-8-sig", newline="") as f:
+                    reader = csv.reader(f)
+                    existing_headers = next(reader, [])
+                if existing_headers and existing_headers != CSV_HEADERS:
+                    backup_path = path.with_suffix(
+                        f".csv.bak_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                    )
+                    path.rename(backup_path)
+                    file_exists = False
+                    logging.info("csv_logger: 表头变更，已备份旧文件到 %s", backup_path)
+            except Exception:
+                logging.warning("csv_logger: 表头检查失败，跳过兼容性处理", exc_info=True)
 
-    with open(path, "a", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
-        if not file_exists:
-            writer.writeheader()
-        else:
-            last_time = _read_last_csv_time(path)
-            if last_time and last_time != time_str:
-                try:
-                    datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
-                    f.write("\r\n")
-                except ValueError:
-                    pass
-        writer.writerow(data_dict)
+        with open(path, "a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
+            if not file_exists:
+                writer.writeheader()
+            else:
+                last_time = _read_last_csv_time(path)
+                if last_time and last_time != time_str:
+                    try:
+                        datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
+                        f.write("\r\n")
+                    except ValueError:
+                        pass
+            writer.writerow(data_dict)
 
 
 def _to_chinese_market_state(state: str) -> str:
@@ -863,6 +879,7 @@ def log_snapshot(data_dict: Dict[str, Any]) -> None:
         _append_snapshot_csv_row(path, data_dict)
     except Exception:
         logging.warning("csv_logger: 快照写入失败", exc_info=True)
+
 
 def log_snapshot_hs300(data_dict: Dict[str, Any]) -> None:
     """与同批 snapshots_YYYY.csv 表头完全一致；写入 logs/snapshots_hs300_YYYY.csv。"""
