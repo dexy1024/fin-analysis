@@ -21,7 +21,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -71,6 +71,26 @@ def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
             logging.warning("trade_command_engine: 读取 observation.json 失败")
 
     return symbols
+
+
+def _load_hs300_symbols() -> List[Tuple[str, str]]:
+    """读取 backend/data/watchlist_hs300.json 的 holdings，返回 (code, name)。"""
+    out: List[Tuple[str, str]] = []
+    path = ROOT_DIR / "backend" / "data" / "watchlist_hs300.json"
+    if not path.is_file():
+        logging.warning("trade_command_engine: 未找到 watchlist_hs300.json")
+        return out
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for item in data.get("holdings", []):
+            if isinstance(item, dict) and item.get("code"):
+                code = str(item["code"]).strip()
+                nm = str(item.get("name", "")).strip()
+                out.append((code, nm))
+    except Exception:  # noqa: BLE001
+        logging.warning("trade_command_engine: 读取 watchlist_hs300.json 失败")
+        return []
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1486,33 +1506,27 @@ def _append_trade_report(
 # 主入口
 # ---------------------------------------------------------------------------
 
-def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
+def _run_trade_command_engine_core(
+    symbols: List[Tuple[str, str]],
+    *,
+    timestamp: datetime,
+    generate_report: bool,
+    collect_report_records: bool,
+    snapshot_writer: Callable[[Dict[str, Any]], None],
+) -> Optional[Path]:
     """
-    主入口：拉取 -> 计算 -> 判定 -> (可选)写入报告 -> 返回文件路径。
-    控制台仅打印一句：[SUCCESS] HH:mm 巡航完毕，报告已生成
-
-    Args:
-        generate_report: 为 True 时生成 Markdown 报告；为 False 时仅计算状态机并写入 CSV 快照。
+    自选与 HS300 批量共用：上证指数风控 + 每只标的沿用与主引擎相同的状态机与 build_snapshot_data。
+    snapshot_writer 决定写入 snapshots_YYYY 或 snapshots_hs300_YYYY。
+    collect_report_records=False 时不拼装雷达 / Markdown 用 records（适合 300 只名单）。
     """
-    # 延迟导入，避免循环依赖与启动时加载过重
+    from utils.csv_logger import build_snapshot_data
     from services.indicators import get_index_kline
 
-    timestamp = datetime.now()
     time_str = timestamp.strftime("%H:%M")
 
-    symbols = _load_watchlist_observation_symbols()
-    if not symbols:
-        logging.warning("trade_command_engine: 监控池为空，跳过")
-        TRADE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        path = TRADE_REPORT_DIR / f"作战指令_{timestamp.strftime('%Y-%m-%d')}.md"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"### ⏱️ 军机处巡航时间：{timestamp.strftime('%Y-%m-%d %H:%M')}\n\n")
-            f.write("_本次巡航监控池为空，无标的可分析。_\n\n---\n\n")
-        print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
-        return path
-
     holding_codes = _load_holding_codes()
-    holding_amounts = _load_holding_amounts()
+    holding_amounts = _load_holding_amounts() if collect_report_records else {}
+
     logging.info("trade_command_engine: 持仓识别 loaded %d 个: %s", len(holding_codes), sorted(holding_codes))
     daily_start = _daily_start_date()
     h60_start = _h60_start_date()
@@ -1568,16 +1582,17 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
         h15_result: Optional[Dict[str, Any]] = None
 
         # 静默拉取三周期数据（refresh=False，只读本地缓存）
+        # 统一使用本地缓存数据（由kline_scheduler负责从网络同步到本地CSV）
         try:
             daily_result = get_index_kline(
                 symbol=code,
                 start_date=daily_start,
                 end_date=None,
                 period="daily",
-                refresh=False,
+                refresh=False,  # 只读本地，不重新获取
             )
         except Exception as e:  # noqa: BLE001
-            logging.warning("trade_command_engine: 日线拉取失败 %s: %s", code, e)
+            logging.warning("trade_command_engine: 日线读取失败 %s: %s", code, e)
 
         try:
             h60_result = get_index_kline(
@@ -1585,10 +1600,10 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                 start_date=h60_start,
                 end_date=None,
                 period="60",
-                refresh=False,
+                refresh=False,  # 只读本地，不重新获取
             )
         except Exception as e:  # noqa: BLE001
-            logging.warning("trade_command_engine: 60m拉取失败 %s: %s", code, e)
+            logging.warning("trade_command_engine: 60m读取失败 %s: %s", code, e)
 
         try:
             h15_result = get_index_kline(
@@ -1596,10 +1611,10 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                 start_date=h15_start,
                 end_date=None,
                 period="15",
-                refresh=True,  # 强制刷新，确保与调度器同步的数据一致
+                refresh=False,  # 只读本地，不重新获取
             )
         except Exception as e:  # noqa: BLE001
-            logging.warning("trade_command_engine: 15m拉取失败 %s: %s", code, e)
+            logging.warning("trade_command_engine: 15m读取失败 %s: %s", code, e)
 
         # 终极状态机判定（单标异常不中断全量报告）
         try:
@@ -1750,9 +1765,7 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                 else:
                     analysis["reason"] = f"持仓中，有买点信号，可参考加仓（主状态：持仓）"
 
-            # 写入15分钟级快照日志（无侵入式，异常不阻塞主逻辑）
             try:
-                from utils.csv_logger import build_snapshot_data, log_snapshot
                 snapshot = build_snapshot_data(
                     timestamp=timestamp,
                     code=code,
@@ -1764,21 +1777,22 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
                     sell_signals=analysis["h60_sell_signals"],
                     buy_signals=buy_signals,
                 )
-                log_snapshot(snapshot)
+                snapshot_writer(snapshot)
             except Exception:
                 logging.warning("trade_command_engine: CSV快照写入失败 %s", code, exc_info=True)
 
-            radar = _build_radar_checklist(analysis)
-            current_holding = holding_amounts.get(code, 0)
-            command = _generate_command(state, name, code, radar, analysis, current_holding)
-            records.append({
-                "code": code,
-                "name": name,
-                "state": state,
-                "radar": radar,
-                "command": command,
-                "current_holding": current_holding,
-            })
+            if collect_report_records:
+                radar = _build_radar_checklist(analysis)
+                current_holding = holding_amounts.get(code, 0)
+                command = _generate_command(state, name, code, radar, analysis, current_holding)
+                records.append({
+                    "code": code,
+                    "name": name,
+                    "state": state,
+                    "radar": radar,
+                    "command": command,
+                    "current_holding": current_holding,
+                })
         except Exception as e:  # noqa: BLE001
             logging.warning("trade_command_engine: 标的 %s 分析失败: %s", code, e)
 
@@ -1792,5 +1806,78 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
         print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
         return path
     else:
-        logging.info("trade_command_engine: 15分钟快照模式，跳过 Markdown 报告生成（%d 条记录已写入 CSV）", len(records))
+        if collect_report_records:
+            logging.info(
+                "trade_command_engine: 15分钟快照模式，跳过 Markdown 报告生成（%d 条记录已写入 CSV）",
+                len(records),
+            )
+        else:
+            logging.info(
+                "trade_command_engine: HS300/批量快照已写入 CSV，未生成 Markdown（%d 标的）",
+                len(symbols),
+            )
         return None
+
+
+def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
+    """
+    主入口：拉取 -> 计算 -> 判定 -> (可选)写入报告 -> 返回文件路径。
+    控制台仅打印一句：[SUCCESS] HH:mm 巡航完毕，报告已生成
+
+    Args:
+        generate_report: 为 True 时生成 Markdown 报告；为 False 时仅计算状态机并写入 CSV 快照。
+    """
+    from utils.csv_logger import log_snapshot
+
+    timestamp = datetime.now()
+    time_str = timestamp.strftime("%H:%M")
+
+    symbols = _load_watchlist_observation_symbols()
+    if not symbols:
+        logging.warning("trade_command_engine: 监控池为空，跳过")
+        TRADE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        path = TRADE_REPORT_DIR / f"作战指令_{timestamp.strftime('%Y-%m-%d')}.md"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"### ⏱️ 军机处巡航时间：{timestamp.strftime('%Y-%m-%d %H:%M')}\n\n")
+            f.write("_本次巡航监控池为空，无标的可分析。_\n\n---\n\n")
+        print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
+        return path
+
+    return _run_trade_command_engine_core(
+        symbols,
+        timestamp=timestamp,
+        generate_report=generate_report,
+        collect_report_records=True,
+        snapshot_writer=log_snapshot,
+    )
+
+
+def export_hs300_snapshots_to_csv() -> Optional[Path]:
+    """
+    按与 logs/snapshots_YYYY.csv 相同的 build_snapshot_data 逻辑，
+    将 watchlist_hs300.json 全覆盖写入 logs/snapshots_hs300_YYYY.csv（不生成 Markdown）。
+    """
+    from utils.csv_logger import _get_hs300_csv_path, log_snapshot_hs300
+
+    symbols = _load_hs300_symbols()
+    if not symbols:
+        logging.warning("trade_command_engine: HS300 名单为空或未找到 watchlist_hs300.json，跳过")
+        return None
+
+    timestamp = datetime.now()
+    _run_trade_command_engine_core(
+        symbols,
+        timestamp=timestamp,
+        generate_report=False,
+        collect_report_records=False,
+        snapshot_writer=log_snapshot_hs300,
+    )
+    out = _get_hs300_csv_path(timestamp)
+    logging.info(
+        "trade_command_engine: HS300 快照已写入 %s，标的 %d",
+        out,
+        len(symbols),
+    )
+    print(f"[HS300] CSV 已追加写入 {out}（本轮尝试 {len(symbols)} 只）")
+    return out
+
