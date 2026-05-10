@@ -42,7 +42,7 @@ def notify_sse_clients(include_daily: bool, timestamp: str):
         "type": "radar_updated",
         "timestamp": timestamp,
         "include_daily": include_daily,
-        "message": "双防线雷达数据已更新"
+        "message": "定时任务已更新本地缓存（破位/买卖信号等）",
     }
     _send_sse_message(message)
 

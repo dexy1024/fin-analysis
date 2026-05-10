@@ -1,8 +1,10 @@
 """
 后台定时任务（北京时间 Asia/Shanghai）：不依赖浏览器。
 独立线程睡眠到下一槽位唤醒执行。
-- 10:31 / 11:31 / 14:01 / 15:01：全量 60m refresh + 双防线雷达 CSV
-- 16:01：全量日线 refresh + 上述 60m + 雷达
+- 10:31 / 11:31 / 14:01 / 15:01：全量 60m refresh；破位与买卖信号 JSON；SSE 通知
+- 16:01：全量日线 refresh + 上述
+
+止损、双防线雷达（last_summary.json）改手动；不由此调度自动跑。
 
 与 indicators.get_index_kline 响应缓存的关系（见该函数文档）：
 - 日线本地 CSV（index_daily_*.csv / a_daily_*.csv）更新后，仅会使「period=daily」的内存缓存失效并重算
@@ -26,9 +28,8 @@ from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from services.buy_sell_signals import compute_and_save_buy_sell_signals
-from services.defense_radar import DEFENSE_RADAR_WATCHLIST, _load_watchlist_observation_symbols, compute_and_save_broken_symbols, run_defense_radar
+from services.defense_radar import DEFENSE_RADAR_WATCHLIST, _load_watchlist_observation_symbols, compute_and_save_broken_symbols
 from services.indicators import get_index_kline
-from services.position_manager import check_stop_loss, get_holdings, sell_all
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -179,54 +180,14 @@ def _sync_all_15m() -> None:
             logging.exception("kline_scheduler: 15m 同步失败 %s", sym)
 
 
-def _check_positions_stop_loss() -> None:
-    """检查所有持仓的止损，触发时自动清仓"""
-    holdings = get_holdings()
-    if not holdings:
-        return
-    logging.info("kline_scheduler: 检查 %d 个持仓的止损", len(holdings))
-    for pos in holdings:
-        try:
-            result = get_index_kline(
-                symbol=pos.code,
-                start_date=_h60_start_date(),
-                end_date=None,
-                period="60",
-                refresh=False,
-            )
-            bars = result.get("data", [])
-            if not bars:
-                continue
-            last_price = bars[-1].get("close")
-            if last_price is None:
-                continue
-
-            stop_result = check_stop_loss(pos.code, float(last_price))
-            if stop_result and stop_result["triggered"]:
-                sell_all(pos.code, float(last_price), stop_result["reason"])
-                logging.warning(
-                    "kline_scheduler: 止损触发 %s %s @ %.2f, 原因: %s",
-                    pos.code, pos.name, last_price, stop_result["reason"]
-                )
-        except _SCHEDULER_EXPECTED_EXCEPTIONS:
-            logging.exception("kline_scheduler: 止损检查失败 %s", pos.code)
-
-
 def run_scheduled_slot(include_daily: bool) -> None:
-    """单次槽位任务：可选全量日线同步 → 全量 60m → 全量 15m → 持仓止损检查 → 双防线雷达 → 买卖信号。"""
+    """单次槽位任务：可选全量日线同步 → 全量 60m → 全量 15m → 破位与买卖信号 JSON → SSE。"""
     timestamp = datetime.now(TZ_SH).isoformat()
     logging.info("kline_scheduler: 槽位开始 include_daily=%s", include_daily)
     if include_daily:
         _sync_all_daily()
     _sync_all_60m()
     _sync_all_15m()
-    # 检查持仓止损
-    _check_positions_stop_loss()
-    try:
-        path = run_defense_radar(refresh=False)
-        logging.info("kline_scheduler: 双防线雷达已写入 %s", path)
-    except _SCHEDULER_EXPECTED_EXCEPTIONS:
-        logging.exception("kline_scheduler: 双防线雷达失败")
 
     # 计算 watchlist + observation 的破位状态
     try:
