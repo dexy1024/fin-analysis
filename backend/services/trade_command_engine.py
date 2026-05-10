@@ -1823,13 +1823,12 @@ def _run_trade_command_engine_core(
         return None
 
 
-def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
+def run_trade_command_engine(generate_report: bool = False) -> Optional[Path]:
     """
-    主入口：拉取 -> 计算 -> 判定 -> (可选)写入报告 -> 返回文件路径。
-    控制台仅打印一句：[SUCCESS] HH:mm 巡航完毕，报告已生成
+    主入口：拉取 -> 计算 -> 判定 -> 写入 CSV 快照；可选生成 Markdown 作战指令。
 
     Args:
-        generate_report: 为 True 时生成 Markdown 报告；为 False 时仅计算状态机并写入 CSV 快照。
+        generate_report: 为 True 时额外生成 trade_reports/ 下 Markdown；默认 False（与定时调度一致）。
     """
     from utils.csv_logger import log_snapshot
 
@@ -1839,13 +1838,16 @@ def run_trade_command_engine(generate_report: bool = True) -> Optional[Path]:
     symbols = _load_watchlist_observation_symbols()
     if not symbols:
         logging.warning("trade_command_engine: 监控池为空，跳过")
-        TRADE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        path = TRADE_REPORT_DIR / f"作战指令_{timestamp.strftime('%Y-%m-%d')}.md"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"### ⏱️ 军机处巡航时间：{timestamp.strftime('%Y-%m-%d %H:%M')}\n\n")
-            f.write("_本次巡航监控池为空，无标的可分析。_\n\n---\n\n")
-        print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
-        return path
+        if generate_report:
+            TRADE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+            path = TRADE_REPORT_DIR / f"作战指令_{timestamp.strftime('%Y-%m-%d')}.md"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"### ⏱️ 军机处巡航时间：{timestamp.strftime('%Y-%m-%d %H:%M')}\n\n")
+                f.write("_本次巡航监控池为空，无标的可分析。_\n\n---\n\n")
+            print(f"[SUCCESS] {time_str} 巡航完毕，报告已生成")
+            return path
+        print(f"[SKIP] {time_str} 监控池为空，未写入快照")
+        return None
 
     return _run_trade_command_engine_core(
         symbols,
