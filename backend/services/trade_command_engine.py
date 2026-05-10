@@ -21,6 +21,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -37,6 +38,7 @@ TRADE_REPORT_DIR = ROOT_DIR / "trade_reports"
 # 上证指数代码
 INDEX_CODE = "sh000001"
 INDEX_NAME = "上证指数"
+TZ_SH = ZoneInfo("Asia/Shanghai")
 
 
 # ---------------------------------------------------------------------------
@@ -169,20 +171,20 @@ def _build_date_to_idx(data: List[Dict[str, Any]]) -> Dict[str, int]:
     return {item["date"]: i for i, item in enumerate(data)}
 
 
-# 250 根 K 线数据范围（确保缠论结构有效的前提下尽量接近 250 根）
+# K 线窗口与 kline_scheduler / 前端 60m 请求对齐（日线 380d、60m 79d、15m 25d）
 def _daily_start_date() -> str:
-    """日线约 250 个交易日 ≈ 350 个自然日。"""
-    return (datetime.now() - timedelta(days=350)).strftime("%Y-%m-%d")
+    """日线约 250 根：与 kline_scheduler._daily_start_date 一致（380 自然日）。"""
+    return (datetime.now(TZ_SH) - timedelta(days=380)).strftime("%Y-%m-%d")
 
 
 def _h60_start_date() -> str:
-    """60分钟：每天 8 根，250 根 ≈ 31 个交易日 ≈ 50 个自然日。"""
-    return (datetime.now() - timedelta(days=50)).strftime("%Y-%m-%d")
+    """60m 约 250 根：与 kline_scheduler._h60_start_date 一致（79 自然日）。"""
+    return (datetime.now(TZ_SH) - timedelta(days=79)).strftime("%Y-%m-%d")
 
 
 def _h15_start_date() -> str:
-    """15分钟：每天 16 根，250 根 ≈ 16 个交易日 ≈ 25 个自然日。"""
-    return (datetime.now() - timedelta(days=25)).strftime("%Y-%m-%d")
+    """15m：与 kline_scheduler._h15_start_date 一致（25 自然日）。"""
+    return (datetime.now(TZ_SH) - timedelta(days=25)).strftime("%Y-%m-%d")
 
 
 # ---------------------------------------------------------------------------

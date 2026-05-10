@@ -1060,7 +1060,7 @@ function App() {
 
   /** 拉取单个 tab 的 60 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch60ForTab = useCallback(async (tabKey: ChartTabKey) => {
-    const h60Start = startDateDaysAgo(50)
+    const h60Start = startDateDaysAgo(79)
     const tab = fullChartTabs.find((t) => t.key === tabKey)
     if (!tab) return
     try {
@@ -1094,7 +1094,7 @@ function App() {
 
   /** 仅拉上证 60m（本地）；首屏用，不依赖 dailyTab，避免切 Tab 时整页重复请求上证 */
   const refreshIndex60Only = useCallback(async () => {
-    const h60Start = startDateDaysAgo(50)
+    const h60Start = startDateDaysAgo(79)
     try {
       const h60 = await fetch60Local('sh000001', h60Start)
       setIndexKline60(h60)
@@ -1213,7 +1213,7 @@ function App() {
     const timer = setTimeout(() => {
       void (async () => {
         const dailyStart = startDateDaysAgo(380)
-        const h60Start = startDateDaysAgo(50)
+        const h60Start = startDateDaysAgo(79)
         const h15Start = startDateDaysAgo(25)
         // 只预加载当前可见的 tab，避免加载被用户关闭/隐藏的 tab
         let tabsToLoad = visibleChartTabs.filter(
@@ -1456,7 +1456,7 @@ function App() {
                 </div>
               )}
               <h3 className="hourly-section-title">
-                60 分钟缠论（上证指数，近 90 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+                60 分钟缠论（上证指数，近 79 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
               </h3>
               {index60Error && <div className="alert alert-error">{index60Error}</div>}
               {indexKline60 && (
@@ -1515,7 +1515,7 @@ function App() {
                 return (
                   <>
                     <h3 className="hourly-section-title">
-                      60 分钟缠论（{activeChart.code}{holding ? ` ★持仓·${holding.name}` : ''}，近 90 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+                      60 分钟缠论（{activeChart.code}{holding ? ` ★持仓·${holding.name}` : ''}，近 79 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
                     </h3>
                     {chart60Err[activeChart.key] && (
                       <div className="alert alert-error">{chart60Err[activeChart.key]}</div>

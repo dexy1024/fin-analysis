@@ -23,8 +23,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from zoneinfo import ZoneInfo
 
 from services.indicators import _axis_date_key, _merge_inclusive_bars, get_index_kline
+
+TZ_SH = ZoneInfo("Asia/Shanghai")
 
 # 测试标的：与 production watchlist 分离；日线/60m 前半为 600873 复制，之后为 mock（见 build_meihua2test_fixture.py）
 MEIHUA2TEST_CODE = "889999"
@@ -165,9 +168,9 @@ def get_defense_radar_summary_for_api(*, refresh: bool = False) -> Dict[str, Any
     return payload
 
 
-def _h60_start_date(days_ago: int = 90) -> str:
-    """与 frontend startDateDaysAgo(90) 对齐，保证与 60m 图请求区间一致。"""
-    return (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+def _h60_start_date(days_ago: int = 79) -> str:
+    """与 kline_scheduler / trade_command_engine / 前端 60m 的 79 自然日窗口一致。"""
+    return (datetime.now(TZ_SH) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
 
 
 def _sort_centrals_chronologically(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -604,7 +607,7 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             error="skipped_index",
         )
     try:
-        daily_start = (datetime.now() - timedelta(days=380)).strftime("%Y-%m-%d")
+        daily_start = (datetime.now(TZ_SH) - timedelta(days=380)).strftime("%Y-%m-%d")
         payload = get_index_kline(
             symbol=code.strip(),
             start_date=daily_start,
@@ -642,7 +645,7 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
     try:
         h60 = get_index_kline(
             symbol=sym,
-            start_date=_h60_start_date(90),
+            start_date=_h60_start_date(),
             end_date=None,
             period="60",
             refresh=refresh,
@@ -818,7 +821,7 @@ def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float]
 
     # 1. 获取日线数据（取 centrals）
     try:
-        daily_start = (datetime.now() - timedelta(days=380)).strftime("%Y-%m-%d")
+        daily_start = (datetime.now(TZ_SH) - timedelta(days=380)).strftime("%Y-%m-%d")
         daily = get_index_kline(
             symbol=sym,
             start_date=daily_start,
@@ -840,7 +843,7 @@ def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float]
     try:
         h60 = get_index_kline(
             symbol=sym,
-            start_date=_h60_start_date(90),
+            start_date=_h60_start_date(),
             end_date=None,
             period="60",
             refresh=False,
