@@ -244,19 +244,35 @@ def _fmt_float4(value: Any) -> str:
     except (TypeError, ValueError):
         return str(value) if value != "" else ""
 
+# 客观缠论信号拆分用：仅当全部为买点标签时才允许 60m「买入」
+_BUY_LABELS_60M = frozenset({"一买", "二买", "三买"})
+
+
+def _chan_signal_is_only_buy_types(chan_sig: str) -> bool:
+    """
+    True：信号串中仅含一买/二买/三买（可多项用 + 连接），不含一卖/二卖/三卖等。
+    """
+    if not chan_sig or chan_sig == "无信号":
+        return False
+    parts = [p.strip() for p in chan_sig.split("+") if p.strip()]
+    if not parts:
+        return False
+    return all(p in _BUY_LABELS_60M for p in parts)
+
+
 def _get_60m_trade_action(chan_sig: str, pen_direction: str) -> str:
     """
     计算60m交易动作（简化版）：
     - 不考虑15分信号和区间价格对齐
-    - 只考虑缠论信号和60m笔方向
+    - 卖出：60m 笔向上且客观缠论信号含卖点（与此前一致）
+    - 买入：仅当客观缠论信号**仅为**一买/二买/三买的组合（无卖类）且 60m 笔向下
     """
-    has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
-    # 笔向上：看卖信号
+    # 笔向上：看卖信号（不变）
     if pen_direction == "向上" and has_sell:
         return "卖出"
-    # 笔向下：看买信号
-    if pen_direction == "向下" and has_buy:
+    # 笔向下：仅纯买点类型时视为 60m 买入
+    if pen_direction == "向下" and _chan_signal_is_only_buy_types(chan_sig):
         return "买入"
     return "观望"
 
