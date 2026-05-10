@@ -928,6 +928,8 @@ def _classify_symbol_state(
     state = "IGNORE"
     reason = "中枢震荡，无买卖点"
     h60_buy_type: Optional[str] = None
+    first_sell_info: Optional[Dict[str, Any]] = None
+    second_sell_info: Optional[Dict[str, Any]] = None
 
     daily_close: Optional[float] = None
     daily_czd: Optional[float] = None
