@@ -1508,6 +1508,143 @@ def _append_trade_report(
 
 
 # ---------------------------------------------------------------------------
+# 单标的：状态机 + 买点过滤（与 CSV 快照链路一致，供步进回测复用）
+# ---------------------------------------------------------------------------
+
+
+def _run_symbol_analysis_pipeline(
+    code: str,
+    holding_codes: set[str],
+    market_state: str,
+    daily_result: Optional[Dict[str, Any]],
+    h60_result: Optional[Dict[str, Any]],
+    h15_result: Optional[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], Dict[str, bool], str]:
+    """
+    对单标的执行 _classify_symbol_state 及后续买点有效性过滤、持仓买点→HOLD 转换。
+    与 _run_trade_command_engine_core 内逻辑保持一致，避免回测 duplicated 买卖规则。
+    """
+    analysis = _classify_symbol_state(
+        code, daily_result, h60_result, h15_result, holding_codes, market_state
+    )
+    state = analysis["state"]
+
+    buy_signals = analysis.get(
+        "buy_signals",
+        {"first_buy": False, "second_buy": False, "third_buy": False},
+    )
+    first_buy_info = analysis.get("h60_first_buy_info")
+    second_buy_info = analysis.get("h60_second_buy_info")
+    third_buy_info = analysis.get("h60_third_buy_info")
+
+    if buy_signals["second_buy"] and second_buy_info:
+        filter_reasons: List[str] = []
+        buy1_stop = second_buy_info.get("buy1_stop")
+        stop_loss_v = second_buy_info.get("stop_loss")
+        if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) < float(buy1_stop):
+            filter_reasons.append("二买价格低于一买低点（创新低）")
+        if filter_reasons:
+            buy_signals["second_buy"] = False
+            if state != "SELL":
+                if buy_signals["third_buy"]:
+                    state = "BUY_3"
+                    new_reason = "三买突破确认，顺势跟进。"
+                    analysis["h60_buy_type"] = "third_buy"
+                elif buy_signals["first_buy"]:
+                    state = "BUY_1"
+                    new_reason = "左侧一买确认，轻仓试探。"
+                    analysis["h60_buy_type"] = "first_buy"
+                else:
+                    if code in holding_codes:
+                        state = "HOLD"
+                        new_reason = "持仓中，无明确买点，继续观望"
+                    else:
+                        state = "IGNORE"
+                        new_reason = "中枢震荡，无买卖点"
+                    analysis["h60_buy_type"] = None
+                analysis["state"] = state
+                analysis["reason"] = f"{new_reason}（二买不成立：{'；'.join(filter_reasons)}）"
+            else:
+                analysis["h60_buy_type"] = None
+
+    if buy_signals["third_buy"] and third_buy_info:
+        filter_reasons3: List[str] = []
+        h60_conds3 = analysis.get("h60_conditions", {})
+        if h60_conds3.get("in_c_central"):
+            filter_reasons3.append("价格仍在C中枢内（未突破ZG）")
+        if filter_reasons3:
+            buy_signals["third_buy"] = False
+            if state != "SELL":
+                if buy_signals["second_buy"]:
+                    state = "BUY_2"
+                    new_reason = "右侧二买确认，底部确立！"
+                    analysis["h60_buy_type"] = "second_buy"
+                elif buy_signals["first_buy"]:
+                    state = "BUY_1"
+                    new_reason = "左侧一买确认，轻仓试探。"
+                    analysis["h60_buy_type"] = "first_buy"
+                else:
+                    if code in holding_codes:
+                        state = "HOLD"
+                        new_reason = "持仓中，无明确买点，继续观望"
+                    else:
+                        state = "IGNORE"
+                        new_reason = "中枢震荡，无买卖点"
+                    analysis["h60_buy_type"] = None
+                analysis["state"] = state
+                analysis["reason"] = f"{new_reason}（三买不成立：{'；'.join(filter_reasons3)}）"
+            else:
+                analysis["h60_buy_type"] = None
+
+    if buy_signals["first_buy"] and first_buy_info:
+        filter_reasons1: List[str] = []
+        h60_conds1 = analysis.get("h60_conditions", {})
+        if not h60_conds1.get("has_bottom_div_in_switch"):
+            filter_reasons1.append("无底背驰确认")
+        if filter_reasons1:
+            buy_signals["first_buy"] = False
+            if state != "SELL":
+                if buy_signals["second_buy"]:
+                    state = "BUY_2"
+                    new_reason = "右侧二买确认，底部确立！"
+                    analysis["h60_buy_type"] = "second_buy"
+                elif buy_signals["third_buy"]:
+                    state = "BUY_3"
+                    new_reason = "三买突破确认，顺势跟进。"
+                    analysis["h60_buy_type"] = "third_buy"
+                else:
+                    if code in holding_codes:
+                        state = "HOLD"
+                        new_reason = "持仓中，无明确买点，继续观望"
+                    else:
+                        state = "IGNORE"
+                        new_reason = "中枢震荡，无买卖点"
+                    analysis["h60_buy_type"] = None
+                analysis["state"] = state
+                analysis["reason"] = f"{new_reason}（一买不成立：{'；'.join(filter_reasons1)}）"
+            else:
+                analysis["h60_buy_type"] = None
+
+    analysis["buy_signals"] = buy_signals
+
+    if code in holding_codes and state in ("BUY_1", "BUY_2", "BUY_3"):
+        buy_type_names = {
+            "BUY_1": "一买",
+            "BUY_2": "二买",
+            "BUY_3": "三买",
+        }
+        buy_type_name = buy_type_names.get(state, "")
+        state = "HOLD"
+        analysis["state"] = state
+        if buy_type_name:
+            analysis["reason"] = f"持仓中，符合{buy_type_name}条件，可参考加仓（主状态：持仓）"
+        else:
+            analysis["reason"] = "持仓中，有买点信号，可参考加仓（主状态：持仓）"
+
+    return analysis, buy_signals, state
+
+
+# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 
@@ -1623,152 +1760,9 @@ def _run_trade_command_engine_core(
 
         # 终极状态机判定（单标异常不中断全量报告）
         try:
-            analysis = _classify_symbol_state(
-                code, daily_result, h60_result, h15_result, holding_codes, market_state
+            analysis, buy_signals, state = _run_symbol_analysis_pipeline(
+                code, holding_codes, market_state, daily_result, h60_result, h15_result
             )
-            state = analysis["state"]
-
-            # 复用状态机已检测的买卖点结果（避免重复检测导致的一致性问题）
-            buy_signals = analysis.get(
-                "buy_signals",
-                {"first_buy": False, "second_buy": False, "third_buy": False},
-            )
-            first_buy_info = analysis.get("h60_first_buy_info")
-            second_buy_info = analysis.get("h60_second_buy_info")
-            third_buy_info = analysis.get("h60_third_buy_info")
-
-            sell_signals = analysis.get(
-                "sell_signals",
-                {"first_sell": False, "second_sell": False, "third_sell": False},
-            )
-            first_sell_info = analysis.get("first_sell_info")
-            second_sell_info = analysis.get("second_sell_info")
-
-            # ========== 买点有效性检查（与前端 computeHourlyBuySellState 对齐） ==========
-            # 前置检查：15分钟底背驰信号（必须满足，且需考虑60分钟笔方向）
-            h15_bottom_div = analysis.get("h15_bottom_div", False)
-            h15_trend_div = analysis.get("h15_trend_div")
-            h15_level_alignment = analysis.get("h15_level_alignment")
-            # 买点检测：不做15分钟过滤，60分钟信号直接展示
-            # 二买必须同时满足：回踩不创新低（去除日线支撑和MACD过滤）
-            if buy_signals["second_buy"] and second_buy_info:
-                filter_reasons: List[str] = []
-                # 买点检测：不做日线支撑和MACD过滤
-                buy1_stop = second_buy_info.get("buy1_stop")
-                stop_loss_v = second_buy_info.get("stop_loss")
-                # 与前端对齐：回踩低点 < 一买低点才算创新低（等于不算）
-                if buy1_stop is not None and stop_loss_v is not None and float(stop_loss_v) < float(buy1_stop):
-                    filter_reasons.append("二买价格低于一买低点（创新低）")
-                if filter_reasons:
-                    buy_signals["second_buy"] = False
-                    if state != "SELL":
-                        # 按优先级重新评估 state：二买 > 三买 > 一买
-                        if buy_signals["third_buy"]:
-                            state = "BUY_3"
-                            new_reason = "三买突破确认，顺势跟进。"
-                            analysis["h60_buy_type"] = "third_buy"
-                        elif buy_signals["first_buy"]:
-                            state = "BUY_1"
-                            new_reason = "左侧一买确认，轻仓试探。"
-                            analysis["h60_buy_type"] = "first_buy"
-                        else:
-                            if code in holding_codes:
-                                state = "HOLD"
-                                new_reason = "持仓中，无明确买点，继续观望"
-                            else:
-                                state = "IGNORE"
-                                new_reason = "中枢震荡，无买卖点"
-                            analysis["h60_buy_type"] = None
-                        analysis["state"] = state
-                        analysis["reason"] = f"{new_reason}（二买不成立：{'；'.join(filter_reasons)}）"
-                    else:
-                        analysis["h60_buy_type"] = None
-
-            # 三买必须同时满足：不在C中枢内（突破中枢ZG，去除日线支撑过滤）
-            if buy_signals["third_buy"] and third_buy_info:
-                filter_reasons3: List[str] = []
-                # 买点检测：不做日线支撑过滤
-                h60_conds3 = analysis.get("h60_conditions", {})
-                if h60_conds3.get("in_c_central"):
-                    filter_reasons3.append("价格仍在C中枢内（未突破ZG）")
-                if filter_reasons3:
-                    buy_signals["third_buy"] = False
-                    if state != "SELL":
-                        # 按优先级重新评估 state：二买 > 三买 > 一买
-                        if buy_signals["second_buy"]:
-                            state = "BUY_2"
-                            new_reason = "右侧二买确认，底部确立！"
-                            analysis["h60_buy_type"] = "second_buy"
-                        elif buy_signals["first_buy"]:
-                            state = "BUY_1"
-                            new_reason = "左侧一买确认，轻仓试探。"
-                            analysis["h60_buy_type"] = "first_buy"
-                        else:
-                            if code in holding_codes:
-                                state = "HOLD"
-                                new_reason = "持仓中，无明确买点，继续观望"
-                            else:
-                                state = "IGNORE"
-                                new_reason = "中枢震荡，无买卖点"
-                            analysis["h60_buy_type"] = None
-                        analysis["state"] = state
-                        analysis["reason"] = f"{new_reason}（三买不成立：{'；'.join(filter_reasons3)}）"
-                    else:
-                        analysis["h60_buy_type"] = None
-
-            # 一买必须同时满足：有底背驰（去除日线支撑过滤）
-            if buy_signals["first_buy"] and first_buy_info:
-                filter_reasons1: List[str] = []
-                # 买点检测：不做日线支撑过滤
-                h60_conds1 = analysis.get("h60_conditions", {})
-                if not h60_conds1.get("has_bottom_div_in_switch"):
-                    filter_reasons1.append("无底背驰确认")
-                if filter_reasons1:
-                    buy_signals["first_buy"] = False
-                    if state != "SELL":
-                        # 按优先级重新评估 state：二买 > 三买 > 一买
-                        if buy_signals["second_buy"]:
-                            state = "BUY_2"
-                            new_reason = "右侧二买确认，底部确立！"
-                            analysis["h60_buy_type"] = "second_buy"
-                        elif buy_signals["third_buy"]:
-                            state = "BUY_3"
-                            new_reason = "三买突破确认，顺势跟进。"
-                            analysis["h60_buy_type"] = "third_buy"
-                        else:
-                            if code in holding_codes:
-                                state = "HOLD"
-                                new_reason = "持仓中，无明确买点，继续观望"
-                            else:
-                                state = "IGNORE"
-                                new_reason = "中枢震荡，无买卖点"
-                            analysis["h60_buy_type"] = None
-                        analysis["state"] = state
-                        analysis["reason"] = f"{new_reason}（一买不成立：{'；'.join(filter_reasons1)}）"
-                    else:
-                        analysis["h60_buy_type"] = None
-
-            # 显式同步过滤后的买点信号回 analysis，避免隐式副作用依赖
-            analysis["buy_signals"] = buy_signals
-
-            # ========== 持仓标的统一转换：买点状态转为HOLD，但保留买点信息 ==========
-            if code in holding_codes and state in ("BUY_1", "BUY_2", "BUY_3"):
-                # 记录买点类型用于决策理由
-                buy_type_names = {
-                    "BUY_1": "一买",
-                    "BUY_2": "二买",
-                    "BUY_3": "三买",
-                }
-                buy_type_name = buy_type_names.get(state, "")
-                # 获取当前的reason（可能包含买点确认信息）
-                current_reason = analysis.get("reason", "")
-                # 转换为持仓状态，但保留买点参考信息
-                state = "HOLD"
-                analysis["state"] = state
-                if buy_type_name:
-                    analysis["reason"] = f"持仓中，符合{buy_type_name}条件，可参考加仓（主状态：持仓）"
-                else:
-                    analysis["reason"] = f"持仓中，有买点信号，可参考加仓（主状态：持仓）"
 
             try:
                 snapshot = build_snapshot_data(
