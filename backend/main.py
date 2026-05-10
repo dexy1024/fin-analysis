@@ -221,8 +221,8 @@ def defense_radar_diagnosis(
     ),
 ):
     """
-    双防线雷达：写出 logs/defense_radar/defense_radar_*.md。
-    常规由后台 APScheduler 在 60m 同步后执行；此处供手动触发。
+    双防线雷达：更新 logs/defense_radar/last_summary.json。
+    常规由 kline_scheduler 在主槽位 60m 同步后执行；此处供手动触发。
     """
     try:
         path = run_defense_radar(refresh=refresh)

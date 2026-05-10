@@ -1,13 +1,13 @@
 """
 双防线「黄金伏击圈」雷达：与前端日线 A-ZD / C-ZD（按中枢时间排序后首末段下沿）一致，
 结合现价扫描伏击区。不包含上证指数 sh000001。
-诊断结果写入本地 Markdown（`.md`），并同步 `last_summary.json` 供 GET `/summary` 秒读；目录均为 `logs/defense_radar/`。
+诊断结果写入 `logs/defense_radar/last_summary.json` 供 GET `/summary` 秒读（不再生成按时间戳命名的 `.md`）。
 
 数据口径（默认 refresh=False，正式用法应始终如此）：
   - **假定前置任务已更新本地文件**：`services.kline_scheduler` 在 10:31/11:31/14:01/15:01 写 60m、
     16:01 另写日线；雷达**只读缓存**，不主动拉网补数。
   - C-ZD / A-ZD：本地**日线**缓存上的缠论中枢；现价 P：本地 **60m** 末根收盘（`kline_60_*.csv`）。
-  - Markdown 表含 **60分钟笔向**：取 60m `pens_effective` 最后一笔方向（向上/向下）。
+  - 摘要 JSON 中含 **60分钟笔向**：取 60m `pens_effective` 最后一笔方向（向上/向下）。
   - **四条件扳机（full_trigger）串联**：①伏击带 ±1% → ②末笔有效笔向下 → ③MACD（两段下跌绿柱面积缩小 **或** 末段绿柱连续缩短）→ ④合并末三根严格底分型 + K3 确认且与图 fractals 末段底分型一致；**全部为真**才记扳机（Tab 橙、前端弹窗）。
   - 仅排障时可 `refresh=True` 或命令行 `--refresh` 强制先拉线上再算。
   - 调度链内由 `kline_scheduler` 在每次 60m 同步后调用；亦可 POST `/api/diagnosis/defense-radar` 或脚本手动跑（默认仍只读本地）。
@@ -146,7 +146,7 @@ def write_last_summary_json(out_dir: Path, rows_out: List[DefenseRow], generated
 
 def get_defense_radar_summary_for_api(*, refresh: bool = False) -> Dict[str, Any]:
     """
-    供 GET /summary：优先读 last_summary.json（与最近一次雷达 md 同步），无缓存时再现场计算并回写 json。
+    供 GET /summary：优先读 last_summary.json，无缓存时再现场计算并回写 json。
     """
     if not refresh:
         cached = load_last_summary_json()
@@ -163,12 +163,6 @@ def get_defense_radar_summary_for_api(*, refresh: bool = False) -> Dict[str, Any
     except (OSError, TypeError):
         logging.exception("defense_radar: 写入 %s 失败", LAST_SUMMARY_JSON)
     return payload
-
-
-def _md_cell(v: object) -> str:
-    """Markdown 表格单元格：转义竖线并压成单行。"""
-    s = "" if v is None else str(v)
-    return s.replace("|", "\\|").replace("\n", " ").strip()
 
 
 def _h60_start_date(days_ago: int = 90) -> str:
@@ -751,17 +745,12 @@ def run_defense_radar(
     watchlist: Optional[Tuple[Tuple[str, str], ...]] = None,
 ) -> Path:
     """
-    扫描 watchlist，写出 Markdown 表格文件。
-    默认目录：项目根下 logs/defense_radar/，文件名 defense_radar_YYYYMMDD_HHMMSS.md
+    扫描 watchlist，更新 logs/defense_radar/last_summary.json。
     默认 refresh=False：日线 + 60 分钟均只读本地缓存（现价取自 60m；依赖定时任务已先同步）。
     """
     root = Path(__file__).resolve().parents[2]
     out_dir = output_dir or (root / "logs" / "defense_radar")
     out_dir.mkdir(parents=True, exist_ok=True)
-    now = datetime.now()
-    ts = now.strftime("%Y%m%d_%H%M%S")
-    display_time = now.strftime("%Y-%m-%d %H:%M:%S")
-    path = out_dir / f"defense_radar_{ts}.md"
 
     wl = watchlist or _get_full_radar_watchlist()
     rows_out: List[DefenseRow] = []
@@ -769,35 +758,15 @@ def run_defense_radar(
         rows_out.append(analyze_symbol(code, name, refresh=refresh))
     _append_meihua2test_row_if_missing(rows_out, refresh=refresh)
 
-    lines: List[str] = [
-        "# 双防线雷达",
-        "",
-        f"生成时间：`{display_time}`",
-        "",
-        "| 代码 | 标的名称 | 预警信息 | C-ZD价格 | A-ZD价格 | 现价(60m末根收盘) | 60分钟笔向 | 四条件扳机 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for r in rows_out:
-        cz = "" if r.c_zd is None else f"{r.c_zd:.4f}"
-        az = "" if r.a_zd is None else f"{r.a_zd:.4f}"
-        lp = "" if r.last_price is None else f"{r.last_price:.4f}"
-        pen = r.pen_60m or ""
-        trig = "是" if r.full_trigger else "否"
-        lines.append(
-            f"| {_md_cell(r.code)} | {_md_cell(r.name)} | {_md_cell(r.alert)} | "
-            f"{_md_cell(cz)} | {_md_cell(az)} | {_md_cell(lp)} | {_md_cell(pen)} | {_md_cell(trig)} |",
-        )
-
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
     gen_iso = datetime.now().replace(microsecond=0).isoformat()
+    summary_path = out_dir / LAST_SUMMARY_JSON
     try:
         write_last_summary_json(out_dir, rows_out, gen_iso)
     except (OSError, TypeError):
         logging.exception("defense_radar: 写入 %s 失败", LAST_SUMMARY_JSON)
 
-    logging.info("defense_radar: 已写入 %s（共 %s 行）", path, len(rows_out))
-    return path
+    logging.info("defense_radar: 已写入 %s（共 %s 行）", summary_path, len(rows_out))
+    return summary_path
 
 
 # ==================== 破位状态批量计算（供定时调度调用） ====================

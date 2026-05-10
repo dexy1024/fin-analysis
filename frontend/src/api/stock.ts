@@ -275,7 +275,7 @@ export async function fetchDefenseRadarSummary(
   return (await resp.json()) as DefenseRadarSummaryResponse
 }
 
-/** 双防线雷达：写 logs/defense_radar/defense_radar_*.md；refresh 应默认 false（读本地，在 60m 定时同步之后调用） */
+/** 双防线雷达：更新 logs/defense_radar/last_summary.json；refresh 应默认 false（读本地，在 60m 定时同步之后调用） */
 export async function runDefenseRadarDiagnosis(refresh = false): Promise<{ ok: boolean; path: string }> {
   const params = new URLSearchParams()
   if (refresh) {
