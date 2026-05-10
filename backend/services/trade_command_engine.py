@@ -13,6 +13,7 @@
 3. 终极状态机：SELL / BUY / HOLD / IGNORE
 
 集成：logs/snapshots_YYYY.csv 由手动执行 `run_trade_command.py`（或 `run_trade_command_engine`）；K 线同步仍由 kline_scheduler 负责。
+每次进入引擎会追加一行审计到 logs/snapshot_engine_runs.log（pid/user/参数），便于区分人手与脚本。
 """
 
 from __future__ import annotations
@@ -1831,11 +1832,13 @@ def run_trade_command_engine(generate_report: bool = False) -> Optional[Path]:
         generate_report: 为 True 时额外生成 trade_reports/ 下 Markdown；默认 False（与定时调度一致）。
     """
     from utils.csv_logger import log_snapshot
+    from utils.snapshot_run_audit import log_snapshot_engine_run
 
     timestamp = datetime.now()
     time_str = timestamp.strftime("%H:%M")
 
     symbols = _load_watchlist_observation_symbols()
+    log_snapshot_engine_run("watchlist", generate_report, len(symbols))
     if not symbols:
         logging.warning("trade_command_engine: 监控池为空，跳过")
         if generate_report:
@@ -1864,8 +1867,10 @@ def export_hs300_snapshots_to_csv() -> Optional[Path]:
     将 watchlist_hs300.json 全覆盖写入 logs/snapshots_hs300_YYYY.csv（不生成 Markdown）。
     """
     from utils.csv_logger import _get_hs300_csv_path, log_snapshot_hs300
+    from utils.snapshot_run_audit import log_snapshot_engine_run
 
     symbols = _load_hs300_symbols()
+    log_snapshot_engine_run("hs300", False, len(symbols))
     if not symbols:
         logging.warning("trade_command_engine: HS300 名单为空或未找到 watchlist_hs300.json，跳过")
         return None
