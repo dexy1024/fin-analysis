@@ -24,6 +24,9 @@ LOGS_DIR = ROOT_DIR / "logs"
 # 首次写入快照时打一条日志，便于确认调度进程加载的是否为本仓库的 csv_logger（避免多副本/旧进程）
 _snapshot_write_logged = False
 
+# 表头与 CSV_HEADERS 不一致时每个文件仅告警一次（不备份、不重命名，继续追加）
+_csv_header_mismatch_warned: set[str] = set()
+
 # CSV 表头（固定顺序，必须与 build_snapshot_data 输出键一致）
 CSV_HEADERS = [
     "时间",
@@ -145,14 +148,15 @@ def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
                     reader = csv.reader(f)
                     existing_headers = next(reader, [])
                 if existing_headers and existing_headers != CSV_HEADERS:
-                    backup_path = path.with_suffix(
-                        f".csv.bak_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                    )
-                    path.rename(backup_path)
-                    file_exists = False
-                    logging.info("csv_logger: 表头变更，已备份旧文件到 %s", backup_path)
+                    key = str(path.resolve())
+                    if key not in _csv_header_mismatch_warned:
+                        _csv_header_mismatch_warned.add(key)
+                        logging.warning(
+                            "csv_logger: 文件首行表头与当前 CSV_HEADERS 不一致，不备份、不删文件，继续按新列追加；"
+                            "首行列名与后续数据行列数可能不一致，必要时请自行整理或换用新文件。"
+                        )
             except Exception:
-                logging.warning("csv_logger: 表头检查失败，跳过兼容性处理", exc_info=True)
+                logging.warning("csv_logger: 表头检查失败", exc_info=True)
 
         with open(path, "a", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
