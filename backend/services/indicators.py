@@ -1675,9 +1675,11 @@ def get_index_kline(
       会先丢弃该标的该周期全部内存缓存再重算；否则在 TTL（默认 300s）内可命中缓存。
     - 日线 CSV：指数 index_daily_*.csv，A 股/ETF 为 a_daily_qfq_*.csv / a_daily_nq_*.csv，港股为 hk_daily_*.csv。
     - 60m CSV：data/kline_60_{symbol}.csv；15m CSV：data/kline_15_{symbol}.csv。
-    - 港股 60m/15m：仅读上述本地 CSV，不在此拉 AKShare/yfinance；分钟线由外部同步；refresh 不覆盖港股分钟 CSV。
+    - 60m/15m 消费侧只读上述本地文件；拉网写入请用 kline_minute_sync.sync_minute_kline_to_csv
+      或 kline_scheduler；refresh 对分钟线不再触发请求远端，仅清理内存响应缓存后重读磁盘。
+    - 港股与 A 股/指数共用同一套「先同步 CSV、再 get_index_kline」流程。
     - 港股日线同样本地优先（hk_daily_*.csv），参与 mtime 比对。
-    - refresh=True 时清空该标的该周期全部缓存并强制走拉数/读盘后的完整计算（港股分钟仍为只读本地）。
+    - refresh=True 对日线仍可按原逻辑强制拉取；分钟线见上。
     """
     start_perf = time.time()
     cache_key: tuple[str, str, str, str] = (
@@ -1741,48 +1743,14 @@ def get_index_kline(
         boll_daily = _calc_boll(df["close"], period=20, num_std=2.0)
         df = pd.concat([df, boll_daily], axis=1)
     elif period == "60":
-        api_sym, src = _split_kline_symbol(symbol)
         cached = _load_kline_60_cache(symbol, start_ts, end_ts)
-
-        def fetch_remote_60m() -> pd.DataFrame:
-            if src == "a_share":
-                sina_symbol = _to_sina_symbol(symbol, src, api_sym)
-                return _fetch_60m_from_sina(sina_symbol, start_ts, end_ts)
-            if src == "index":
-                sina_symbol = _to_sina_symbol(symbol, src, api_sym)
-                return _fetch_60m_from_sina(sina_symbol, start_ts, end_ts)
-            raise ValueError("不支持的 symbol")
-
-        # 港股：只读本地，不在此拉网（分钟线由外部任务写入 kline_60_*.csv）
-        if src == "hk":
-            df = cached
-            if df is None or df.empty:
-                raise ValueError(
-                    f"港股 {symbol} 无本地 60m 数据，或区间 [{start_ts}, {end_ts}] 内无 K 线；"
-                    f"请先同步至 {_kline_60_cache_path(symbol)}"
-                )
-            logging.info("60m 港股仅用本地: %s (rows=%s)", symbol, len(df))
-        # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上（仅 A 股/指数）
-        elif not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
-            df = cached
-            logging.info("60m 命中本地缓存: %s (rows=%s)", symbol, len(df))
-        else:
-            try:
-                # 顺带刷新日线缓存
-                try:
-                    _refresh_daily_cache_for_kline_symbol(symbol)
-                except Exception:
-                    logging.exception("60 分钟 refresh 时顺带刷新日线缓存失败: %s", symbol)
-                df = fetch_remote_60m()
-            except Exception:  # noqa: BLE001
-                logging.exception("拉取 %s 60 分钟数据失败，尝试回退本地缓存", symbol)
-                if cached is None:
-                    raise
-                df = cached
-                logging.warning("已回退使用本地 60m 缓存: %s (rows=%s)", symbol, len(df))
-
-        if df is None or df.empty:
-            raise ValueError(f"未获取到 {symbol} 的60分钟数据")
+        if cached is None or cached.empty:
+            raise ValueError(
+                f"未找到 {symbol} 本地 60m 数据（请求区间 [{start_ts}, {end_ts}] 内无 K 线）。"
+                "请先 sync_minute_kline_to_csv(..., '60', start_date, end_date) 或运行 kline_scheduler。"
+            )
+        df = cached
+        logging.info("60m 仅从本地读取: %s (rows=%s)", symbol, len(df))
 
         rename_map = {
             "时间": "date",
@@ -1799,51 +1767,19 @@ def get_index_kline(
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
-        if src != "hk":
-            _save_kline_60_cache(symbol, df)
         macd_part = _calc_macd(df["close"])
         df = pd.concat([df, macd_part], axis=1)
         boll_part = _calc_boll(df["close"], period=20, num_std=2.0)
         df = pd.concat([df, boll_part], axis=1)
     elif period == "15":
-        api_sym, src = _split_kline_symbol(symbol)
         cached = _load_kline_15_cache(symbol, start_ts, end_ts)
-
-        def fetch_remote_15m() -> pd.DataFrame:
-            if src in ("a_share", "index"):
-                sina_symbol = _to_sina_symbol(symbol, src, api_sym)
-                return _fetch_15m_from_sina(sina_symbol, start_ts, end_ts)
-            raise ValueError("不支持的 symbol")
-
-        # 港股：只读本地，不在此拉网（分钟线由外部任务写入 kline_15_*.csv）
-        if src == "hk":
-            df = cached
-            if df is None or df.empty:
-                raise ValueError(
-                    f"港股 {symbol} 无本地 15m 数据，或区间 [{start_ts}, {end_ts}] 内无 K 线；"
-                    f"请先同步至 {_kline_15_cache_path(symbol)}"
-                )
-            logging.info("15m 港股仅用本地: %s (rows=%s)", symbol, len(df))
-        elif not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
-            df = cached
-            logging.info("15m 命中本地缓存: %s (rows=%s)", symbol, len(df))
-        else:
-            try:
-                # 顺带刷新日线缓存
-                try:
-                    _refresh_daily_cache_for_kline_symbol(symbol)
-                except Exception:
-                    logging.exception("15 分钟 refresh 时顺带刷新日线缓存失败: %s", symbol)
-                df = fetch_remote_15m()
-            except Exception:  # noqa: BLE001
-                logging.exception("拉取 %s 15 分钟数据失败，尝试回退本地缓存", symbol)
-                if cached is None:
-                    raise
-                df = cached
-                logging.warning("已回退使用本地 15m 缓存: %s (rows=%s)", symbol, len(df))
-
-        if df is None or df.empty:
-            raise ValueError(f"未获取到 {symbol} 的15分钟数据")
+        if cached is None or cached.empty:
+            raise ValueError(
+                f"未找到 {symbol} 本地 15m 数据（请求区间 [{start_ts}, {end_ts}] 内无 K 线）。"
+                "请先 sync_minute_kline_to_csv(..., '15', start_date, end_date) 或运行 kline_scheduler。"
+            )
+        df = cached
+        logging.info("15m 仅从本地读取: %s (rows=%s)", symbol, len(df))
 
         rename_map = {
             "时间": "date",
@@ -1860,8 +1796,6 @@ def get_index_kline(
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
-        if src != "hk":
-            _save_kline_15_cache(symbol, df)
         macd_part = _calc_macd(df["close"])
         df = pd.concat([df, macd_part], axis=1)
         boll_part = _calc_boll(df["close"], period=20, num_std=2.0)

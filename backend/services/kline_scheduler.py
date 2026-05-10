@@ -11,8 +11,8 @@
   该标的日线的分型/笔/线段/ABC 中枢；不影响 60 分钟缓存。
 - 60 分钟本地 CSV（data/kline_60_*.csv）更新后，仅会使「period=60」的缓存失效并重算 60m 侧缠论与中枢；
   不影响日线缓存。
-- 本模块在槽位内显式 refresh=True 会拉网写盘并触发上述重算；前端 refresh=false 时若检测到对应 CSV
-  的 mtime 新于缓存记录，也会自动 purge 并重算，无需手工对齐。
+- 本模块槽位内对 60m/15m 调用 kline_minute_sync.sync_minute_kline_to_csv 写盘；任意 get_index_kline(..., 60|15, refresh=false)
+  若检测到对应 CSV 的 mtime 新于缓存记录，也会自动 purge 并重算，无需手工对齐。
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from services.buy_sell_signals import compute_and_save_buy_sell_signals
 from services.defense_radar import DEFENSE_RADAR_WATCHLIST, _load_watchlist_observation_symbols, compute_and_save_broken_symbols
 from services.indicators import get_index_kline
+from services.kline_minute_sync import sync_minute_kline_to_csv
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -149,33 +150,21 @@ def _sync_all_daily() -> None:
 
 
 def _sync_all_60m() -> None:
-    """写回 kline_60_*.csv；随后任意 get_index_kline(..., 60, refresh=false) 会因 mtime 变化重算 60m ABC 中枢。"""
+    """写回 kline_60_*.csv（拉取与消费分离：仅 sync 写盘）。"""
     h60 = _h60_start_date()
     for sym in sync_symbol_list_for_kline():
         try:
-            get_index_kline(
-                symbol=sym,
-                start_date=h60,
-                end_date=None,
-                period="60",
-                refresh=True,
-            )
+            sync_minute_kline_to_csv(sym, "60", h60, end_date=None)
         except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 60m 同步失败 %s", sym)
 
 
 def _sync_all_15m() -> None:
-    """写回 kline_15_*.csv；随后任意 get_index_kline(..., 15, refresh=false) 会因 mtime 变化重算 15m ABC 中枢。"""
+    """写回 kline_15_*.csv。"""
     h15 = _h15_start_date()
     for sym in sync_symbol_list_for_kline():
         try:
-            get_index_kline(
-                symbol=sym,
-                start_date=h15,
-                end_date=None,
-                period="15",
-                refresh=True,
-            )
+            sync_minute_kline_to_csv(sym, "15", h15, end_date=None)
         except _SCHEDULER_EXPECTED_EXCEPTIONS:
             logging.exception("kline_scheduler: 15m 同步失败 %s", sym)
 

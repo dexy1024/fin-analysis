@@ -16,6 +16,7 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 from services.indicators import get_index_kline
+from services.kline_minute_sync import sync_minute_kline_to_csv
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,6 +65,10 @@ def get_daily_path(code: str) -> str:
 def refresh_symbol(code: str, period: str, start_date: str) -> int:
     """刷新单个标的的K线，返回获取到的K线数量。"""
     try:
+        if period in ("60", "15"):
+            n = sync_minute_kline_to_csv(code, period, start_date, end_date=None)  # type: ignore[arg-type]
+            logging.info(f"[{code}] {period} 刷新成功: {n} 根（已写 CSV）")
+            return n
         result = get_index_kline(
             symbol=code,
             start_date=start_date,

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-将指定标的的 60m / 15m K 线拉到本地 CSV（与 kline_scheduler / get_index_kline 同源）。
+将指定标的的 60m / 15m K 线拉到本地 CSV（kline_minute_sync：只拉数写盘）。
 
 写入路径：backend/data/kline_60_{code}.csv、kline_15_{code}.csv
+消费侧请 get_index_kline(..., refresh=false)。
 
 注意：新浪接口单次约 2048 根，覆盖区间随周期而异（60m 回溯更长、15m 更短）。
 若需 ETF 从指定日起完整 15m 历史，请用东财分段脚本：
@@ -24,7 +25,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from services.indicators import get_index_kline, _kline_15_cache_path, _kline_60_cache_path
+from services.indicators import _kline_15_cache_path, _kline_60_cache_path
+from services.kline_minute_sync import sync_minute_kline_to_csv
 
 
 def main() -> None:
@@ -49,14 +51,7 @@ def main() -> None:
         periods = ["60", "15"]
 
     for period in periods:
-        result = get_index_kline(
-            symbol=sym,
-            start_date=args.start,
-            end_date=None,
-            period=period,
-            refresh=True,
-        )
-        n_api = len(result.get("data", []))
+        n_written = sync_minute_kline_to_csv(sym, period, args.start, end_date=None)  # type: ignore[arg-type]
         path = _kline_60_cache_path(sym) if period == "60" else _kline_15_cache_path(sym)
         rows_disk = 0
         if path.is_file():
@@ -65,10 +60,10 @@ def main() -> None:
             except OSError:
                 rows_disk = -1
         logging.info(
-            "完成 %s period=%s API返回data条数=%d（缠论截断后）本地CSV≈%s 行: %s",
+            "完成 %s period=%s 本次写入=%d 行 本地CSV≈%s 行: %s",
             sym,
             period,
-            n_api,
+            n_written,
             rows_disk if rows_disk >= 0 else "?",
             path,
         )

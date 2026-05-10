@@ -17,6 +17,7 @@ from services.buy_sell_signals import load_buy_sell_signals_json
 from services.defense_radar import get_defense_radar_summary_for_api, load_broken_symbols_json, run_defense_radar, DEFENSE_RADAR_WATCHLIST
 from services.first_buy_point import detect_first_buy_point, scan_first_buy_points
 from services.indicators import get_history_indicators, get_index_kline, get_latest_indicators
+from services.kline_minute_sync import sync_minute_kline_to_csv
 from services.kline_scheduler import setup_kline_scheduler, shutdown_kline_scheduler, set_sse_callback, get_scheduler_status
 from services import position_manager as pm
 
@@ -182,17 +183,27 @@ def index_kline(
     end_date: Optional[str] = Query(None, description="结束日期，格式 YYYY-MM-DD，默认今天"),
     refresh: bool = Query(
         False,
-        description="为 true 时强制从网络拉取；60/15 分钟默认优先读本地缓存，refresh=true 才强制走线上并更新缓存",
+        description="为 true 时：日线仍走 get_index_kline 内部拉取；60/15 分钟先 sync_minute_kline_to_csv 写盘再读盘（拉取与展示分离）",
     ),
 ):
     try:
-        result = get_index_kline(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            period=period,
-            refresh=refresh,
-        )
+        if period in ("60", "15") and refresh:
+            sync_minute_kline_to_csv(symbol, period, start_date, end_date)  # type: ignore[arg-type]
+            result = get_index_kline(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                period=period,
+                refresh=False,
+            )
+        else:
+            result = get_index_kline(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                period=period,
+                refresh=refresh,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (OSError, TypeError, KeyError, RuntimeError) as exc:
