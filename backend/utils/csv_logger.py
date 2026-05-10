@@ -19,6 +19,9 @@ from typing import Any, Dict, Optional
 ROOT_DIR = Path(__file__).resolve().parents[2]
 LOGS_DIR = ROOT_DIR / "logs"
 
+# 首次写入快照时打一条日志，便于确认调度进程加载的是否为本仓库的 csv_logger（避免多副本/旧进程）
+_snapshot_write_logged = False
+
 # CSV 表头（固定顺序，必须与 build_snapshot_data 输出键一致）
 CSV_HEADERS = [
     "时间",
@@ -845,7 +848,15 @@ def log_snapshot(data_dict: Dict[str, Any]) -> None:
     时间戳变化时自动插入空行分隔，提升可读性。
     所有异常被静默捕获，绝不阻塞主交易逻辑。
     """
+    global _snapshot_write_logged
     try:
+        if not _snapshot_write_logged:
+            _snapshot_write_logged = True
+            logging.info(
+                "csv_logger: 自选快照列定义 %d 列（60m交易/区间价格对齐），模块路径 %s",
+                len(CSV_HEADERS),
+                Path(__file__).resolve(),
+            )
         time_str = data_dict.get("时间", "")
         dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S") if time_str else datetime.now()
         path = _get_csv_path(dt)
@@ -855,7 +866,15 @@ def log_snapshot(data_dict: Dict[str, Any]) -> None:
 
 def log_snapshot_hs300(data_dict: Dict[str, Any]) -> None:
     """与同批 snapshots_YYYY.csv 表头完全一致；写入 logs/snapshots_hs300_YYYY.csv。"""
+    global _snapshot_write_logged
     try:
+        if not _snapshot_write_logged:
+            _snapshot_write_logged = True
+            logging.info(
+                "csv_logger: HS300 快照列定义 %d 列（与自选一致），模块路径 %s",
+                len(CSV_HEADERS),
+                Path(__file__).resolve(),
+            )
         time_str = data_dict.get("时间", "")
         dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S") if time_str else datetime.now()
         path = _get_hs300_csv_path(dt)
