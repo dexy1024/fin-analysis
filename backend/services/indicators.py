@@ -1675,8 +1675,9 @@ def get_index_kline(
       会先丢弃该标的该周期全部内存缓存再重算；否则在 TTL（默认 300s）内可命中缓存。
     - 日线 CSV：指数 index_daily_*.csv，A 股/ETF 为 a_daily_qfq_*.csv / a_daily_nq_*.csv，港股为 hk_daily_*.csv。
     - 60m CSV：data/kline_60_{symbol}.csv；15m CSV：data/kline_15_{symbol}.csv。
+    - 港股 60m/15m：仅读上述本地 CSV，不在此拉 AKShare/yfinance；分钟线由外部同步；refresh 不覆盖港股分钟 CSV。
     - 港股日线同样本地优先（hk_daily_*.csv），参与 mtime 比对。
-    - refresh=True 时清空该标的该周期全部缓存并强制走拉数/读盘后的完整计算。
+    - refresh=True 时清空该标的该周期全部缓存并强制走拉数/读盘后的完整计算（港股分钟仍为只读本地）。
     """
     start_perf = time.time()
     cache_key: tuple[str, str, str, str] = (
@@ -1750,17 +1751,19 @@ def get_index_kline(
             if src == "index":
                 sina_symbol = _to_sina_symbol(symbol, src, api_sym)
                 return _fetch_60m_from_sina(sina_symbol, start_ts, end_ts)
-            if src == "hk":
-                # 港股60分钟：优先使用 AKShare，失败后回退 yfinance
-                try:
-                    return _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
-                except Exception:
-                    logging.exception("AKShare 港股60分钟失败，回退 yfinance: %s", api_sym)
-                    return _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
             raise ValueError("不支持的 symbol")
 
-        # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上
-        if not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
+        # 港股：只读本地，不在此拉网（分钟线由外部任务写入 kline_60_*.csv）
+        if src == "hk":
+            df = cached
+            if df is None or df.empty:
+                raise ValueError(
+                    f"港股 {symbol} 无本地 60m 数据，或区间 [{start_ts}, {end_ts}] 内无 K 线；"
+                    f"请先同步至 {_kline_60_cache_path(symbol)}"
+                )
+            logging.info("60m 港股仅用本地: %s (rows=%s)", symbol, len(df))
+        # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上（仅 A 股/指数）
+        elif not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
             df = cached
             logging.info("60m 命中本地缓存: %s (rows=%s)", symbol, len(df))
         else:
@@ -1796,7 +1799,8 @@ def get_index_kline(
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
-        _save_kline_60_cache(symbol, df)
+        if src != "hk":
+            _save_kline_60_cache(symbol, df)
         macd_part = _calc_macd(df["close"])
         df = pd.concat([df, macd_part], axis=1)
         boll_part = _calc_boll(df["close"], period=20, num_std=2.0)
@@ -1809,17 +1813,18 @@ def get_index_kline(
             if src in ("a_share", "index"):
                 sina_symbol = _to_sina_symbol(symbol, src, api_sym)
                 return _fetch_15m_from_sina(sina_symbol, start_ts, end_ts)
-            if src == "hk":
-                # 港股15分钟：优先使用 AKShare，失败后回退 yfinance
-                try:
-                    return _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
-                except Exception:
-                    logging.exception("AKShare 港股15分钟失败，回退 yfinance: %s", api_sym)
-                    return _fetch_hk_min_from_yfinance(api_sym, start_ts, end_ts, interval="15m")
             raise ValueError("不支持的 symbol")
 
-        # 本地优先：有缓存先读本地；本地不存在或显式 refresh 时访问线上
-        if not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
+        # 港股：只读本地，不在此拉网（分钟线由外部任务写入 kline_15_*.csv）
+        if src == "hk":
+            df = cached
+            if df is None or df.empty:
+                raise ValueError(
+                    f"港股 {symbol} 无本地 15m 数据，或区间 [{start_ts}, {end_ts}] 内无 K 线；"
+                    f"请先同步至 {_kline_15_cache_path(symbol)}"
+                )
+            logging.info("15m 港股仅用本地: %s (rows=%s)", symbol, len(df))
+        elif not refresh and _is_kline_cache_sufficient(cached, start_ts, end_ts):
             df = cached
             logging.info("15m 命中本地缓存: %s (rows=%s)", symbol, len(df))
         else:
@@ -1855,7 +1860,8 @@ def get_index_kline(
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
-        _save_kline_15_cache(symbol, df)
+        if src != "hk":
+            _save_kline_15_cache(symbol, df)
         macd_part = _calc_macd(df["close"])
         df = pd.concat([df, macd_part], axis=1)
         boll_part = _calc_boll(df["close"], period=20, num_std=2.0)
