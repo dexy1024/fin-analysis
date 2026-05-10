@@ -23,6 +23,12 @@ from services import position_manager as pm
 WATCHLIST_FILE = Path(__file__).resolve().parents[0] / "data" / "watchlist.json"
 OBSERVATION_FILE = Path(__file__).resolve().parents[0] / "data" / "observation.json"
 
+
+def _kline_scheduler_disabled() -> bool:
+    """设为 1/true/yes 时不启动 kline 定时线程（仅保留 API，K 线同步与快照请手动跑）。"""
+    return os.environ.get("DISABLE_KLINE_SCHEDULER", "").strip().lower() in ("1", "true", "yes")
+
+
 # SSE 客户端队列 - 存储 asyncio.Queue 对象
 _sse_clients: list = []
 _sse_clients_lock = threading.Lock()
@@ -95,12 +101,16 @@ async def lifespan(app: FastAPI):
         set_sse_callback(notify_sse_clients)
         # 设置持仓管理 SSE 回调
         pm.set_sse_callback(notify_stop_loss)
-        setup_kline_scheduler()
+        if _kline_scheduler_disabled():
+            logging.info("main: DISABLE_KLINE_SCHEDULER 已启用，不启动 kline 定时调度")
+        else:
+            setup_kline_scheduler()
     except Exception:
         # 启动路径必须兜底：任何异常都不应阻断 FastAPI 服务启动
         logging.exception("后台 K 线定时任务启动失败（进程仍可服务 API）")
     yield
-    shutdown_kline_scheduler()
+    if not _kline_scheduler_disabled():
+        shutdown_kline_scheduler()
 
 
 app = FastAPI(

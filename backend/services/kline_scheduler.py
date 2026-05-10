@@ -428,6 +428,18 @@ def _check_and_run_missed_slot() -> None:
 
 def get_scheduler_status() -> dict:
     """供外部查询调度器健康状态。多worker环境下优先读共享状态文件。"""
+    if os.environ.get("DISABLE_KLINE_SCHEDULER", "").strip().lower() in ("1", "true", "yes"):
+        return {
+            "alive": False,
+            "healthy": True,
+            "disabled": True,
+            "note": "已设置 DISABLE_KLINE_SCHEDULER，未启动 kline 定时调度",
+            "thread_name": None,
+            "next_scheduled": None,
+            "last_slot": None,
+            "slot_count": 0,
+            "heartbeat_age_sec": None,
+        }
     global _worker_thread
     alive = _worker_thread is not None and _worker_thread.is_alive()
     now_ts = time.time()
