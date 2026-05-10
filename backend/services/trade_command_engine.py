@@ -12,7 +12,7 @@
 2. 个股三维区间套：日线防线 → 60m 战役阵地 → 15m 微观狙击
 3. 终极状态机：SELL / BUY / HOLD / IGNORE
 
-集成：由 kline_scheduler 在每次定时槽位执行后调用
+集成：logs/snapshots_YYYY.csv 由手动执行 `run_trade_command.py`（或 `run_trade_command_engine`）；K 线同步仍由 kline_scheduler 负责。
 """
 
 from __future__ import annotations
