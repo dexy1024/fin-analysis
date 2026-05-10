@@ -3,7 +3,7 @@
 步进式回测（15m）：复用实盘信号管线。
 
 用法：
-    cd backend && python run_walk_forward_backtest.py [--start 2023-01-01] [--symbol 510300] ...
+    cd backend && python3 run_walk_forward_backtest.py [--start 2024-03-25] [--symbol 510300] ...
 """
 
 import sys

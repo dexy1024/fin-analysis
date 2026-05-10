@@ -4,6 +4,7 @@
 从快照字段「实际交易动作」得到买卖指令。不实现任何独立的买卖规则。
 
 依赖本地/缓存 K 线（与作战引擎相同）；请先保证 `kline_15_*.csv` / 日线等覆盖回测区间。
+默认回测起点为 2024-03-25（与新浪单次拉取的 510300 小时线常见起点对齐，可按 `--start` 覆盖）。
 """
 
 from __future__ import annotations
@@ -151,7 +152,7 @@ class WalkForwardResult:
 def run_walk_forward_backtest(
     symbol: str,
     name: str = "",
-    start_date: str = "2023-01-01",
+    start_date: str = "2024-03-25",
     end_date: Optional[str] = None,
     initial_cash: float = INITIAL_CASH,
     *,
@@ -322,7 +323,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="15m 步进回测（复用实盘信号管线）")
     p.add_argument("--symbol", default="510300", help="标的代码，默认 510300")
     p.add_argument("--name", default="沪深300ETF", help="显示名称")
-    p.add_argument("--start", default="2023-01-01", help="回测开始日期")
+    p.add_argument("--start", default="2024-03-25", help="回测开始日期（默认对齐本地 510300 批量 K 线起点）")
     p.add_argument("--end", default="", help="结束时刻，默认当前；格式 YYYY-MM-DD 或含时分秒")
     p.add_argument("--cash", type=float, default=INITIAL_CASH, help="初始资金（元）")
     p.add_argument("--log-every", type=int, default=0, help="每 N 根 K 打一条进度日志，0 表示不打")
