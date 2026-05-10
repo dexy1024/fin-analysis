@@ -4,8 +4,9 @@
 
 写入路径：backend/data/kline_60_{code}.csv、kline_15_{code}.csv
 
-注意：新浪接口单次约 2048 根，覆盖区间随周期而异（60m 回溯更长、15m 更短），
-不足以覆盖「2023 年起」全历史步进回测时，需另寻多段拼接或别的数据源。
+注意：新浪接口单次约 2048 根，覆盖区间随周期而异（60m 回溯更长、15m 更短）。
+若需 ETF 从指定日起完整 15m 历史，请用东财分段脚本：
+  python3 scripts/backfill_15m_em.py --symbol 510300 --start 2024-03-25
 
 用法：
   cd backend && python3 scripts/pull_symbol_klines.py --symbol 510300
