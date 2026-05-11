@@ -8,6 +8,7 @@
 - 自选/观测：按年分文件 logs/snapshots_YYYY.csv
 - 若磁盘上首行表头与当前 CSV_HEADERS 不一致：将旧文件归档为同目录下
   snapshots_YYYY_archived_YYYYMMDD_HHMMSS.csv，再在原路径新建带新表头的文件（避免列错位混写）。
+- 本模块不由 kline_scheduler 调用；快照由 run_trade_command.py / generate_snapshots.sh（或外部定时任务）触发。
 """
 
 import copy
@@ -132,12 +133,19 @@ def _get_hs300_csv_path(timestamp: Optional[datetime] = None) -> Path:
     return _ensure_logs_dir() / f"snapshots_hs300_{year}.csv"
 
 
+def _normalize_snapshot_header_row(cells: list[str]) -> list[str]:
+    """表头比较前规范化：去空白、去掉首格 ZWSP/BOM，避免与 CSV_HEADERS 误判一致。"""
+    if not cells:
+        return cells
+    out = [c.strip().strip("\ufeff") for c in cells]
+    return out
+
+
 def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
     """
     将一行快照追加到指定 CSV；表头/备份逻辑与 log_snapshot 相同。
     供 log_snapshot / log_snapshot_hs300 共用。
     """
-    time_str = data_dict.get("时间", "")
     with _flock_snapshot_csv(path):
         file_exists = path.is_file()
 
@@ -146,7 +154,8 @@ def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
                 with open(path, "r", encoding="utf-8-sig", newline="") as f:
                     reader = csv.reader(f)
                     existing_headers = next(reader, [])
-                if existing_headers and existing_headers != CSV_HEADERS:
+                normalized = _normalize_snapshot_header_row(existing_headers)
+                if normalized and normalized != CSV_HEADERS:
                     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                     archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
                     while archive.exists():
@@ -162,18 +171,12 @@ def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
             except Exception:
                 logging.warning("csv_logger: 表头检查失败", exc_info=True)
 
-        with open(path, "a", newline="", encoding="utf-8-sig") as f:
+        # 新建文件用 utf-8-sig（Excel BOM）；已存在则追加用 utf-8，避免编码器再次写入 BOM 或混用符号
+        append_enc = "utf-8" if file_exists else "utf-8-sig"
+        with open(path, "a", newline="", encoding=append_enc) as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
             if not file_exists:
                 writer.writeheader()
-            else:
-                last_time = _read_last_csv_time(path)
-                if last_time and last_time != time_str:
-                    try:
-                        datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
-                        f.write("\r\n")
-                    except ValueError:
-                        pass
             writer.writerow(data_dict)
 
 
@@ -885,7 +888,6 @@ def log_snapshot(data_dict: Dict[str, Any]) -> None:
     """
     将快照字典追加写入 CSV。文件不存在时自动写入表头。
     若检测到表头变更（字段增减），自动备份旧文件并重建新表头。
-    时间戳变化时自动插入空行分隔，提升可读性。
     所有异常被静默捕获，绝不阻塞主交易逻辑。
     """
     global _snapshot_write_logged

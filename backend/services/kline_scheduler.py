@@ -294,7 +294,7 @@ def _scheduler_worker_loop() -> None:
         else:
             _sync_all_15m()
             logging.info("kline_scheduler: 15m 独立同步完成")
-            # 快照 logs/snapshots_*.csv 改手动；14:46 邮件依赖 CSV，一并停用，避免误报
+            # 注意：此处不写 logs/snapshots_*.csv；快照仅由 run_trade_command.py / generate_snapshots.sh（或外部 cron）触发。
         global _last_slot_time, _slot_execution_count
         with _slot_lock:
             _last_slot_time = datetime.now(TZ_SH)
