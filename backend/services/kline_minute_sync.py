@@ -14,6 +14,7 @@ from typing import Literal
 import pandas as pd
 
 from services.indicators import (
+    _aggregate_hk_15m_to_60m,
     _fetch_15m_from_sina,
     _fetch_60m_from_sina,
     _fetch_hk_60m_from_akshare,
@@ -29,6 +30,35 @@ from services.indicators import (
 )
 
 PeriodMinute = Literal["60", "15"]
+
+_HK_FETCH_GAP_SEC = 0.35
+
+
+def _fetch_hk_minute_raw(
+    api_sym: str,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    period: PeriodMinute,
+) -> pd.DataFrame:
+    if period == "60":
+        try:
+            return _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
+        except Exception:
+            logging.exception("kline_minute_sync: 港股 60m AKShare 失败，尝试 15m 聚合 %s", api_sym)
+            time.sleep(_HK_FETCH_GAP_SEC)
+            try:
+                raw15 = _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
+                return _aggregate_hk_15m_to_60m(raw15)
+            except Exception:
+                logging.exception("kline_minute_sync: 港股 60m 15m 聚合失败，回退 yfinance %s", api_sym)
+                time.sleep(_HK_FETCH_GAP_SEC)
+                return _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
+    try:
+        return _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
+    except Exception:
+        logging.exception("kline_minute_sync: 港股 15m AKShare 失败，回退 yfinance %s", api_sym)
+        time.sleep(_HK_FETCH_GAP_SEC)
+        return _fetch_hk_min_from_yfinance(api_sym, start_ts, end_ts, interval="15m")
 
 
 def _minute_range_ts(symbol: str, start_date: str, end_date: str | None, period: PeriodMinute) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -88,12 +118,8 @@ def sync_minute_kline_to_csv(
             sina_sym = _to_sina_symbol(sym, src, api_sym)
             raw = _fetch_60m_from_sina(sina_sym, start_ts, end_ts)
         elif src == "hk":
-            try:
-                raw = _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
-            except Exception:
-                logging.exception("kline_minute_sync: 港股 60m AKShare 失败，回退 yfinance %s", api_sym)
-                time.sleep(0.45)
-                raw = _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
+            raw = _fetch_hk_minute_raw(api_sym, start_ts, end_ts, "60")
+            time.sleep(_HK_FETCH_GAP_SEC)
         else:
             raise ValueError(f"不支持标的: {sym}")
         df = _normalize_ohlcv_df(raw, "60")
@@ -106,12 +132,8 @@ def sync_minute_kline_to_csv(
             sina_sym = _to_sina_symbol(sym, src, api_sym)
             raw = _fetch_15m_from_sina(sina_sym, start_ts, end_ts)
         elif src == "hk":
-            try:
-                raw = _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
-            except Exception:
-                logging.exception("kline_minute_sync: 港股 15m AKShare 失败，回退 yfinance %s", api_sym)
-                time.sleep(0.45)
-                raw = _fetch_hk_min_from_yfinance(api_sym, start_ts, end_ts, interval="15m")
+            raw = _fetch_hk_minute_raw(api_sym, start_ts, end_ts, "15")
+            time.sleep(_HK_FETCH_GAP_SEC)
         else:
             raise ValueError(f"不支持标的: {sym}")
         df = _normalize_ohlcv_df(raw, "15")

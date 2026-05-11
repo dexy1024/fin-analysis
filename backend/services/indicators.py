@@ -187,7 +187,8 @@ def _refresh_daily_cache_for_kline_symbol(symbol: str) -> None:
     elif src == "a_share":
         load_a_share_daily_dataframe(api_sym, force_refresh=True)
     elif src == "hk":
-        load_hk_daily_dataframe(symbol, force_refresh=True)
+        # 分钟同步不再强制刷新港股日线，避免与分钟线争抢东财/AKShare 配额。
+        load_hk_daily_dataframe(symbol, force_refresh=False)
 
 
 def _kline_adjust_label(symbol: str) -> str:
@@ -265,6 +266,30 @@ def _kline_60_cache_path(symbol: str) -> Path:
     return KLINE_60_CACHE_DIR / f"kline_60_{safe}.csv"
 
 
+def _normalize_kline_ohlcv_df(df: pd.DataFrame) -> pd.DataFrame:
+    keep = ["date", "open", "high", "low", "close", "volume"]
+    if not set(keep).issubset(df.columns):
+        raise ValueError(f"K 线缺少必要字段，实际列: {list(df.columns)}")
+    out = df[keep].copy()
+    out["date"] = pd.to_datetime(out["date"])
+    for col in ("open", "high", "low", "close", "volume"):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["date", "open", "high", "low", "close", "volume"])
+    return out.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+
+
+def _merge_kline_ohlcv_with_cache(path: Path, df: pd.DataFrame) -> pd.DataFrame:
+    incoming = _normalize_kline_ohlcv_df(df)
+    if not path.exists():
+        return incoming
+    try:
+        existing = _normalize_kline_ohlcv_df(pd.read_csv(path, parse_dates=["date"]))
+    except Exception:  # noqa: BLE001
+        return incoming
+    merged = pd.concat([existing, incoming], ignore_index=True)
+    return merged.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+
+
 def _save_kline_60_cache(symbol: str, df: pd.DataFrame) -> None:
     """
     缓存 60m 原始 OHLCV，供网络抖动时兜底。
@@ -272,12 +297,11 @@ def _save_kline_60_cache(symbol: str, df: pd.DataFrame) -> None:
     if df.empty:
         return
     KLINE_60_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    out = df.copy()
-    keep = ["date", "open", "high", "low", "close", "volume"]
-    if not set(keep).issubset(out.columns):
+    path = _kline_60_cache_path(symbol)
+    out = _merge_kline_ohlcv_with_cache(path, df)
+    if out.empty:
         return
-    out = out[keep].copy()
-    out.to_csv(_kline_60_cache_path(symbol), index=False)
+    out.to_csv(path, index=False)
 
 
 def _load_kline_60_cache(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame | None:
@@ -337,12 +361,11 @@ def _save_kline_15_cache(symbol: str, df: pd.DataFrame) -> None:
     if df.empty:
         return
     KLINE_60_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    out = df.copy()
-    keep = ["date", "open", "high", "low", "close", "volume"]
-    if not set(keep).issubset(out.columns):
+    path = _kline_15_cache_path(symbol)
+    out = _merge_kline_ohlcv_with_cache(path, df)
+    if out.empty:
         return
-    out = out[keep].copy()
-    out.to_csv(_kline_15_cache_path(symbol), index=False)
+    out.to_csv(path, index=False)
 
 
 def _load_kline_15_cache(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame | None:
@@ -544,6 +567,53 @@ def _to_sina_symbol(symbol: str, src: str, api_sym: str) -> str:
     raise ValueError("不支持的 symbol")
 
 
+def _fetch_hk_min_em_raw(symbol: str, period: str) -> pd.DataFrame:
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "klt": period,
+        "fqt": "0",
+        "secid": f"116.{symbol}",
+        "beg": "0",
+        "end": "20500000",
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Referer": f"https://quote.eastmoney.com/hk/{symbol}.html",
+    }
+
+    def _get() -> pd.DataFrame:
+        r = requests.get(url, params=params, timeout=20, headers=headers)
+        r.raise_for_status()
+        klines = (r.json().get("data") or {}).get("klines") or []
+        if not klines:
+            raise ValueError(f"东财未返回 {symbol} 港股{period}分钟数据")
+        rows = [item.split(",") for item in klines]
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "时间",
+                "开盘",
+                "收盘",
+                "最高",
+                "最低",
+                "成交量",
+                "成交额",
+                "振幅",
+                "涨跌幅",
+                "涨跌额",
+                "换手率",
+            ],
+        )
+
+    return _with_retry(_get, retries=6, sleep_sec=1.2)
+
+
 def _fetch_hk_min_from_akshare(
     symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp, period: str = "60"
 ) -> pd.DataFrame:
@@ -552,16 +622,27 @@ def _fetch_hk_min_from_akshare(
     symbol: 5位数字代码，如 '01810'
     period: '1'/'5'/'15'/'30'/'60'，默认 '60'
     """
-    logging.info("使用 AKShare stock_hk_hist_min_em 获取港股 %s %s分钟数据", symbol, period)
+    logging.info("使用东财/AKShare 获取港股 %s %s分钟数据", symbol, period)
+    start_date = start_ts.strftime("%Y-%m-%d %H:%M:%S")
+    end_date = end_ts.strftime("%Y-%m-%d %H:%M:%S")
 
     def _call_em() -> pd.DataFrame:
-        out = ak.stock_hk_hist_min_em(symbol=symbol, period=period)
-        if out is None or out.empty:
-            raise ValueError(f"AKShare 未返回 {symbol} 的港股{period}分钟数据")
-        return out
+        try:
+            return _fetch_hk_min_em_raw(symbol, period)
+        except Exception as exc:
+            logging.warning("东财直连港股 %s %sm 失败，回退 AKShare: %s", symbol, period, exc)
+            out = ak.stock_hk_hist_min_em(
+                symbol=symbol,
+                period=period,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if out is None or out.empty:
+                raise ValueError(f"AKShare 未返回 {symbol} 的港股{period}分钟数据")
+            return out
 
-    df = _with_retry(_call_em, retries=5, sleep_sec=1.0)
-    
+    df = _with_retry(_call_em, retries=3, sleep_sec=1.0)
+
     # 统一列名
     rename_map = {
         "时间": "date",
@@ -603,6 +684,26 @@ def _fetch_hk_60m_from_akshare(symbol: str, start_ts: pd.Timestamp, end_ts: pd.T
     return _fetch_hk_min_from_akshare(symbol, start_ts, end_ts, period="60")
 
 
+def _aggregate_hk_15m_to_60m(df15: pd.DataFrame) -> pd.DataFrame:
+    """东财 60m 偶发失败时，用同源的 15m 聚合兜底。"""
+    if df15.empty:
+        raise ValueError("15m 数据为空，无法聚合 60m")
+    bars = _normalize_kline_ohlcv_df(df15).set_index("date").sort_index()
+    agg = bars.resample("60min", label="right", closed="right").agg(
+        {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
+    )
+    agg = agg.dropna(subset=["open", "high", "low", "close"]).reset_index()
+    if agg.empty:
+        raise ValueError("15m 聚合 60m 结果为空")
+    return agg
+
+
 def _fetch_hk_min_from_yfinance(
     symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp, interval: str = "60m"
 ) -> pd.DataFrame:
@@ -629,10 +730,17 @@ def _fetch_hk_min_from_yfinance(
     else:
         yf_symbol = f"{num}.HK"
 
+    yf_start = max(start_ts, end_ts - pd.Timedelta(days=60))
+    yf_end = end_ts + pd.Timedelta(days=1)
+
     for attempt in range(3):
         try:
             ticker = yf.Ticker(yf_symbol)
-            df = ticker.history(start=start_ts.strftime("%Y-%m-%d"), interval=interval)
+            df = ticker.history(
+                start=yf_start.strftime("%Y-%m-%d"),
+                end=yf_end.strftime("%Y-%m-%d"),
+                interval=interval,
+            )
 
             if df is None or df.empty:
                 raise ValueError(f"yfinance 未返回 {symbol} 的港股{interval}数据")
