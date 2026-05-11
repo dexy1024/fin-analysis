@@ -30,7 +30,7 @@ def main() -> int:
     parser.add_argument(
         "--daily",
         action="store_true",
-        help="含日线（380 自然日窗口，get_index_kline refresh）；与 60/15 组合。根目录 sync_hs300_klines.sh 会默认带上。",
+        help="含日线：合并拉网写 a_daily_*.csv，get_index_kline 起点为本地最后一根交易日（无文件则 380 日冷启动）。sh 脚本默认带上。",
     )
     parser.add_argument("--dry-run", action="store_true", help="只打印各标的增量起点，不拉网")
     parser.add_argument("--limit", type=int, default=None, help="只处理前 N 个标的（调试）")

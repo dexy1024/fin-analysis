@@ -1,9 +1,10 @@
 """
 沪深300（watchlist_hs300.json）K 线：手动同步（可选日线 + 增量 60m/15m）。
 
-- 日线：与 kline_scheduler 一致，get_index_kline(..., daily, refresh=True)，start_date 为最近 380 自然日。
-- 60m/15m：读取本地 data/kline_{60|15}_{code}.csv 最后一根 date 为起点（与缓存重叠一根，merge 按 date keep last）。
-- 无分钟缓存或伪缓存时：60m=79 自然日、15m=25 自然日冷启动窗口。
+- 日线：先按本地 a_daily_*.csv 最后一根交易日的 date 作为 get_index_kline 的 start_date（无文件则用最近 380 自然日
+  与 kline_scheduler 冷启动一致）；再 sync_a_share_daily_cache_merged 拉网与本地按 date 合并写回，
+  最后 get_index_kline(..., daily, refresh=False) 仅重算返回段。
+- 60m/15m：读 kline_{60|15}_*.csv 最后一根为起点；无有效缓存时 60m=79 日、15m=25 日。
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Iterable, Literal, Optional
 import pandas as pd
 from zoneinfo import ZoneInfo
 
+from services.index_cache import _a_share_daily_cache_path, sync_a_share_daily_cache_merged
 from services.indicators import _kline_15_cache_path, _kline_60_cache_path, get_index_kline
 from services.kline_minute_sync import sync_minute_kline_to_csv
 from services.trade_command_engine import _load_hs300_symbols
@@ -27,8 +29,33 @@ MinutePeriod = Literal["60", "15"]
 
 
 def _daily_start_date() -> str:
-    """与 kline_scheduler._daily_start_date 一致。"""
+    """与 kline_scheduler._daily_start_date 一致（无本地日线文件时的冷启动起点）。"""
     return (datetime.now(TZ_SH) - timedelta(days=380)).strftime("%Y-%m-%d")
+
+
+def incremental_daily_start_date(code: str) -> str:
+    """本地 a_daily_*.csv 最后一根交易日；无文件或读失败则 380 自然日冷启动。"""
+    path = _a_share_daily_cache_path(code)
+    if not path.is_file():
+        return _daily_start_date()
+    try:
+        df = pd.read_csv(path, parse_dates=["date"])
+    except Exception:
+        return _daily_start_date()
+    if df.empty or "date" not in df.columns:
+        return _daily_start_date()
+    req = {"date", "open", "high", "low", "close", "volume"}
+    if not req.issubset(df.columns):
+        return _daily_start_date()
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df = df.dropna(subset=["date"])
+    if df.empty:
+        return _daily_start_date()
+    last = df["date"].max()
+    if pd.isna(last):
+        return _daily_start_date()
+    return last.strftime("%Y-%m-%d")
 
 
 def _cold_start_start(period: MinutePeriod) -> str:
@@ -111,13 +138,13 @@ def _sync_symbol(
     dry_run: bool,
 ) -> SymbolSyncResult:
     period_list = tuple(periods)
-    sd = _daily_start_date() if "daily" in period_list else ""
+    daily_start = incremental_daily_start_date(code) if "daily" in period_list else ""
     s60 = incremental_start_date(code, "60") if "60" in period_list else ""
     s15 = incremental_start_date(code, "15") if "15" in period_list else ""
     res = SymbolSyncResult(
         code=code,
         name=name,
-        start_daily=sd,
+        start_daily=daily_start,
         start_60=s60,
         start_15=s15,
         dry_run=dry_run,
@@ -127,12 +154,13 @@ def _sync_symbol(
     for p in period_list:
         try:
             if p == "daily":
+                sync_a_share_daily_cache_merged(code)
                 payload = get_index_kline(
                     symbol=code,
-                    start_date=sd,
+                    start_date=daily_start,
                     end_date=None,
                     period="daily",
-                    refresh=True,
+                    refresh=False,
                 )
                 res.rows_daily = len(payload.get("data", []))
                 res.touched_daily = True
@@ -175,7 +203,7 @@ def run_hs300_kline_incremental(
     :param sleep_sec: 每处理完一个标的（各周期）后的休眠，略降频
     :param limit: 仅处理前 N 个（调试用）
     :param codes: 若给出则只处理这些 code（仍须存在于 hs300 json 时可省略校验，直接按 code 拉）
-    :param dry_run: 为 True 时不拉网，只计算并返回各标的的增量起点
+    :param dry_run: 为 True 时不拉网，只计算并返回各标的的增量起点（日线为本地最后一交易日或冷启动日）
     """
     if codes is not None:
         pairs = [(c.strip(), "") for c in codes if c.strip()]

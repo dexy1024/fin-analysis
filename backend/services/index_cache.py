@@ -123,6 +123,32 @@ def load_a_share_daily_dataframe(code: str, *, force_refresh: bool = False) -> p
     return out
 
 
+def sync_a_share_daily_cache_merged(code: str) -> pd.DataFrame:
+    """
+    拉取新浪日线并与本地 a_daily_*.csv 按 date 合并去重（keep last），再写回。
+    用于增量更新：保留历史行，仅覆盖/追加与远端重叠及之后的日期。
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _a_share_daily_cache_path(code)
+    raw = _fetch_a_share_daily(code)
+    raw["date"] = pd.to_datetime(raw["date"]).dt.normalize()
+    if not path.exists():
+        raw.to_csv(path, index=False)
+        return raw
+    try:
+        local = pd.read_csv(path, parse_dates=["date"])
+        local["date"] = pd.to_datetime(local["date"]).dt.normalize()
+    except Exception:  # noqa: BLE001
+        raw.to_csv(path, index=False)
+        return raw
+    merged = pd.concat([local, raw], ignore_index=True)
+    merged = merged.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
+    anchor_ts = pd.to_datetime(INDEX_DAILY_ANCHOR).normalize()
+    merged = merged[merged["date"] >= anchor_ts].reset_index(drop=True)
+    merged.to_csv(path, index=False)
+    return merged
+
+
 def _cache_path(symbol: str) -> Path:
     safe = symbol.replace("/", "_")
     return CACHE_DIR / f"index_daily_{safe}.csv"
