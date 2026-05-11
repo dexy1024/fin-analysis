@@ -4,7 +4,8 @@
 # 用法（项目根目录）：
 #   ./generate_snapshots.sh --write
 #   ./generate_snapshots.sh --write --report
-# 直接调 Python 写盘:  cd backend && .venv/bin/python run_trade_command.py --write [--report]
+# 直接调 Python:  cd backend && .venv/bin/python run_trade_command.py --write
+# 需要 Markdown 报告时在末尾再加 --report（不要输入方括号）
 
 set -euo pipefail
 
@@ -35,7 +36,8 @@ fi
 
 if [[ "${WRITE}" -eq 0 ]]; then
   echo "未加 --write，本脚本不会写 snapshots（防误触发与定时任务）。写盘请执行:" >&2
-  echo "  ./generate_snapshots.sh --write [--report]" >&2
+  echo "  ./generate_snapshots.sh --write                # 仅 CSV" >&2
+  echo "  ./generate_snapshots.sh --write --report       # CSV + 作战指令 Markdown（zsh 勿写方括号）" >&2
   exit 2
 fi
 
@@ -47,4 +49,9 @@ if [[ ! -x "${VENV_PY}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
-exec "${VENV_PY}" run_trade_command.py --write "${PY_ARGS[@]}"
+# set -u 下空数组 "${PY_ARGS[@]}" 在部分 bash 会报 unbound variable，须分支展开
+if ((${#PY_ARGS[@]} > 0)); then
+  exec "${VENV_PY}" run_trade_command.py --write "${PY_ARGS[@]}"
+else
+  exec "${VENV_PY}" run_trade_command.py --write
+fi
