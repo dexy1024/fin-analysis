@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# 自选/观测池快照：追加写入 logs/snapshots_YYYY.csv
+# 自选/观测池快照：本脚本默认追加写入 logs/snapshots_YYYY_new.csv（与旧 snapshots_YYYY.csv 分离）。
 # 须显式传 --write / -w，避免后台循环或误点脚本即写盘；不读取 .env 中的 FIN_SNAPSHOT_ALLOW 作为放行条件。
 # 用法（项目根目录）：
 #   ./generate_snapshots.sh --write
 #   ./generate_snapshots.sh --write --report
+# 写回旧文件名：  FIN_SNAPSHOT_CSV_SUFFIX=  ./generate_snapshots.sh --write
 # 直接调 Python:  cd backend && .venv/bin/python run_trade_command.py --write
 # 需要 Markdown 报告时在末尾再加 --report（不要输入方括号）
 
@@ -36,12 +37,16 @@ fi
 
 if [[ "${WRITE}" -eq 0 ]]; then
   echo "未加 --write，本脚本不会写 snapshots（防误触发与定时任务）。写盘请执行:" >&2
-  echo "  ./generate_snapshots.sh --write                # 仅 CSV" >&2
+  echo "  ./generate_snapshots.sh --write                # 仅 CSV → logs/snapshots_YYYY_new.csv" >&2
   echo "  ./generate_snapshots.sh --write --report       # CSV + 作战指令 Markdown（zsh 勿写方括号）" >&2
   exit 2
 fi
 
 export FIN_SNAPSHOT_ALLOW=1
+# 与旧 logs/snapshots_YYYY.csv 分离；仅在「未出现在环境中」时默认 _new（显式 FIN_SNAPSHOT_CSV_SUFFIX= 空可写回旧名）
+if ! printenv FIN_SNAPSHOT_CSV_SUFFIX >/dev/null 2>&1; then
+  export FIN_SNAPSHOT_CSV_SUFFIX=_new
+fi
 
 if [[ ! -x "${VENV_PY}" ]]; then
   echo "错误: 未找到可执行虚拟环境 ${VENV_PY}，请先创建 .venv 并安装依赖。" >&2

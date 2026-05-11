@@ -7,12 +7,12 @@
     或：cd backend && python run_trade_command.py --write [--report]
 
 效果：
-    追加 logs/snapshots_YYYY.csv；加 --report 时另生成 trade_reports 作战指令 Markdown。
+    默认追加 logs/snapshots_YYYY.csv；若已 export FIN_SNAPSHOT_CSV_SUFFIX=_new 则为 snapshots_YYYY_new.csv。
+    加 --report 时另生成 trade_reports 作战指令 Markdown。
 """
 
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # 将 backend 目录加入模块搜索路径
@@ -35,5 +35,5 @@ if __name__ == "__main__":
     if want_report and path:
         print(f"报告路径: {path}")
     else:
-        y = datetime.now().strftime("%Y")
-        print(f"快照已追加: {_get_csv_path()}（年份文件 snapshots_{y}.csv）")
+        p = _get_csv_path()
+        print(f"快照已追加: {p}（相对项目根 logs/）")

@@ -5,7 +5,7 @@
 - 在每次15分钟巡检结束、状态机计算完毕后，将所有标的的状态追加写入 CSV。
 - 沪深300批量导出：logs/snapshots_hs300_YYYY.csv（表头与同 snapshots_YYYY.csv）。
 - 支持 Excel 直接打开（utf-8-sig BOM 头）。
-- 自选/观测：按年分文件 logs/snapshots_YYYY.csv
+- 自选/观测：按年分文件 logs/snapshots_YYYY.csv；若环境变量 `FIN_SNAPSHOT_CSV_SUFFIX=_new` 则为 `snapshots_YYYY_new.csv`（供脚本与旧文件分离）。
 - 若首行为历史「18 列」表头（缺 60m交易 / 区间价格对齐）：**原地迁移**为当前列定义并保留全部历史行（新列填空），再写入本轮首行；后续标的仍追加。
 - 其它表头与程序不一致：**绝不**移动或清空现有文件，直接报错 `SnapshotCsvHeaderConflictError`，请用户自行备份/修正后再跑。
 - 本模块不由 kline_scheduler 调用；快照由 run_trade_command.py / generate_snapshots.sh（或外部定时任务）触发。
@@ -17,6 +17,8 @@ import copy
 import csv
 import fcntl
 import logging
+import os
+import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -150,10 +152,27 @@ def _check_is_holding(code: str) -> str:
     return "否"
 
 
+def _snapshot_watchlist_filename_suffix() -> str:
+    """
+    自选快照文件名后缀，来自环境变量 FIN_SNAPSHOT_CSV_SUFFIX。
+    例：_new → snapshots_2026_new.csv；传入 new 时自动补前导下划线。
+    仅允许字母数字下划线与单连字符，防路径注入。
+    """
+    raw = (os.environ.get("FIN_SNAPSHOT_CSV_SUFFIX") or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("_", "-")):
+        raw = "_" + raw
+    if not re.fullmatch(r"[_A-Za-z0-9-]+", raw):
+        raise ValueError(f"FIN_SNAPSHOT_CSV_SUFFIX 非法: {raw!r}")
+    return raw
+
+
 def _get_csv_path(timestamp: Optional[datetime] = None) -> Path:
-    """按年分文件：logs/snapshots_YYYY.csv"""
+    """按年分文件：logs/snapshots_YYYY.csv；可选后缀见 _snapshot_watchlist_filename_suffix。"""
     year = (timestamp or datetime.now()).strftime("%Y")
-    return _ensure_logs_dir() / f"snapshots_{year}.csv"
+    suf = _snapshot_watchlist_filename_suffix()
+    return _ensure_logs_dir() / f"snapshots_{year}{suf}.csv"
 
 
 def _get_hs300_csv_path(timestamp: Optional[datetime] = None) -> Path:
