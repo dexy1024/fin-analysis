@@ -23,4 +23,5 @@ if [[ ! -x "${VENV_PY}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
+export FIN_SNAPSHOT_ALLOW=1
 exec "${VENV_PY}" run_trade_command.py "$@"

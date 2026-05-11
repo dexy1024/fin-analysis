@@ -17,6 +17,25 @@ _LOG_PATH = _ROOT / "logs" / "snapshot_engine_runs.log"
 _TZ_SH = ZoneInfo("Asia/Shanghai")
 
 
+def snapshot_write_allowed() -> bool:
+    """仅当显式 FIN_SNAPSHOT_ALLOW=1|true|yes|on 时允许写入 snapshots CSV。"""
+    return os.environ.get("FIN_SNAPSHOT_ALLOW", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def assert_snapshot_write_allowed() -> None:
+    if snapshot_write_allowed():
+        return
+    raise SystemExit(
+        "已拒绝写入 snapshots CSV：未设置 FIN_SNAPSHOT_ALLOW=1。"
+        "手动追加请执行项目根目录 ./generate_snapshots.sh（脚本会自动带上该变量）。"
+    )
+
+
 def _argv_shell_quoted() -> str:
     """便于肉眼从日志复制整条命令。"""
     if not sys.argv:

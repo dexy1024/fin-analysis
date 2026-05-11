@@ -1832,8 +1832,9 @@ def run_trade_command_engine(generate_report: bool = False) -> Optional[Path]:
         generate_report: 为 True 时额外生成 trade_reports/ 下 Markdown；默认 False（与定时调度一致）。
     """
     from utils.csv_logger import log_snapshot
-    from utils.snapshot_run_audit import log_snapshot_engine_run
+    from utils.snapshot_run_audit import assert_snapshot_write_allowed, log_snapshot_engine_run
 
+    assert_snapshot_write_allowed()
     timestamp = datetime.now()
     time_str = timestamp.strftime("%H:%M")
 
@@ -1867,8 +1868,9 @@ def export_hs300_snapshots_to_csv() -> Optional[Path]:
     将 watchlist_hs300.json 全覆盖写入 logs/snapshots_hs300_YYYY.csv（不生成 Markdown）。
     """
     from utils.csv_logger import _get_hs300_csv_path, log_snapshot_hs300
-    from utils.snapshot_run_audit import log_snapshot_engine_run
+    from utils.snapshot_run_audit import assert_snapshot_write_allowed, log_snapshot_engine_run
 
+    assert_snapshot_write_allowed()
     symbols = _load_hs300_symbols()
     log_snapshot_engine_run("hs300", False, len(symbols))
     if not symbols:

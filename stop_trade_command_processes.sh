@@ -14,6 +14,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 YEAR="$(date +%Y)"
 CSV="${ROOT}/logs/snapshots_${YEAR}.csv"
+AUDIT="${ROOT}/logs/snapshot_engine_runs.log"
 DRY=0
 WATCH_SECS=""
 
@@ -38,7 +39,21 @@ while (($#)); do
   esac
 done
 
+_print_audit_hint() {
+  echo "=== 0) 最近审计 logs/snapshot_engine_runs.log（比 pgrep 可靠；每轮引擎启动即记一行）==="
+  if [[ -f "${AUDIT}" ]]; then
+    tail -3 "${AUDIT}" 2>/dev/null || true
+    echo ""
+    echo "若 parent_command 为 /bin/zsh -il：到该 zsh 终端 jobs -l / Ctrl+C 停循环；"
+    echo "ppid 可用: ps -o pid,ppid,etime,command -p <ppid>"
+  else
+    echo "(无审计文件)"
+  fi
+  echo ""
+}
+
 _run_diag() {
+  _print_audit_hint
   echo "=== 1) pgrep run_trade_command ==="
   pgrep -fl "run_trade_command" 2>/dev/null || echo "(无)"
   echo ""
@@ -74,6 +89,7 @@ _do_kill() {
 }
 
 if [[ -n "${WATCH_SECS}" ]]; then
+  _print_audit_hint
   echo "监视 ${WATCH_SECS} 秒（每 2 秒采样）；命中 run_trade_command 或 lsof 到 CSV 则 kill（非 dry-run）并退出。"
   echo "（下一轮快照若在 5 分钟后，请把秒数设大一点，例如 --watch 600）"
   echo ""
