@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -15,6 +16,7 @@ from zoneinfo import ZoneInfo
 _ROOT = Path(__file__).resolve().parents[2]
 _LOG_PATH = _ROOT / "logs" / "snapshot_engine_runs.log"
 _TZ_SH = ZoneInfo("Asia/Shanghai")
+_log = logging.getLogger(__name__)
 
 
 def snapshot_write_allowed() -> bool:
@@ -89,8 +91,25 @@ def log_snapshot_engine_run(kind: str, generate_report: bool, symbol_count: int)
     }
     try:
         _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(rec, ensure_ascii=False) + "\n"
         with open(_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except OSError:
-        # 审计失败不得影响作战引擎主流程
-        pass
+            f.write(line)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+    except Exception as e:
+        # 审计失败不得阻塞写 CSV，但必须可见（否则会出现「CSV 在涨、审计停更」的假像）
+        msg = (
+            f"snapshot_run_audit: 追加审计日志失败 path={_LOG_PATH} cwd={os.getcwd()} err={e!r}"
+        )
+        _log.warning("%s", msg, exc_info=True)
+        print(msg, file=sys.stderr)
+        if os.environ.get("FIN_SNAPSHOT_AUDIT_STRICT", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            raise
