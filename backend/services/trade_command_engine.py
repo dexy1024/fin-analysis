@@ -1661,7 +1661,7 @@ def _run_trade_command_engine_core(
     snapshot_writer 决定写入 snapshots_YYYY 或 snapshots_hs300_YYYY。
     collect_report_records=False 时不拼装雷达 / Markdown 用 records（适合 300 只名单）。
     """
-    from utils.csv_logger import build_snapshot_data
+    from utils.csv_logger import SnapshotCsvHeaderConflictError, build_snapshot_data
     from services.indicators import get_index_kline
 
     time_str = timestamp.strftime("%H:%M")
@@ -1777,6 +1777,12 @@ def _run_trade_command_engine_core(
                     buy_signals=buy_signals,
                 )
                 snapshot_writer(snapshot)
+            except SnapshotCsvHeaderConflictError:
+                logging.error(
+                    "trade_command_engine: 快照 CSV 表头与程序不一致，已中止本批次（未再写入后续标的）。标的=%s",
+                    code,
+                )
+                raise
             except Exception:
                 logging.warning("trade_command_engine: CSV快照写入失败 %s", code, exc_info=True)
 

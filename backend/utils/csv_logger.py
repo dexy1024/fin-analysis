@@ -6,8 +6,8 @@
 - 沪深300批量导出：logs/snapshots_hs300_YYYY.csv（表头与同 snapshots_YYYY.csv）。
 - 支持 Excel 直接打开（utf-8-sig BOM 头）。
 - 自选/观测：按年分文件 logs/snapshots_YYYY.csv
-- 若首行为历史「18 列」表头（缺 60m交易 / 区间价格对齐）：**原地迁移**为当前列定义并保留所有数据行，再追加本次行（主文件不再被整段「清空」）。
-- 其它未知表头：仍归档为 snapshots_YYYY_archived_YYYYMMDD_HHMMSS.csv 后新建，避免列错位混写。
+- 若首行为历史「18 列」表头（缺 60m交易 / 区间价格对齐）：**原地迁移**为当前列定义并保留全部历史行（新列填空），再写入本轮首行；后续标的仍追加。
+- 其它表头与程序不一致：**绝不**移动或清空现有文件，直接报错 `SnapshotCsvHeaderConflictError`，请用户自行备份/修正后再跑。
 - 本模块不由 kline_scheduler 调用；快照由 run_trade_command.py / generate_snapshots.sh（或外部定时任务）触发。
 """
 
@@ -25,6 +25,11 @@ from typing import Any, Dict, Iterator, Optional
 # 项目根目录（backend/utils/ 的上两级）
 ROOT_DIR = Path(__file__).resolve().parents[2]
 LOGS_DIR = ROOT_DIR / "logs"
+
+
+class SnapshotCsvHeaderConflictError(ValueError):
+    """磁盘上 snapshots CSV 首行表头与当前程序列定义不一致；拒绝写入以免打乱或丢失历史。"""
+
 
 # 首次写入快照时打一条日志，便于确认调度进程加载的是否为本仓库的 csv_logger（避免多副本/旧进程）
 _snapshot_write_logged = False
@@ -215,34 +220,21 @@ def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
                 normalized = _normalize_snapshot_header_row(existing_headers)
 
                 if not normalized:
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
-                    while archive.exists():
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
-                    path.rename(archive)
-                    file_exists = False
-                    logging.warning(
-                        "csv_logger: 首行无法解析为表头，已归档 %s，将新建 %s",
-                        archive.name,
-                        path.name,
+                    raise SnapshotCsvHeaderConflictError(
+                        f"快照 CSV 首行无法解析为表头，已拒绝写入（不移动、不覆盖原文件）。路径: {path}"
                     )
                 elif tuple(normalized) == _SNAPSHOT_CSV_HEADERS_LEGACY_18:
                     _migrate_legacy_18_snapshot_file(path, data_dict)
                     return
                 elif normalized != CSV_HEADERS:
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
-                    while archive.exists():
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
-                    path.rename(archive)
-                    file_exists = False
-                    logging.info(
-                        "csv_logger: 表头与代码 CSV_HEADERS 不一致，已归档旧文件 %s，将新建 %s",
-                        archive.name,
-                        path.name,
+                    raise SnapshotCsvHeaderConflictError(
+                        f"快照 CSV 表头与程序不一致（磁盘 {len(normalized)} 列 vs 程序 {len(CSV_HEADERS)} 列），"
+                        f"已拒绝写入，避免覆盖或打乱历史。路径: {path}\n"
+                        f"磁盘表头: {normalized}\n"
+                        f"程序表头: {CSV_HEADERS}"
                     )
+            except SnapshotCsvHeaderConflictError:
+                raise
             except Exception:
                 logging.warning("csv_logger: 表头检查失败", exc_info=True)
 
@@ -962,8 +954,8 @@ def _read_last_csv_time(path: Path) -> Optional[str]:
 def log_snapshot(data_dict: Dict[str, Any]) -> None:
     """
     将快照字典追加写入 CSV。文件不存在时自动写入表头。
-    若检测到表头变更（字段增减），自动备份旧文件并重建新表头。
-    所有异常被静默捕获，绝不阻塞主交易逻辑。
+    表头与程序冲突时抛出 SnapshotCsvHeaderConflictError（不移动、不覆盖已有文件）。
+    其它 I/O 异常仍记录日志，尽量不阻塞主流程。
     """
     global _snapshot_write_logged
     try:
@@ -978,6 +970,8 @@ def log_snapshot(data_dict: Dict[str, Any]) -> None:
         dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S") if time_str else datetime.now()
         path = _get_csv_path(dt)
         _append_snapshot_csv_row(path, data_dict)
+    except SnapshotCsvHeaderConflictError:
+        raise
     except Exception:
         logging.warning("csv_logger: 快照写入失败", exc_info=True)
 
@@ -997,5 +991,7 @@ def log_snapshot_hs300(data_dict: Dict[str, Any]) -> None:
         dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S") if time_str else datetime.now()
         path = _get_hs300_csv_path(dt)
         _append_snapshot_csv_row(path, data_dict)
+    except SnapshotCsvHeaderConflictError:
+        raise
     except Exception:
         logging.warning("csv_logger: HS300 快照写入失败", exc_info=True)
