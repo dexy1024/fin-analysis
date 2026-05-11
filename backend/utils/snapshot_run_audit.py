@@ -32,7 +32,7 @@ def assert_snapshot_write_allowed() -> None:
         return
     raise SystemExit(
         "已拒绝写入 snapshots CSV：未设置 FIN_SNAPSHOT_ALLOW=1。"
-        "手动追加请执行项目根目录 ./generate_snapshots.sh（脚本会自动带上该变量）。"
+        "手动写盘请在项目根执行: ./generate_snapshots.sh --write   或   ./generate_snapshots_hs300.sh --write"
     )
 
 

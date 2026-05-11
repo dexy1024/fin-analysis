@@ -2,12 +2,12 @@
 """
 手动触发作战指令引擎
 
-用法：
-    cd backend && python run_trade_command.py
+用法（写盘须显式放行）：
+    项目根：./generate_snapshots.sh --write [--report]
+    或：cd backend && FIN_SNAPSHOT_ALLOW=1 python run_trade_command.py [--report]
 
 效果：
-    与定时调度相同：仅写入 logs/snapshots_YYYY.csv（不生成 trade_reports 下 Markdown）。
-    若仍需作战指令 Markdown，可加参数：python run_trade_command.py --report
+    追加 logs/snapshots_YYYY.csv；加 --report 时另生成 trade_reports 作战指令 Markdown。
 """
 
 import sys
