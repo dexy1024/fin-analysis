@@ -242,4 +242,33 @@ def run_hs300_kline_incremental(
         if sleep_sec > 0:
             time.sleep(sleep_sec)
 
+    if not dry_run:
+        _log_incremental_failures(summary, period_list)
+
     return summary
+
+
+def _truncate_err(msg: str, max_len: int = 220) -> str:
+    msg = msg.replace("\n", " ").strip()
+    if len(msg) <= max_len:
+        return msg
+    return msg[: max_len - 3] + "..."
+
+
+def _log_incremental_failures(summary: BatchSummary, period_list: tuple[Period, ...]) -> None:
+    """跑完后一次性打出失败标的（周期 + code + 名 + 错误摘要）。"""
+    lines: list[str] = []
+    for r in summary.results:
+        nm = (r.name or "").strip()
+        label = f"{r.code} {nm}".strip() if nm else r.code
+        if "daily" in period_list and r.touched_daily and r.error_daily:
+            lines.append(f"daily\t{label}\t{_truncate_err(r.error_daily)}")
+        if "60" in period_list and r.touched_60 and r.error_60:
+            lines.append(f"60m\t{label}\t{_truncate_err(r.error_60)}")
+        if "15" in period_list and r.touched_15 and r.error_15:
+            lines.append(f"15m\t{label}\t{_truncate_err(r.error_15)}")
+    if not lines:
+        return
+    logging.warning("HS300 同步失败明细（共 %d 条）:", len(lines))
+    for line in lines:
+        logging.warning("  %s", line)
