@@ -4,7 +4,7 @@
 # 用法（项目根目录）：
 #   ./generate_snapshots.sh --write
 #   ./generate_snapshots.sh --write --report
-# 直接调 Python 写盘仍可用:  cd backend && FIN_SNAPSHOT_ALLOW=1 .venv/bin/python run_trade_command.py
+# 直接调 Python 写盘:  cd backend && .venv/bin/python run_trade_command.py --write [--report]
 
 set -euo pipefail
 
@@ -47,4 +47,4 @@ if [[ ! -x "${VENV_PY}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
-exec "${VENV_PY}" run_trade_command.py "${PY_ARGS[@]}"
+exec "${VENV_PY}" run_trade_command.py --write "${PY_ARGS[@]}"

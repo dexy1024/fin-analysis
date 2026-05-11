@@ -32,7 +32,8 @@ def assert_snapshot_write_allowed() -> None:
         return
     raise SystemExit(
         "已拒绝写入 snapshots CSV：未设置 FIN_SNAPSHOT_ALLOW=1。"
-        "手动写盘请在项目根执行: ./generate_snapshots.sh --write   或   ./generate_snapshots_hs300.sh --write"
+        "自选写盘：./generate_snapshots.sh --write 或 cd backend && python run_trade_command.py --write；"
+        "HS300：./generate_snapshots_hs300.sh --write"
     )
 
 
