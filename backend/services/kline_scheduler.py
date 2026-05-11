@@ -13,8 +13,7 @@
   不影响日线缓存。
 - 本模块槽位内对 60m/15m 调用 kline_minute_sync.sync_minute_kline_to_csv 写盘；任意 get_index_kline(..., 60|15, refresh=false)
   若检测到对应 CSV 的 mtime 新于缓存记录，也会自动 purge 并重算，无需手工对齐。
-- 同步标的在 sync_symbol_list_for_kline() 中汇总：上证、DEFENSE_RADAR_WATCHLIST、watchlist.json+observation.json、
-  以及 watchlist_hs300.json（沪深300成份，与 export_snapshots_hs300 数据源一致；按 code 去重追加）。
+- watchlist_hs300.json 为独立批量模块（如 export_snapshots_hs300），不并入本调度器的同步标的。
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from services.buy_sell_signals import compute_and_save_buy_sell_signals
 from services.defense_radar import DEFENSE_RADAR_WATCHLIST, _load_watchlist_observation_symbols, compute_and_save_broken_symbols
 from services.indicators import get_index_kline
 from services.kline_minute_sync import sync_minute_kline_to_csv
-from services.trade_command_engine import _load_hs300_symbols
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -129,12 +127,9 @@ _H15_SLOTS: tuple[tuple[int, int], ...] = (
 
 
 def sync_symbol_list_for_kline() -> list[str]:
-    """上证 + DEFENSE_RADAR_WATCHLIST + watchlist/observation + watchlist_hs300（均按 code 去重）。"""
+    """上证 + DEFENSE_RADAR_WATCHLIST + watchlist.json / observation.json（去重）。不含 watchlist_hs300。"""
     codes = ["sh000001"] + [code for code, _ in DEFENSE_RADAR_WATCHLIST]
     for code, _ in _load_watchlist_observation_symbols():
-        if code not in codes:
-            codes.append(code)
-    for code, _ in _load_hs300_symbols():
         if code not in codes:
             codes.append(code)
     return codes
