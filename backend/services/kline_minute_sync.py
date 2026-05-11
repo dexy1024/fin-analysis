@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Literal
 
 import pandas as pd
@@ -91,6 +92,7 @@ def sync_minute_kline_to_csv(
                 raw = _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
             except Exception:
                 logging.exception("kline_minute_sync: 港股 60m AKShare 失败，回退 yfinance %s", api_sym)
+                time.sleep(0.45)
                 raw = _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
         else:
             raise ValueError(f"不支持标的: {sym}")
@@ -108,6 +110,7 @@ def sync_minute_kline_to_csv(
                 raw = _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
             except Exception:
                 logging.exception("kline_minute_sync: 港股 15m AKShare 失败，回退 yfinance %s", api_sym)
+                time.sleep(0.45)
                 raw = _fetch_hk_min_from_yfinance(api_sym, start_ts, end_ts, interval="15m")
         else:
             raise ValueError(f"不支持标的: {sym}")

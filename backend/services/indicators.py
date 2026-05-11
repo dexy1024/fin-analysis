@@ -239,12 +239,20 @@ def _with_retry(fetch_fn, *, retries: int = 3, sleep_sec: float = 0.8):
     """
     东财接口偶发 ProxyError/RemoteDisconnected，给 60m 拉取增加轻量重试，
     避免一次瞬时网络抖动直接返回 500。
+
+    requests.ConnectionError 与内置 ConnectionError 无继承关系，需单独列出。
     """
     last_exc: Exception | None = None
     for i in range(retries):
         try:
             return fetch_fn()
-        except (OSError, ConnectionError, TimeoutError) as exc:
+        except (
+            OSError,
+            ConnectionError,
+            TimeoutError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        ) as exc:
             last_exc = exc
             if i < retries - 1:
                 time.sleep(sleep_sec * (i + 1))
@@ -546,9 +554,13 @@ def _fetch_hk_min_from_akshare(
     """
     logging.info("使用 AKShare stock_hk_hist_min_em 获取港股 %s %s分钟数据", symbol, period)
 
-    df = ak.stock_hk_hist_min_em(symbol=symbol, period=period)
-    if df is None or df.empty:
-        raise ValueError(f"AKShare 未返回 {symbol} 的港股{period}分钟数据")
+    def _call_em() -> pd.DataFrame:
+        out = ak.stock_hk_hist_min_em(symbol=symbol, period=period)
+        if out is None or out.empty:
+            raise ValueError(f"AKShare 未返回 {symbol} 的港股{period}分钟数据")
+        return out
+
+    df = _with_retry(_call_em, retries=5, sleep_sec=1.0)
     
     # 统一列名
     rename_map = {
@@ -580,8 +592,8 @@ def _fetch_hk_min_from_akshare(
     df = df.dropna(subset=["date", "open", "high", "low", "close", "volume"])
     
     if df.empty:
-        raise ValueError(f"{symbol} AKShare 港股60分钟数据在指定日期范围内为空")
-    
+        raise ValueError(f"{symbol} AKShare 港股{period}分钟数据在指定日期范围内为空")
+
     logging.info("AKShare 港股 %s %s分钟数据获取完成，共 %d 条", symbol, period, len(df))
     return df
 
@@ -602,59 +614,78 @@ def _fetch_hk_min_from_yfinance(
     yfinance 港股代码格式: 1810.HK（去掉前导零，但保留至少4位）
     注意: yfinance 分钟数据最多支持约730天
     """
+    try:
+        from yfinance.exceptions import YFRateLimitError
+    except ImportError:
+
+        class YFRateLimitError(Exception):
+            """旧版 yfinance 无此类型时的占位"""
+
     logging.info("使用 yfinance 获取港股 %s %s数据", symbol, interval)
-    
-    # yfinance 港股代码格式：去掉前导零，但保留至少4位
-    # 如 01810 -> 1810.HK, 00175 -> 0175.HK
+
     num = int(symbol)
     if num < 1000:
-        # 小于4位的需要补零到4位（如 175 -> 0175）
         yf_symbol = f"{num:04d}.HK"
     else:
         yf_symbol = f"{num}.HK"
-    
-    try:
-        ticker = yf.Ticker(yf_symbol)
-        
-        # 获取数据
-        df = ticker.history(start=start_ts.strftime('%Y-%m-%d'), interval=interval)
-        
-        if df is None or df.empty:
-            raise ValueError(f"yfinance 未返回 {symbol} 的港股{interval}数据")
-        
-        # 统一列名（yfinance 返回的是首字母大写）
-        df = df.rename(columns={
-            'Open': 'open',
-            'High': 'high',
-            'Low': 'low',
-            'Close': 'close',
-            'Volume': 'volume',
-        })
-        
-        # 转换时间索引为列
-        df = df.reset_index()
-        df = df.rename(columns={'Datetime': 'date'})
-        
-        # 处理时区：将 yfinance 的时区感知时间转换为无时区（与 start_ts/end_ts 一致）
-        if df['date'].dt.tz is not None:
-            df['date'] = df['date'].dt.tz_convert('Asia/Shanghai').dt.tz_localize(None)
-        
-        # 过滤日期范围
-        df = df[(df['date'] >= start_ts) & (df['date'] <= end_ts)]
-        df = df.sort_values('date').reset_index(drop=True)
-        
-        # 去除无效数据
-        df = df.dropna(subset=['date', 'open', 'high', 'low', 'close', 'volume'])
-        
-        if df.empty:
-            raise ValueError(f"{symbol} yfinance 港股60分钟数据在指定日期范围内为空")
-        
-        logging.info("yfinance 港股 %s %s数据获取完成，共 %d 条", symbol, interval, len(df))
-        return df[['date', 'open', 'high', 'low', 'close', 'volume']]
 
-    except Exception as e:
-        logging.error("yfinance 获取港股 %s %s数据失败: %s", symbol, interval, e)
-        raise
+    for attempt in range(3):
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            df = ticker.history(start=start_ts.strftime("%Y-%m-%d"), interval=interval)
+
+            if df is None or df.empty:
+                raise ValueError(f"yfinance 未返回 {symbol} 的港股{interval}数据")
+
+            df = df.rename(
+                columns={
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
+                }
+            )
+            df = df.reset_index()
+            time_col = next((c for c in ("Datetime", "Date") if c in df.columns), None)
+            if time_col is None:
+                raise ValueError(
+                    f"yfinance {symbol} {interval} 缺少时间列，实际列: {list(df.columns)}"
+                )
+            df = df.rename(columns={time_col: "date"})
+
+            if df["date"].dt.tz is not None:
+                df["date"] = df["date"].dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)
+
+            df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
+            df = df.sort_values("date").reset_index(drop=True)
+            df = df.dropna(subset=["date", "open", "high", "low", "close", "volume"])
+
+            if df.empty:
+                raise ValueError(f"{symbol} yfinance 港股{interval}在指定日期范围内为空")
+
+            logging.info("yfinance 港股 %s %s数据获取完成，共 %d 条", symbol, interval, len(df))
+            return df[["date", "open", "high", "low", "close", "volume"]]
+
+        except YFRateLimitError as e:
+            if attempt < 2:
+                wait = 6.0 * (attempt + 1)
+                logging.warning(
+                    "yfinance 港股 %s %s 限流，%.0fs 后重试 (%d/3)",
+                    symbol,
+                    interval,
+                    wait,
+                    attempt + 1,
+                )
+                time.sleep(wait)
+            else:
+                logging.error("yfinance 获取港股 %s %s数据失败: %s", symbol, interval, e)
+                raise
+        except Exception as e:
+            logging.error("yfinance 获取港股 %s %s数据失败: %s", symbol, interval, e)
+            raise
+
+    raise RuntimeError("yfinance 港股 %s %s 未预期退出重试循环" % (symbol, interval))
 
 
 def _fetch_hk_60m_from_yfinance(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
