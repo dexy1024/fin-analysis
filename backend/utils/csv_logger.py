@@ -6,10 +6,12 @@
 - 沪深300批量导出：logs/snapshots_hs300_YYYY.csv（表头与同 snapshots_YYYY.csv）。
 - 支持 Excel 直接打开（utf-8-sig BOM 头）。
 - 自选/观测：按年分文件 logs/snapshots_YYYY.csv
-- 若磁盘上首行表头与当前 CSV_HEADERS 不一致：将旧文件归档为同目录下
-  snapshots_YYYY_archived_YYYYMMDD_HHMMSS.csv，再在原路径新建带新表头的文件（避免列错位混写）。
+- 若首行为历史「18 列」表头（缺 60m交易 / 区间价格对齐）：**原地迁移**为当前列定义并保留所有数据行，再追加本次行（主文件不再被整段「清空」）。
+- 其它未知表头：仍归档为 snapshots_YYYY_archived_YYYYMMDD_HHMMSS.csv 后新建，避免列错位混写。
 - 本模块不由 kline_scheduler 调用；快照由 run_trade_command.py / generate_snapshots.sh（或外部定时任务）触发。
 """
+
+from __future__ import annotations
 
 import copy
 import csv
@@ -50,6 +52,28 @@ CSV_HEADERS = [
     "15m_DEA",
     "底分型成立",
 ]
+
+# 升级 CSV 前列定义（缺「60m交易」「区间价格对齐」）；命中时原地迁移而非整文件归档，避免主文件被「清空」观感
+_SNAPSHOT_CSV_HEADERS_LEGACY_18 = (
+    "时间",
+    "实际交易动作",
+    "是否持仓",
+    "大盘状态",
+    "代码",
+    "名称",
+    "现价",
+    "日线风控",
+    "客观缠论信号",
+    "60m笔方向",
+    "15分信号",
+    "决策理由",
+    "日线A中枢ZD",
+    "日线C中枢ZD",
+    "锁定ZG",
+    "15m_DIF",
+    "15m_DEA",
+    "底分型成立",
+)
 
 # 状态映射：英文 → 中文
 _MARKET_STATE_MAP = {
@@ -141,6 +165,40 @@ def _normalize_snapshot_header_row(cells: list[str]) -> list[str]:
     return out
 
 
+def _migrate_legacy_18_snapshot_file(path: Path, data_dict: Dict[str, Any]) -> None:
+    """
+    旧版 18 列表头 → 当前 CSV_HEADERS：整文件重写，历史行新列填空字符串，最后写入本次 data_dict。
+    调用方须已持有 flock，且确认首行为 _SNAPSHOT_CSV_HEADERS_LEGACY_18。
+    """
+    legacy_list = list(_SNAPSHOT_CSV_HEADERS_LEGACY_18)
+    migrated: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        hdr = _normalize_snapshot_header_row(next(reader, []))
+        if hdr != legacy_list:
+            raise ValueError("legacy 迁移时表头与预期不一致")
+        for row in reader:
+            if not row or not any(str(c).strip() for c in row):
+                continue
+            if len(row) < len(legacy_list):
+                continue
+            row = row[: len(legacy_list)]
+            old = dict(zip(legacy_list, row))
+            migrated.append({k: old.get(k, "") for k in CSV_HEADERS})
+    migrated.append({k: data_dict.get(k, "") for k in CSV_HEADERS})
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
+        writer.writeheader()
+        for r in migrated:
+            writer.writerow(r)
+    logging.info(
+        "csv_logger: 已从 18 列 legacy 快照升级为 %d 列，保留 %d 行历史并写入当前行，文件=%s",
+        len(CSV_HEADERS),
+        len(migrated) - 1,
+        path.name,
+    )
+
+
 def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
     """
     将一行快照追加到指定 CSV；表头/备份逻辑与 log_snapshot 相同。
@@ -155,7 +213,24 @@ def _append_snapshot_csv_row(path: Path, data_dict: Dict[str, Any]) -> None:
                     reader = csv.reader(f)
                     existing_headers = next(reader, [])
                 normalized = _normalize_snapshot_header_row(existing_headers)
-                if normalized and normalized != CSV_HEADERS:
+
+                if not normalized:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
+                    while archive.exists():
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                        archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
+                    path.rename(archive)
+                    file_exists = False
+                    logging.warning(
+                        "csv_logger: 首行无法解析为表头，已归档 %s，将新建 %s",
+                        archive.name,
+                        path.name,
+                    )
+                elif tuple(normalized) == _SNAPSHOT_CSV_HEADERS_LEGACY_18:
+                    _migrate_legacy_18_snapshot_file(path, data_dict)
+                    return
+                elif normalized != CSV_HEADERS:
                     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                     archive = path.parent / f"{path.stem}_archived_{ts}{path.suffix}"
                     while archive.exists():
