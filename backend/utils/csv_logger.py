@@ -143,6 +143,7 @@ def _check_is_holding(code: str) -> str:
         watchlist_path = ROOT_DIR / "backend" / "data" / "watchlist.json"
         if watchlist_path.is_file():
             import json
+
             data = json.loads(watchlist_path.read_text(encoding="utf-8"))
             holdings = data.get("holdings", [])
             if any(str(item.get("code", "")).strip() == str(code).strip() for item in holdings):
@@ -280,27 +281,16 @@ def _to_chinese_trade_signal(
     price_alignment: str = "",
 ) -> str:
     """
-    基于4条件判断确定实际交易动作：
+    确定「实际交易动作」。
 
-    满仓出击（买入）终极条件：
-    - 60m客观缠论信号字符串中 **不包含「卖」**（不要求含「买」；「无信号」等只要无卖即过第一关）
-    - 60m笔方向 == "向下"
-    - 15分信号 == "底背驰"
-    - 区间价格对齐 == "是"（|15m极值-60m极值|/|60m极值| <= 0.005；60m极值过小时回退绝对差<=0.01）
-    → 执行：买入
-
-    鸣金收兵（卖出）终极条件：
-    - 60m客观缠论信号 包含 "卖" (一卖/二卖/三卖)
-    - 60m笔方向 == "向上"
-    - 15分信号 == "顶背驰"
-    - 区间价格对齐 == "是"
-    → 执行：卖出
-
-    喝茶观望：上述4个条件任一不满足 → 观望
+    判定顺序：
+    1) 买入：60m 信号不含「卖」+ 笔向下 + 15 分底背驰 + 区间对齐是 → 买入
+    2) 卖出（完美止盈）：60m 信号不含「买」+ 笔向上 + 15 分顶背驰 + 区间对齐是 → 卖出
+    3) 否则 观望
     """
     has_sell = "卖" in chan_sig
+    has_buy = "买" in chan_sig
 
-    # 买入：条件1 为「不含卖」；2～4 与文档一致
     if (
         not has_sell
         and pen_direction == "向下"
@@ -309,11 +299,14 @@ def _to_chinese_trade_signal(
     ):
         return "买入"
 
-    # 卖出条件判断（4条件必须全部满足）
-    if has_sell and pen_direction == "向上" and h15_sig == "顶背驰" and price_alignment == "是":
+    if (
+        not has_buy
+        and pen_direction == "向上"
+        and h15_sig == "顶背驰"
+        and price_alignment == "是"
+    ):
         return "卖出"
 
-    # 任一条件不满足 → 观望
     return "观望"
 
 
@@ -904,33 +897,18 @@ def _build_smart_reason(
     price_alignment: str,
 ) -> str:
     """
-    决策理由生成：基于4条件判断生成交易理由。
-
-    满仓出击（买入）条件：
-    - 60m信号不含「卖」+ 60m笔向下 + 15分底背驰 + 区间价格对齐是
-    → 理由：宏观战略锁定，微观动能衰竭，时空完美共振！
-
-    鸣金收兵（卖出）条件：
-    - 60m信号含"卖" + 60m笔向上 + 15分顶背驰 + 区间价格对齐是
-    → 理由：宏观遇阻，微观多头力竭，时空完美共振！
-
-    喝茶观望：任一条件不满足 → 理由：4条件未全部满足，继续观望
+    决策理由生成：买入 / 卖出（完美止盈）/ 观望。
     """
-    # 检查信号组成
     has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
-    sell_only = has_sell and not has_buy
 
-    # 买入成功
     if trade_sig == "买入":
         return "宏观战略锁定，微观动能衰竭，时空完美共振！"
 
-    # 卖出成功
     if trade_sig == "卖出":
         return "宏观遇阻，微观多头力竭，时空完美共振！"
 
-    # 观望情况：分析哪个条件不满足
-    reasons = []
+    reasons: list[str] = []
 
     if not has_buy and not has_sell:
         reasons.append("客观缠论无买/卖关键字或「无信号」")
@@ -945,16 +923,23 @@ def _build_smart_reason(
         reasons.append("15分无背驰")
     elif not has_sell and pen_direction == "向下" and h15_sig != "底背驰":
         reasons.append(f"15分{h15_sig}（买入需底背驰）")
-    elif sell_only and h15_sig != "顶背驰":
-        reasons.append(f"15分{h15_sig}非顶背驰")
+    elif not has_buy and pen_direction == "向上" and h15_sig != "顶背驰":
+        reasons.append(f"15分{h15_sig}（完美止盈需顶背驰）")
 
     if price_alignment != "是":
         reasons.append(f"区间价格对齐{price_alignment}")
 
+    if (
+        has_buy
+        and pen_direction == "向上"
+        and h15_sig == "顶背驰"
+        and price_alignment == "是"
+    ):
+        reasons.append("完美止盈（模块A）未满足：客观缠论含「买」")
+
     if reasons:
         return f"4条件未全部满足（{'；'.join(reasons)}），继续观望"
 
-    # 兜底
     return "条件未全部满足，继续观望"
 
 

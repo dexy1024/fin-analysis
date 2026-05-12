@@ -13,7 +13,7 @@ import fcntl
 import json
 import logging
 import threading
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
@@ -69,7 +69,11 @@ def load_positions() -> List[Position]:
                     data = json.load(f)
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                _positions = [Position(**item) for item in data]
+                _field_names = {f.name for f in fields(Position)}
+                _positions = [
+                    Position(**{k: item[k] for k in item if k in _field_names})
+                    for item in data
+                ]
         except (OSError, json.JSONDecodeError, TypeError) as e:
             logging.warning("[position_manager] 加载持仓失败: %s", e)
             _positions = []
