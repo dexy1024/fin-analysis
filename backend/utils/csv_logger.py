@@ -970,6 +970,22 @@ def _read_last_csv_time(path: Path) -> Optional[str]:
     return None
 
 
+def append_watchlist_snapshot_batch_separator_line() -> None:
+    """
+    自选快照 CSV 已有内容时，在本批首行数据写入前先追加一行空行，便于区分多次 run。
+    与 log_snapshot 共用 flock，避免与并发追加交错。
+    """
+    path = _get_csv_path()
+    try:
+        with _flock_snapshot_csv(path):
+            if not path.is_file() or path.stat().st_size == 0:
+                return
+            with open(path, "a", encoding="utf-8", newline="") as f:
+                f.write("\n")
+    except Exception:
+        logging.warning("csv_logger: 自选快照批次前空行追加失败", exc_info=True)
+
+
 def log_snapshot(data_dict: Dict[str, Any]) -> None:
     """
     将快照字典追加写入 CSV。文件不存在时自动写入表头。

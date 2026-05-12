@@ -1831,7 +1831,7 @@ def run_trade_command_engine(generate_report: bool = False) -> Optional[Path]:
     Args:
         generate_report: 为 True 时额外生成 trade_reports/ 下 Markdown；默认 False（与定时调度一致）。
     """
-    from utils.csv_logger import log_snapshot
+    from utils.csv_logger import append_watchlist_snapshot_batch_separator_line, log_snapshot
     from utils.snapshot_run_audit import assert_snapshot_write_allowed, log_snapshot_engine_run
 
     assert_snapshot_write_allowed()
@@ -1853,6 +1853,7 @@ def run_trade_command_engine(generate_report: bool = False) -> Optional[Path]:
         print(f"[SKIP] {time_str} 监控池为空，未写入快照")
         return None
 
+    append_watchlist_snapshot_batch_separator_line()
     return _run_trade_command_engine_core(
         symbols,
         timestamp=timestamp,

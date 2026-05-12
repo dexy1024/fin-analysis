@@ -54,7 +54,7 @@ if [[ ! -x "${VENV_PY}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
-echo ""
+# 批次间空行由 run_trade_command_engine → csv_logger 写入 CSV，非终端 echo
 # set -u 下空数组 "${PY_ARGS[@]}" 在部分 bash 会报 unbound variable，须分支展开
 if ((${#PY_ARGS[@]} > 0)); then
   exec "${VENV_PY}" run_trade_command.py --write "${PY_ARGS[@]}"
