@@ -283,10 +283,10 @@ def _to_chinese_trade_signal(
     基于4条件判断确定实际交易动作：
 
     满仓出击（买入）终极条件：
-    - 60m客观缠论信号 含「买」且不含「卖」（仅纯买点文案，如「二卖+二买」不算）
+    - 60m客观缠论信号字符串中 **不包含「卖」**（不要求含「买」；「无信号」等只要无卖即过第一关）
     - 60m笔方向 == "向下"
     - 15分信号 == "底背驰"
-    - 区间价格对齐 == "是"
+    - 区间价格对齐 == "是"（|15m极值-60m极值|/|60m极值| <= 0.001；60m极值过小时回退绝对差<=0.01）
     → 执行：买入
 
     鸣金收兵（卖出）终极条件：
@@ -298,14 +298,11 @@ def _to_chinese_trade_signal(
 
     喝茶观望：上述4个条件任一不满足 → 观望
     """
-    # 检查信号组成
-    has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
 
-    # 买入条件判断（4条件必须全部满足）；信号须「有买无卖」
+    # 买入：条件1 为「不含卖」；2～4 与文档一致
     if (
-        has_buy
-        and not has_sell
+        not has_sell
         and pen_direction == "向下"
         and h15_sig == "底背驰"
         and price_alignment == "是"
@@ -623,6 +620,26 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     return _h15_signal_detail(h15_result).get("signal", "无信号")
 
 
+# 区间价格对齐：相对容差（|Δ|/|基准价|）；基准价过小时回退绝对差，避免除零或毛刺
+_PRICE_ALIGN_REL_FRACTION = 0.001
+_PRICE_ALIGN_ABS_FALLBACK = 0.01
+_REF_ABS_FLOOR = 1e-6
+
+
+def _price_interval_aligned(abs_diff: float, ref_level: float) -> bool:
+    """
+    True：|abs_diff| / |ref_level| <= 千分之一；若 |ref_level| 过小则改用 |abs_diff| <= 0.01。
+    """
+    try:
+        r = abs(float(ref_level))
+        d = abs(float(abs_diff))
+        if r < _REF_ABS_FLOOR:
+            return d <= _PRICE_ALIGN_ABS_FALLBACK
+        return d / r <= _PRICE_ALIGN_REL_FRACTION
+    except (TypeError, ValueError):
+        return False
+
+
 def _price_alignment(
     h15_sig: str,
     pen_dir: str,
@@ -637,11 +654,11 @@ def _price_alignment(
     - 如果 15分信号 == '底背驰' 且 60m笔方向 == '向下'：
         提取 15m 触发底背驰的向下笔的最低价（15m_low）。
         提取 60m 当前向下笔的最低价（60m_low）。
-        如果 abs(15m_low - 60m_low) <= 0.01，输出 '是'，否则输出 '否'。
+        若 |15m_low - 60m_low| / |60m_low| <= 0.001 为「是」（|60m_low| 极小时回退 |差|<=0.01）。
     - 如果 15分信号 == '顶背驰' 且 60m笔方向 == '向上'：
         提取 15m 触发顶背驰的向上笔的最高价（15m_high）。
         提取 60m 当前向上笔的最高价（60m_high）。
-        如果 abs(15m_high - 60m_high) <= 0.01，输出 '是'，否则输出 '否'。
+        同上相对千分之一规则（高价为基准）。
     - 其他任何方向不匹配的情况，一律输出 '否'。
     """
     # 无信号时返回 '-'
@@ -663,8 +680,7 @@ def _price_alignment(
         m60_low = _get_60m_pen_extreme_price(h60_result, "向下")
         if m60_low is None:
             return "否"
-        # 比较价格差异
-        if abs(h15_extreme_price - m60_low) <= 0.01:
+        if _price_interval_aligned(h15_extreme_price - m60_low, m60_low):
             return "是"
         return "否"
 
@@ -678,8 +694,7 @@ def _price_alignment(
         m60_high = _get_60m_pen_extreme_price(h60_result, "向上")
         if m60_high is None:
             return "否"
-        # 比较价格差异
-        if abs(h15_extreme_price - m60_high) <= 0.01:
+        if _price_interval_aligned(h15_extreme_price - m60_high, m60_high):
             return "是"
         return "否"
 
@@ -892,7 +907,7 @@ def _build_smart_reason(
     决策理由生成：基于4条件判断生成交易理由。
 
     满仓出击（买入）条件：
-    - 60m信号含「买」且不含「卖」+ 60m笔向下 + 15分底背驰 + 区间价格对齐是
+    - 60m信号不含「卖」+ 60m笔向下 + 15分底背驰 + 区间价格对齐是
     → 理由：宏观战略锁定，微观动能衰竭，时空完美共振！
 
     鸣金收兵（卖出）条件：
@@ -904,7 +919,6 @@ def _build_smart_reason(
     # 检查信号组成
     has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
-    buy_only = has_buy and not has_sell
     sell_only = has_sell and not has_buy
 
     # 买入成功
@@ -918,19 +932,19 @@ def _build_smart_reason(
     # 观望情况：分析哪个条件不满足
     reasons = []
 
-    if not (has_buy or has_sell):
-        reasons.append("无买卖信号")
-    elif has_buy and has_sell:
-        reasons.append("客观缠论信号同时含买、卖，不满足「仅买无卖」")
-    elif buy_only and pen_direction != "向下":
-        reasons.append(f"买点但笔方向{pen_direction}")
-    elif has_sell and pen_direction != "向上":
+    if not has_buy and not has_sell:
+        reasons.append("客观缠论无买/卖关键字或「无信号」")
+    if has_sell:
+        reasons.append("客观缠论信号含「卖」")
+    elif pen_direction != "向下":
+        reasons.append(f"60m笔方向为{pen_direction}（买入须向下）")
+    if has_sell and pen_direction != "向上":
         reasons.append(f"卖点但笔方向{pen_direction}")
 
     if h15_sig == "无信号":
         reasons.append("15分无背驰")
-    elif buy_only and h15_sig != "底背驰":
-        reasons.append(f"15分{h15_sig}非底背驰")
+    elif not has_sell and pen_direction == "向下" and h15_sig != "底背驰":
+        reasons.append(f"15分{h15_sig}（买入需底背驰）")
     elif sell_only and h15_sig != "顶背驰":
         reasons.append(f"15分{h15_sig}非顶背驰")
 
