@@ -17,10 +17,15 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import datetime
+from pathlib import Path
 
 backend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
+
+ROOT_DIR = Path(backend_dir).resolve().parent
+HS300_H15_TRACE_LOG = ROOT_DIR / "logs" / "hs300_h15_trace_latest.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +36,27 @@ logging.basicConfig(
 from services.trade_command_engine import export_hs300_snapshots_to_csv  # noqa: E402
 
 
+class _H15TraceLogFilter(logging.Filter):
+    """仅落盘含「h15背驰」的 INFO 行（与引擎里逐条 trace 前缀一致）。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "h15背驰" in record.getMessage()
+
+
+def _attach_h15_trace_file_handler() -> None:
+    HS300_H15_TRACE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with HS300_H15_TRACE_LOG.open("a", encoding="utf-8") as f:
+        f.write(
+            f"\n{'=' * 72}\n"
+            f"# HS300 15m 背驰 trace 批次开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+    fh = logging.FileHandler(HS300_H15_TRACE_LOG, mode="a", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    fh.addFilter(_H15TraceLogFilter())
+    logging.getLogger().addHandler(fh)
+
+
 def main() -> int:
     v = (os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE") or "1").strip().lower()
     on = v not in ("0", "false", "no", "off")
@@ -39,6 +65,12 @@ def main() -> int:
         os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE", ""),
         "开" if on else "关",
     )
+    if on:
+        _attach_h15_trace_file_handler()
+        logging.info(
+            "export_snapshots_hs300: 15m 背驰 trace 同时追加写入 %s",
+            HS300_H15_TRACE_LOG,
+        )
     path = export_hs300_snapshots_to_csv()
     return 0 if path is not None else 1
 
