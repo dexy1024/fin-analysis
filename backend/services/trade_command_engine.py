@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -1655,6 +1656,7 @@ def _run_trade_command_engine_core(
     generate_report: bool,
     collect_report_records: bool,
     snapshot_writer: Callable[[Dict[str, Any]], None],
+    verbose_progress: bool = False,
 ) -> Optional[Path]:
     """
     自选与 HS300 批量共用：上证指数风控 + 每只标的沿用与主引擎相同的状态机与 build_snapshot_data。
@@ -1715,10 +1717,18 @@ def _run_trade_command_engine_core(
     market_info = _compute_market_state(index_daily, index_h60, index_h15)
     market_state = market_info["state"]
 
+    if verbose_progress:
+        logging.info(
+            "trade_command_engine: verbose_progress 已开启，本轮标的数=%d 时间=%s 大盘状态=%s",
+            len(symbols),
+            timestamp.isoformat(timespec="seconds"),
+            market_state,
+        )
+
     # ==================== 第二层：个股三维区间套 ====================
     records: List[Dict[str, Any]] = []
 
-    for code, name in symbols:
+    for idx, (code, name) in enumerate(symbols, start=1):
         daily_result: Optional[Dict[str, Any]] = None
         h60_result: Optional[Dict[str, Any]] = None
         h15_result: Optional[Dict[str, Any]] = None
@@ -1777,6 +1787,54 @@ def _run_trade_command_engine_core(
                     buy_signals=buy_signals,
                 )
                 snapshot_writer(snapshot)
+                if verbose_progress:
+                    from utils.csv_logger import _h15_signal_detail
+
+                    n_d = len((daily_result or {}).get("data") or [])
+                    n_60 = len((h60_result or {}).get("data") or [])
+                    n_15 = len((h15_result or {}).get("data") or [])
+                    logging.info(
+                        "verbose_snap [%d/%d] %s %s | K线根数 daily=%d 60m=%d 15m=%d | "
+                        "实际交易动作=%s 60m交易=%s 客观缠论=%s 60m笔=%s 15分=%s 区间对齐=%s 底分型成立=%s",
+                        idx,
+                        len(symbols),
+                        code,
+                        name,
+                        n_d,
+                        n_60,
+                        n_15,
+                        snapshot.get("实际交易动作"),
+                        snapshot.get("60m交易"),
+                        snapshot.get("客观缠论信号"),
+                        snapshot.get("60m笔方向"),
+                        snapshot.get("15分信号"),
+                        snapshot.get("区间价格对齐"),
+                        snapshot.get("底分型成立"),
+                    )
+                    dr = snapshot.get("决策理由") or ""
+                    if len(dr) > 220:
+                        dr = dr[:220] + "…"
+                    logging.info("verbose_snap [%d/%d] %s 决策理由: %s", idx, len(symbols), code, dr)
+                    try:
+                        td = _h15_signal_detail(h15_result, return_trace=True)
+                        logging.info(
+                            "verbose_snap [%d/%d] %s 15m背驰汇总 signal=%s extreme_price=%s",
+                            idx,
+                            len(symbols),
+                            code,
+                            td.get("signal"),
+                            td.get("extreme_price"),
+                        )
+                        for line in td.get("trace") or []:
+                            logging.info(
+                                "verbose_snap [%d/%d] %s h15trace | %s",
+                                idx,
+                                len(symbols),
+                                code,
+                                line,
+                            )
+                    except Exception:
+                        logging.debug("verbose_snap 15m trace 失败 %s", code, exc_info=True)
             except SnapshotCsvHeaderConflictError:
                 logging.error(
                     "trade_command_engine: 快照 CSV 表头与程序不一致，已中止本批次（未再写入后续标的）。标的=%s",
@@ -1879,12 +1937,19 @@ def export_hs300_snapshots_to_csv() -> Optional[Path]:
         return None
 
     timestamp = datetime.now()
+    _verbose_hs300 = os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
     _run_trade_command_engine_core(
         symbols,
         timestamp=timestamp,
         generate_report=False,
         collect_report_records=False,
         snapshot_writer=log_snapshot_hs300,
+        verbose_progress=_verbose_hs300,
     )
     out = _get_hs300_csv_path(timestamp)
     logging.info(

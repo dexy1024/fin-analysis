@@ -373,7 +373,11 @@ def _get_60m_trade_action(chan_sig: str, pen_direction: str) -> str:
 
 
 
-def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _h15_signal_detail(
+    h15_result: Optional[Dict[str, Any]],
+    *,
+    return_trace: bool = False,
+) -> Dict[str, Any]:
     """
     独立计算15分钟背驰信号，仅依赖15分钟K线、笔和MACD数据。
     返回包含信号和当前笔极端价格的字典。
@@ -383,21 +387,37 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     - 顶背驰：当前向上笔 + 价格创新高 + 动能衰竭(面积背驰或黄白线背离) + 顶分型确认
     - 不满足时返回 "无信号"
 
-    返回值：{"signal": str, "extreme_price": Optional[float]}
-    - extreme_price: 底背驰时为当前笔最低价，顶背驰时为当前笔最高价
+    返回值：{"signal": str, "extreme_price": Optional[float]}；若 return_trace=True 另含 "trace": [str, ...] 逐步说明。
     """
-    result = {"signal": "无信号", "extreme_price": None}
+    trace: list[str] = []
+
+    def tr(msg: str) -> None:
+        if return_trace:
+            trace.append(msg)
+
+    def finish(res: Dict[str, Any]) -> Dict[str, Any]:
+        if return_trace:
+            out = dict(res)
+            out["trace"] = trace
+            return out
+        return res
+
+    result: Dict[str, Any] = {"signal": "无信号", "extreme_price": None}
 
     if not h15_result:
-        return result
+        tr("h15_result 为空")
+        return finish(result)
 
     data = h15_result.get("data", [])
     pens = h15_result.get("pens", [])
     pens_effective = h15_result.get("pens_effective", [])
     fractals = h15_result.get("fractals", [])
 
+    tr(f"15m K 根数={len(data)} pens_effective={len(pens_effective)} fractals={len(fractals)}")
+
     if not data or len(data) < 3 or not pens_effective:
-        return result
+        tr("数据不足：K<3 或无 pens_effective")
+        return finish(result)
 
     # 构建日期到索引的映射
     date_to_idx = {item["date"]: i for i, item in enumerate(data)}
@@ -405,7 +425,8 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     # 获取有效笔（至少完成两根K线）
     effective_pens = [p for p in pens_effective if p.get("direction") in ("up", "down")]
     if len(effective_pens) < 2:
-        return result
+        tr(f"有效方向笔不足2：effective_pens={len(effective_pens)}")
+        return finish(result)
 
     # 当前笔：最新的一笔
     current_pen = effective_pens[-1]
@@ -414,8 +435,18 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     # 同向对比笔：与当前笔方向相同的前一笔
     same_dir_pens = [p for p in effective_pens if p.get("direction") == current_direction]
     if len(same_dir_pens) < 2:
-        return result
+        tr(f"同向笔不足2：当前方向={current_direction!r} 同向笔数={len(same_dir_pens)}")
+        return finish(result)
     compare_pen = same_dir_pens[-2]
+
+    tr(
+        "当前笔 "
+        f"dir={current_direction!r} {current_pen.get('start_date')}→{current_pen.get('end_date')} "
+        f"价 {current_pen.get('start_price')}→{current_pen.get('end_price')} | "
+        "对比笔(同向前一笔) "
+        f"{compare_pen.get('start_date')}→{compare_pen.get('end_date')} "
+        f"价 {compare_pen.get('start_price')}→{compare_pen.get('end_price')}"
+    )
 
     # 辅助函数：计算笔的MACD面积
     def calc_macd_area(pen: Dict[str, Any], is_green: bool) -> float:
@@ -460,20 +491,23 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     # ========== 逻辑 1：底背驰判断 ==========
     if current_direction == "down":
+        tr("底背驰分支：当前为向下笔")
         # 必须先计算MACD面积，确保当前笔有实际的下跌动能
         current_area = calc_macd_area(current_pen, is_green=True)
         compare_area = calc_macd_area(compare_pen, is_green=True)
+        tr(f"绿柱面积 当前笔={current_area:.6f} 对比笔={compare_area:.6f}")
 
         # 严格条件：当前笔必须有绿柱（有实际的下跌动能）
         if current_area <= 0:
-            # 当前笔没有绿柱，说明是假下跌（实际在上涨），不能形成底背驰
+            tr("否决：当前笔绿柱面积<=0（无有效下跌动能）")
             pass  # 继续后续逻辑，最终会返回"无信号"
         else:
             # 检查是否动能加速：取最近3个同向笔，如果当前笔面积最大，则不是背驰
             recent_3_areas = [calc_macd_area(p, is_green=True) for p in same_dir_pens[-3:]]  # 最近3个（含当前笔）
             max_recent_area = max(recent_3_areas) if recent_3_areas else 0
+            tr(f"近{len(same_dir_pens[-3:])}根同向下笔绿柱面积={['%.4f' % a for a in recent_3_areas]} max={max_recent_area:.6f}")
             if current_area >= max_recent_area:
-                # 当前笔绿柱面积在最近3笔中最大（含相等），动能正在加强，绝对不是底背驰
+                tr("否决：当前笔绿柱面积为近3根同向笔中最大或并列最大（动能未衰竭）")
                 pass  # 继续后续逻辑，最终会返回"无信号"
             else:
                 # 条件1：方向与空间 - 当前笔最低价 < 对比笔最低价（创新低）
@@ -485,6 +519,7 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                     float(compare_pen.get("start_price", 0)),
                     float(compare_pen.get("end_price", 0))
                 )
+                tr(f"笔低价 当前={current_low:.4f} 对比={compare_low:.4f}")
                 if current_low < compare_low:
                     # 条件2：动能衰竭（满足其一即可）
                     # 面积背驰：当前绿柱面积 < 对比笔绿柱面积（必须两笔都有绿柱）
@@ -496,30 +531,44 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                     # 只有当对比笔也有绿柱时，DIF比较才有意义
                     dif_divergence = compare_area > 0 and current_dif_min > compare_dif_min
 
+                    tr(
+                        "背驰子条件 "
+                        f"面积背驰={area_divergence} DIF背离={dif_divergence} "
+                        f"(DIF_min 当前={current_dif_min:.6f} 对比={compare_dif_min:.6f})"
+                    )
+
                     # 条件3：右侧确认 - 底分型
                     has_bottom = has_fractal_at_end(current_pen, "bottom")
+                    tr(f"笔末端底分型={has_bottom} (end_date={current_pen.get('end_date')})")
 
                     if has_bottom and (area_divergence or dif_divergence):
                         result["signal"] = "底背驰"
                         result["extreme_price"] = current_low
-                        return result
+                        tr("结论：底背驰成立")
+                        return finish(result)
+                    tr("否决：无底分型或面积/DIF背驰均未满足")
+                else:
+                    tr("否决：当前笔低价未低于对比笔（未创新低）")
 
     # ========== 逻辑 2：顶背驰判断 ==========
     if current_direction == "up":
+        tr("顶背驰分支：当前为向上笔")
         # 必须先计算MACD面积，确保当前笔有实际的上涨动能
         current_area = calc_macd_area(current_pen, is_green=False)
         compare_area = calc_macd_area(compare_pen, is_green=False)
+        tr(f"红柱面积 当前笔={current_area:.6f} 对比笔={compare_area:.6f}")
 
         # 严格条件：当前笔必须有红柱（有实际的上涨动能）
         if current_area <= 0:
-            # 当前笔没有红柱，说明是假上涨（实际在下跌），不能形成顶背驰
+            tr("否决：当前笔红柱面积<=0（无有效上涨动能）")
             pass  # 继续后续逻辑，最终会返回"无信号"
         else:
             # 检查是否动能加速：取最近3个同向笔，如果当前笔面积最大，则不是背驰
             recent_3_areas = [calc_macd_area(p, is_green=False) for p in same_dir_pens[-3:]]  # 最近3个（含当前笔）
             max_recent_area = max(recent_3_areas) if recent_3_areas else 0
+            tr(f"近{len(same_dir_pens[-3:])}根同向上笔红柱面积={['%.4f' % a for a in recent_3_areas]} max={max_recent_area:.6f}")
             if current_area >= max_recent_area:
-                # 当前笔红柱面积在最近3笔中最大（含相等），动能正在加强，绝对不是顶背驰
+                tr("否决：当前笔红柱面积为近3根同向笔中最大或并列最大（动能未衰竭）")
                 pass  # 继续后续逻辑，最终会返回"无信号"
             else:
                 # 条件1：方向与空间 - 当前笔最高价 > 对比笔最高价（创新高）
@@ -531,6 +580,7 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                     float(compare_pen.get("start_price", 0)),
                     float(compare_pen.get("end_price", 0))
                 )
+                tr(f"笔高价 当前={current_high:.4f} 对比={compare_high:.4f}")
                 if current_high > compare_high:
                     # 条件2：动能衰竭（满足其一即可）
                     # 面积背驰：当前红柱面积 < 对比笔红柱面积（必须两笔都有红柱）
@@ -542,16 +592,28 @@ def _h15_signal_detail(h15_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                     # 只有当对比笔也有红柱时，DIF比较才有意义
                     dif_divergence = compare_area > 0 and current_dif_max < compare_dif_max
 
+                    tr(
+                        "背驰子条件 "
+                        f"面积背驰={area_divergence} DIF背离={dif_divergence} "
+                        f"(DIF_max 当前={current_dif_max:.6f} 对比={compare_dif_max:.6f})"
+                    )
+
                     # 条件3：右侧确认 - 顶分型
                     has_top = has_fractal_at_end(current_pen, "top")
+                    tr(f"笔末端顶分型={has_top} (end_date={current_pen.get('end_date')})")
 
                     if has_top and (area_divergence or dif_divergence):
                         result["signal"] = "顶背驰"
                         result["extreme_price"] = current_high
-                        return result
+                        tr("结论：顶背驰成立")
+                        return finish(result)
+                    tr("否决：无顶分型或面积/DIF背驰均未满足")
+                else:
+                    tr("否决：当前笔高价未高于对比笔（未创新高）")
 
     # ========== 逻辑 3：无信号 ==========
-    return result
+    tr("结论：无信号（未满足底/顶背驰全部条件）")
+    return finish(result)
 
 
 def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:

@@ -22,12 +22,23 @@ backend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    force=True,
+)
 
 from services.trade_command_engine import export_hs300_snapshots_to_csv  # noqa: E402
 
 
 def main() -> int:
+    v = (os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE") or "1").strip().lower()
+    on = v not in ("0", "false", "no", "off")
+    logging.info(
+        "export_snapshots_hs300: FIN_HS300_SNAPSHOT_VERBOSE=%r → 逐只详细日志=%s（设为 0/false/off 可关闭）",
+        os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE", ""),
+        "开" if on else "关",
+    )
     path = export_hs300_snapshots_to_csv()
     return 0 if path is not None else 1
 
