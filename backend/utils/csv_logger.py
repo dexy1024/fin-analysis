@@ -286,7 +286,7 @@ def _to_chinese_trade_signal(
     - 60m客观缠论信号字符串中 **不包含「卖」**（不要求含「买」；「无信号」等只要无卖即过第一关）
     - 60m笔方向 == "向下"
     - 15分信号 == "底背驰"
-    - 区间价格对齐 == "是"（|15m极值-60m极值|/|60m极值| <= 0.001；60m极值过小时回退绝对差<=0.01）
+    - 区间价格对齐 == "是"（|15m极值-60m极值|/|60m极值| <= 0.005；60m极值过小时回退绝对差<=0.01）
     → 执行：买入
 
     鸣金收兵（卖出）终极条件：
@@ -620,15 +620,15 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     return _h15_signal_detail(h15_result).get("signal", "无信号")
 
 
-# 区间价格对齐：相对容差（|Δ|/|基准价|）；基准价过小时回退绝对差，避免除零或毛刺
-_PRICE_ALIGN_REL_FRACTION = 0.001
+# 区间价格对齐：相对容差（|Δ|/|基准价|），默认千分之五；基准价过小时回退绝对差，避免除零或毛刺
+_PRICE_ALIGN_REL_FRACTION = 0.005
 _PRICE_ALIGN_ABS_FALLBACK = 0.01
 _REF_ABS_FLOOR = 1e-6
 
 
 def _price_interval_aligned(abs_diff: float, ref_level: float) -> bool:
     """
-    True：|abs_diff| / |ref_level| <= 千分之一；若 |ref_level| 过小则改用 |abs_diff| <= 0.01。
+    True：|abs_diff| / |ref_level| <= 千分之五（0.005）；若 |ref_level| 过小则改用 |abs_diff| <= 0.01。
     """
     try:
         r = abs(float(ref_level))
@@ -654,11 +654,11 @@ def _price_alignment(
     - 如果 15分信号 == '底背驰' 且 60m笔方向 == '向下'：
         提取 15m 触发底背驰的向下笔的最低价（15m_low）。
         提取 60m 当前向下笔的最低价（60m_low）。
-        若 |15m_low - 60m_low| / |60m_low| <= 0.001 为「是」（|60m_low| 极小时回退 |差|<=0.01）。
+        若 |15m_low - 60m_low| / |60m_low| <= 0.005 为「是」（|60m_low| 极小时回退 |差|<=0.01）。
     - 如果 15分信号 == '顶背驰' 且 60m笔方向 == '向上'：
         提取 15m 触发顶背驰的向上笔的最高价（15m_high）。
         提取 60m 当前向上笔的最高价（60m_high）。
-        同上相对千分之一规则（高价为基准）。
+        同上相对千分之五规则（高价为基准）。
     - 其他任何方向不匹配的情况，一律输出 '否'。
     """
     # 无信号时返回 '-'
