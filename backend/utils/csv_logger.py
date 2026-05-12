@@ -283,7 +283,7 @@ def _to_chinese_trade_signal(
     基于4条件判断确定实际交易动作：
 
     满仓出击（买入）终极条件：
-    - 60m客观缠论信号 包含 "买" (一买/二买/三买)
+    - 60m客观缠论信号 含「买」且不含「卖」（仅纯买点文案，如「二卖+二买」不算）
     - 60m笔方向 == "向下"
     - 15分信号 == "底背驰"
     - 区间价格对齐 == "是"
@@ -302,8 +302,14 @@ def _to_chinese_trade_signal(
     has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
 
-    # 买入条件判断（4条件必须全部满足）
-    if has_buy and pen_direction == "向下" and h15_sig == "底背驰" and price_alignment == "是":
+    # 买入条件判断（4条件必须全部满足）；信号须「有买无卖」
+    if (
+        has_buy
+        and not has_sell
+        and pen_direction == "向下"
+        and h15_sig == "底背驰"
+        and price_alignment == "是"
+    ):
         return "买入"
 
     # 卖出条件判断（4条件必须全部满足）
@@ -824,7 +830,7 @@ def _build_smart_reason(
     决策理由生成：基于4条件判断生成交易理由。
 
     满仓出击（买入）条件：
-    - 60m信号含"买" + 60m笔向下 + 15分底背驰 + 区间价格对齐是
+    - 60m信号含「买」且不含「卖」+ 60m笔向下 + 15分底背驰 + 区间价格对齐是
     → 理由：宏观战略锁定，微观动能衰竭，时空完美共振！
 
     鸣金收兵（卖出）条件：
@@ -836,6 +842,8 @@ def _build_smart_reason(
     # 检查信号组成
     has_buy = "买" in chan_sig
     has_sell = "卖" in chan_sig
+    buy_only = has_buy and not has_sell
+    sell_only = has_sell and not has_buy
 
     # 买入成功
     if trade_sig == "买入":
@@ -850,16 +858,18 @@ def _build_smart_reason(
 
     if not (has_buy or has_sell):
         reasons.append("无买卖信号")
-    elif has_buy and pen_direction != "向下":
+    elif has_buy and has_sell:
+        reasons.append("客观缠论信号同时含买、卖，不满足「仅买无卖」")
+    elif buy_only and pen_direction != "向下":
         reasons.append(f"买点但笔方向{pen_direction}")
     elif has_sell and pen_direction != "向上":
         reasons.append(f"卖点但笔方向{pen_direction}")
 
     if h15_sig == "无信号":
         reasons.append("15分无背驰")
-    elif has_buy and h15_sig != "底背驰":
+    elif buy_only and h15_sig != "底背驰":
         reasons.append(f"15分{h15_sig}非底背驰")
-    elif has_sell and h15_sig != "顶背驰":
+    elif sell_only and h15_sig != "顶背驰":
         reasons.append(f"15分{h15_sig}非顶背驰")
 
     if price_alignment != "是":
