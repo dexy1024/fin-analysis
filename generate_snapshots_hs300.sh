@@ -3,7 +3,7 @@
 # 追加写入 logs/snapshots_hs300_YYYY.csv。
 # 须显式传 --write / -w，避免定时任务误调用即写盘。
 #
-# 详细排查日志（默认开启）：每只标的输出 K 线根数、快照关键列、15 分背驰逐步 trace。
+# 详细排查日志（默认开启）：每只标的仅输出 15 分钟背驰判定 trace（h15背驰 前缀）。
 #   关闭：  FIN_HS300_SNAPSHOT_VERBOSE=0 ./generate_snapshots_hs300.sh --write
 # 用法（项目根目录）：  ./generate_snapshots_hs300.sh --write
 
@@ -55,5 +55,5 @@ if [[ ! -f "${SCRIPT}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
-echo "HS300 快照详细日志 FIN_HS300_SNAPSHOT_VERBOSE=${FIN_HS300_SNAPSHOT_VERBOSE:-}(0=关) 输出至 stderr" >&2
+echo "HS300 快照：仅 15m 背驰 trace（FIN_HS300_SNAPSHOT_VERBOSE=${FIN_HS300_SNAPSHOT_VERBOSE:-}，0=关）→ stderr" >&2
 exec "${VENV_PY}" "${SCRIPT}"

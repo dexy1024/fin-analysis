@@ -35,7 +35,7 @@ def main() -> int:
     v = (os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE") or "1").strip().lower()
     on = v not in ("0", "false", "no", "off")
     logging.info(
-        "export_snapshots_hs300: FIN_HS300_SNAPSHOT_VERBOSE=%r → 逐只详细日志=%s（设为 0/false/off 可关闭）",
+        "export_snapshots_hs300: FIN_HS300_SNAPSHOT_VERBOSE=%r → 仅输出 15m 背驰逐条 trace=%s（0/false/off 关闭）",
         os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE", ""),
         "开" if on else "关",
     )
