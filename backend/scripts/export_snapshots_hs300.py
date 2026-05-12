@@ -10,6 +10,10 @@
     cd backend && python3 scripts/export_snapshots_hs300.py
 
 （不向 Web 前端注册；仅在本地产出 CSV）
+
+诊断落盘与自选快照共用 logs/snapshot_trace_latest.log（15m：h15背驰 前缀；
+区间对齐：price_align 前缀），由 FIN_SNAPSHOT_TRACE_VERBOSE 与 FIN_HS300_SNAPSHOT_VERBOSE 共同决定
+是否挂载（任一为开即挂载并写 h15/对齐行；见 trade_command_engine._run_trade_command_engine_core）。
 """
 
 from __future__ import annotations
@@ -17,15 +21,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import datetime
-from pathlib import Path
 
 backend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
+from pathlib import Path  # noqa: E402
+
 ROOT_DIR = Path(backend_dir).resolve().parent
-HS300_H15_TRACE_LOG = ROOT_DIR / "logs" / "hs300_h15_trace_latest.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,44 +36,23 @@ logging.basicConfig(
     force=True,
 )
 
+from utils.csv_logger import SNAPSHOT_TRACE_LOG  # noqa: E402
 from services.trade_command_engine import export_hs300_snapshots_to_csv  # noqa: E402
-
-
-class _H15TraceLogFilter(logging.Filter):
-    """仅落盘含「h15背驰」的 INFO 行（与引擎里逐条 trace 前缀一致）。"""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        return "h15背驰" in record.getMessage()
-
-
-def _attach_h15_trace_file_handler() -> None:
-    HS300_H15_TRACE_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with HS300_H15_TRACE_LOG.open("a", encoding="utf-8") as f:
-        f.write(
-            f"\n{'=' * 72}\n"
-            f"# HS300 15m 背驰 trace 批次开始 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        )
-    fh = logging.FileHandler(HS300_H15_TRACE_LOG, mode="a", encoding="utf-8")
-    fh.setLevel(logging.INFO)
-    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    fh.addFilter(_H15TraceLogFilter())
-    logging.getLogger().addHandler(fh)
 
 
 def main() -> int:
     v = (os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE") or "1").strip().lower()
     on = v not in ("0", "false", "no", "off")
     logging.info(
-        "export_snapshots_hs300: FIN_HS300_SNAPSHOT_VERBOSE=%r → 仅输出 15m 背驰逐条 trace=%s（0/false/off 关闭）",
+        "export_snapshots_hs300: FIN_HS300_SNAPSHOT_VERBOSE=%r → stderr 逐条 15m trace=%s",
         os.environ.get("FIN_HS300_SNAPSHOT_VERBOSE", ""),
         "开" if on else "关",
     )
-    if on:
-        _attach_h15_trace_file_handler()
-        logging.info(
-            "export_snapshots_hs300: 15m 背驰 trace 同时追加写入 %s",
-            HS300_H15_TRACE_LOG,
-        )
+    logging.info(
+        "export_snapshots_hs300: 与自选快照共用诊断文件 %s（FIN_SNAPSHOT_TRACE_VERBOSE 控制是否落盘 price_align；"
+        "与 FIN_HS300_SNAPSHOT_VERBOSE 任一为开即挂载）",
+        SNAPSHOT_TRACE_LOG,
+    )
     path = export_hs300_snapshots_to_csv()
     return 0 if path is not None else 1
 

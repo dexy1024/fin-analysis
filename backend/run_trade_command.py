@@ -11,6 +11,7 @@
     加 --report 时另生成 trade_reports 作战指令 Markdown。
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -20,6 +21,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from services.trade_command_engine import run_trade_command_engine
 from utils.csv_logger import _get_csv_path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    force=True,
+)
 
 if __name__ == "__main__":
     if "--write" not in sys.argv and "-w" not in sys.argv:

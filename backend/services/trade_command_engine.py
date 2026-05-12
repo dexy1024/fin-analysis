@@ -1657,13 +1657,19 @@ def _run_trade_command_engine_core(
     collect_report_records: bool,
     snapshot_writer: Callable[[Dict[str, Any]], None],
     verbose_progress: bool = False,
+    snapshot_kind: str = "batch",
 ) -> Optional[Path]:
     """
     自选与 HS300 批量共用：上证指数风控 + 每只标的沿用与主引擎相同的状态机与 build_snapshot_data。
     snapshot_writer 决定写入 snapshots_YYYY 或 snapshots_hs300_YYYY。
     collect_report_records=False 时不拼装雷达 / Markdown 用 records（适合 300 只名单）。
     """
-    from utils.csv_logger import SnapshotCsvHeaderConflictError, build_snapshot_data
+    from utils.csv_logger import (
+        SnapshotCsvHeaderConflictError,
+        attach_snapshot_trace_file_handler,
+        build_snapshot_data,
+        snapshot_file_trace_enabled,
+    )
     from services.indicators import get_index_kline
 
     time_str = timestamp.strftime("%H:%M")
@@ -1672,6 +1678,12 @@ def _run_trade_command_engine_core(
     holding_amounts = _load_holding_amounts() if collect_report_records else {}
 
     logging.info("trade_command_engine: 持仓识别 loaded %d 个: %s", len(holding_codes), sorted(holding_codes))
+
+    emit_snapshot_trace = snapshot_file_trace_enabled() or verbose_progress
+    if emit_snapshot_trace:
+        attach_snapshot_trace_file_handler(
+            f"{snapshot_kind} n={len(symbols)} t={timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
     daily_start = _daily_start_date()
     h60_start = _h60_start_date()
     h15_start = _h15_start_date()
@@ -1777,9 +1789,11 @@ def _run_trade_command_engine_core(
                     h15_result=h15_result,
                     sell_signals=analysis["h60_sell_signals"],
                     buy_signals=buy_signals,
+                    emit_trace_logs=emit_snapshot_trace,
                 )
                 snapshot_writer(snapshot)
-                if verbose_progress:
+                do_h15_trace_log = emit_snapshot_trace
+                if do_h15_trace_log:
                     from utils.csv_logger import _h15_signal_detail
 
                     try:
@@ -1882,6 +1896,7 @@ def run_trade_command_engine(generate_report: bool = False) -> Optional[Path]:
         generate_report=generate_report,
         collect_report_records=True,
         snapshot_writer=log_snapshot,
+        snapshot_kind="watchlist",
     )
 
 
@@ -1914,6 +1929,7 @@ def export_hs300_snapshots_to_csv() -> Optional[Path]:
         collect_report_records=False,
         snapshot_writer=log_snapshot_hs300,
         verbose_progress=_verbose_hs300,
+        snapshot_kind="hs300",
     )
     out = _get_hs300_csv_path(timestamp)
     logging.info(

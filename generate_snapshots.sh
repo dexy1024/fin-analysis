@@ -43,6 +43,10 @@ if [[ "${WRITE}" -eq 0 ]]; then
 fi
 
 export FIN_SNAPSHOT_ALLOW=1
+# 快照诊断（15m 背驰 + 区间对齐）落盘 logs/snapshot_trace_latest.log；未设置环境变量时默认开启
+if ! printenv FIN_SNAPSHOT_TRACE_VERBOSE >/dev/null 2>&1; then
+  export FIN_SNAPSHOT_TRACE_VERBOSE=1
+fi
 # 与旧 logs/snapshots_YYYY.csv 分离；仅在「未出现在环境中」时默认 _new（显式 FIN_SNAPSHOT_CSV_SUFFIX= 空可写回旧名）
 if ! printenv FIN_SNAPSHOT_CSV_SUFFIX >/dev/null 2>&1; then
   export FIN_SNAPSHOT_CSV_SUFFIX=_new
@@ -54,7 +58,7 @@ if [[ ! -x "${VENV_PY}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
-# 批次间空行由 run_trade_command_engine → csv_logger 写入 CSV，非终端 echo
+echo "自选快照：FIN_SNAPSHOT_TRACE_VERBOSE=${FIN_SNAPSHOT_TRACE_VERBOSE:-}（0=关）→ stderr + logs/snapshot_trace_latest.log" >&2
 # set -u 下空数组 "${PY_ARGS[@]}" 在部分 bash 会报 unbound variable，须分支展开
 if ((${#PY_ARGS[@]} > 0)); then
   exec "${VENV_PY}" run_trade_command.py --write "${PY_ARGS[@]}"

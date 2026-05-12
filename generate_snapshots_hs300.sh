@@ -3,9 +3,9 @@
 # 追加写入 logs/snapshots_hs300_YYYY.csv。
 # 须显式传 --write / -w，避免定时任务误调用即写盘。
 #
-# 详细排查日志（默认开启）：每只标的仅输出 15 分钟背驰判定 trace（h15背驰 前缀）→ stderr；
-#   同时追加到 logs/hs300_h15_trace_latest.log（仅含 h15背驰 行；关闭 verbose 时不写该文件）。
-#   关闭：  FIN_HS300_SNAPSHOT_VERBOSE=0 ./generate_snapshots_hs300.sh --write
+# 详细排查：15m 背驰（h15背驰）+ 区间对齐（price_align）→ stderr，并追加 logs/snapshot_trace_latest.log
+#   挂载条件：FIN_SNAPSHOT_TRACE_VERBOSE 或 FIN_HS300_SNAPSHOT_VERBOSE 任一为开（未设置时脚本内默认均为 1）。
+#   关闭落盘/减少输出：  FIN_SNAPSHOT_TRACE_VERBOSE=0 FIN_HS300_SNAPSHOT_VERBOSE=0 ./generate_snapshots_hs300.sh --write
 # 用法（项目根目录）：  ./generate_snapshots_hs300.sh --write
 
 set -euo pipefail
@@ -39,6 +39,9 @@ if [[ "${WRITE}" -eq 0 ]]; then
 fi
 
 export FIN_SNAPSHOT_ALLOW=1
+if ! printenv FIN_SNAPSHOT_TRACE_VERBOSE >/dev/null 2>&1; then
+  export FIN_SNAPSHOT_TRACE_VERBOSE=1
+fi
 # 详细日志默认开；仅当环境中已显式设为 0/false/off 时不覆盖
 if [[ -z "${FIN_HS300_SNAPSHOT_VERBOSE+x}" ]]; then
   export FIN_HS300_SNAPSHOT_VERBOSE=1
@@ -56,5 +59,5 @@ if [[ ! -f "${SCRIPT}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
-echo "HS300 快照：15m 背驰 trace（FIN_HS300_SNAPSHOT_VERBOSE=${FIN_HS300_SNAPSHOT_VERBOSE:-}，0=关）→ stderr + logs/hs300_h15_trace_latest.log" >&2
+echo "HS300 快照：FIN_HS300_SNAPSHOT_VERBOSE=${FIN_HS300_SNAPSHOT_VERBOSE:-} FIN_SNAPSHOT_TRACE_VERBOSE=${FIN_SNAPSHOT_TRACE_VERBOSE:-}（0=关）→ stderr + logs/snapshot_trace_latest.log" >&2
 exec "${VENV_PY}" "${SCRIPT}"

@@ -7,6 +7,7 @@
 - 支持 Excel 直接打开（utf-8-sig BOM 头）。
 - 自选/观测：按年分文件 logs/snapshots_YYYY.csv；若环境变量 `FIN_SNAPSHOT_CSV_SUFFIX=_new` 则为 `snapshots_YYYY_new.csv`（供脚本与旧文件分离）。
 - 若首行为历史「18 列」表头（缺 60m交易 / 区间价格对齐）：**原地迁移**为当前列定义并保留全部历史行（新列填空），再写入本轮首行；后续标的仍追加。
+- 快照诊断（可选）：`FIN_SNAPSHOT_TRACE_VERBOSE` 与 HS300 的 `FIN_HS300_SNAPSHOT_VERBOSE` 任一为开时，15m 背驰（`h15背驰`）与区间对齐（`price_align`）写入 `logs/snapshot_trace_latest.log` 并打 stderr。
 - 其它表头与程序不一致：**绝不**移动或清空现有文件，直接报错 `SnapshotCsvHeaderConflictError`，请用户自行备份/修正后再跑。
 - 本模块不由 kline_scheduler 调用；快照由 run_trade_command.py / generate_snapshots.sh（或外部定时任务）触发。
 """
@@ -27,6 +28,9 @@ from typing import Any, Dict, Iterator, Optional
 # 项目根目录（backend/utils/ 的上两级）
 ROOT_DIR = Path(__file__).resolve().parents[2]
 LOGS_DIR = ROOT_DIR / "logs"
+# 自选与 HS300 快照共用：15m 背驰（h15背驰）+ 区间价格对齐（price_align）落盘
+SNAPSHOT_TRACE_LOG = LOGS_DIR / "snapshot_trace_latest.log"
+_snapshot_trace_file_handler: Optional[logging.FileHandler] = None
 
 
 class SnapshotCsvHeaderConflictError(ValueError):
@@ -119,6 +123,48 @@ def _ensure_logs_dir() -> Path:
     """确保日志目录存在。"""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     return LOGS_DIR
+
+
+def snapshot_file_trace_enabled() -> bool:
+    """
+    是否将快照诊断写入 SNAPSHOT_TRACE_LOG（15m 背驰 trace + 区间价格对齐）。
+    环境变量 FIN_SNAPSHOT_TRACE_VERBOSE：未设置或 1/true/on 为开；0/false/off 为关。
+    """
+    v = (os.environ.get("FIN_SNAPSHOT_TRACE_VERBOSE") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+class _SnapshotTraceFileFilter(logging.Filter):
+    """落盘行须含 h15背驰 或 price_align 前缀之一。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        m = record.getMessage()
+        return "h15背驰" in m or "price_align" in m
+
+
+def attach_snapshot_trace_file_handler(batch_label: str) -> None:
+    """
+    在 SNAPSHOT_TRACE_LOG 写入批次分隔行，并（进程内首次）挂载 FileHandler。
+    自选快照与 HS300 快照共用同一文件。
+    """
+    global _snapshot_trace_file_handler
+    _ensure_logs_dir()
+    with SNAPSHOT_TRACE_LOG.open("a", encoding="utf-8") as f:
+        f.write(
+            f"\n{'=' * 72}\n"
+            f"# snapshot trace | {batch_label} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+    if _snapshot_trace_file_handler is not None:
+        return
+    fh = logging.FileHandler(SNAPSHOT_TRACE_LOG, mode="a", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    fh.addFilter(_SnapshotTraceFileFilter())
+    root = logging.getLogger()
+    if root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+    root.addHandler(fh)
+    _snapshot_trace_file_handler = fh
 
 
 @contextmanager
@@ -633,66 +679,101 @@ def _price_interval_aligned(abs_diff: float, ref_level: float) -> bool:
         return False
 
 
+def _price_alignment_with_trace(
+    h15_sig: str,
+    pen_dir: str,
+    h15_result: Optional[Dict[str, Any]],
+    h60_result: Optional[Dict[str, Any]],
+    *,
+    h15_detail: Optional[Dict[str, Any]] = None,
+) -> tuple[str, list[str]]:
+    """
+    计算「区间价格对齐」列值，并生成供日志输出的 trace 行（不含前缀 price_align，由调用方拼接）。
+    """
+    trace: list[str] = []
+
+    def tr(msg: str) -> None:
+        trace.append(msg)
+
+    if h15_sig == "无信号":
+        tr("分支=无信号 → 列=-")
+        return "-", trace
+
+    if h15_detail is None:
+        h15_detail = _h15_signal_detail(h15_result)
+    h15_extreme_price = h15_detail.get("extreme_price")
+    tr(
+        f"h15_detail.signal={h15_detail.get('signal')!r} extreme_price={h15_extreme_price!r} "
+        f"输入h15_sig={h15_sig!r} pen_dir={pen_dir!r}"
+    )
+
+    if h15_sig == "底背驰":
+        if pen_dir != "向下":
+            tr("底背驰需60m笔向下 → 笔方向不匹配 → 否")
+            return "否", trace
+        if h15_extreme_price is None:
+            tr("缺少15m极值价 → 否")
+            return "否", trace
+        m60_low = _get_60m_pen_extreme_price(h60_result, "向下")
+        if m60_low is None:
+            tr("60m最后一笔非向下或无法取向下笔低价 → 否")
+            return "否", trace
+        diff = float(h15_extreme_price) - float(m60_low)
+        ad = abs(diff)
+        r = abs(float(m60_low))
+        use_fb = r < _REF_ABS_FLOOR
+        ok = _price_interval_aligned(diff, m60_low)
+        tr(
+            f"底背驰对齐: 15m低价={float(h15_extreme_price):.6g} 60m向下笔低价={float(m60_low):.6g} "
+            f"|diff|={ad:.6g}"
+        )
+        if use_fb:
+            tr(f"规则=|60m|<eps 回退 |diff|<={_PRICE_ALIGN_ABS_FALLBACK} → {'是' if ok else '否'}")
+        else:
+            ratio = ad / r if r else 0.0
+            tr(f"规则=ratio={ratio:.6g} (阈值{_PRICE_ALIGN_REL_FRACTION}) → {'是' if ok else '否'}")
+        return ("是" if ok else "否"), trace
+
+    if h15_sig == "顶背驰":
+        if pen_dir != "向上":
+            tr("顶背驰需60m笔向上 → 笔方向不匹配 → 否")
+            return "否", trace
+        if h15_extreme_price is None:
+            tr("缺少15m极值价 → 否")
+            return "否", trace
+        m60_high = _get_60m_pen_extreme_price(h60_result, "向上")
+        if m60_high is None:
+            tr("60m最后一笔非向上或无法取向上笔高价 → 否")
+            return "否", trace
+        diff = float(h15_extreme_price) - float(m60_high)
+        ad = abs(diff)
+        r = abs(float(m60_high))
+        use_fb = r < _REF_ABS_FLOOR
+        ok = _price_interval_aligned(diff, m60_high)
+        tr(
+            f"顶背驰对齐: 15m高价={float(h15_extreme_price):.6g} 60m向上笔高价={float(m60_high):.6g} "
+            f"|diff|={ad:.6g}"
+        )
+        if use_fb:
+            tr(f"规则=|60m|<eps 回退 |diff|<={_PRICE_ALIGN_ABS_FALLBACK} → {'是' if ok else '否'}")
+        else:
+            ratio = ad / r if r else 0.0
+            tr(f"规则=ratio={ratio:.6g} (阈值{_PRICE_ALIGN_REL_FRACTION}) → {'是' if ok else '否'}")
+        return ("是" if ok else "否"), trace
+
+    tr(f"非底/顶背驰且无信号分支 → 否 (h15_sig={h15_sig!r})")
+    return "否", trace
+
+
 def _price_alignment(
     h15_sig: str,
     pen_dir: str,
     h15_result: Optional[Dict[str, Any]],
     h60_result: Optional[Dict[str, Any]],
 ) -> str:
-    """
-    计算「区间价格对齐」字段值。
-
-    逻辑：
-    - 如果 15分信号 == '无信号'，输出 '-'。
-    - 如果 15分信号 == '底背驰' 且 60m笔方向 == '向下'：
-        提取 15m 触发底背驰的向下笔的最低价（15m_low）。
-        提取 60m 当前向下笔的最低价（60m_low）。
-        若 |15m_low - 60m_low| / |60m_low| <= 0.005 为「是」（|60m_low| 极小时回退 |差|<=0.01）。
-    - 如果 15分信号 == '顶背驰' 且 60m笔方向 == '向上'：
-        提取 15m 触发顶背驰的向上笔的最高价（15m_high）。
-        提取 60m 当前向上笔的最高价（60m_high）。
-        同上相对千分之五规则（高价为基准）。
-    - 其他任何方向不匹配的情况，一律输出 '否'。
-    """
-    # 无信号时返回 '-'
-    if h15_sig == "无信号":
-        return "-"
-
-    # 获取15分钟信号详情（包含极端价格）
-    h15_detail = _h15_signal_detail(h15_result)
-    h15_signal_type = h15_detail.get("signal", "无信号")
-    h15_extreme_price = h15_detail.get("extreme_price")
-
-    # 底背驰情况
-    if h15_sig == "底背驰":
-        if pen_dir != "向下":
-            return "否"
-        if h15_extreme_price is None:
-            return "否"
-        # 获取60分钟向下笔的最低价
-        m60_low = _get_60m_pen_extreme_price(h60_result, "向下")
-        if m60_low is None:
-            return "否"
-        if _price_interval_aligned(h15_extreme_price - m60_low, m60_low):
-            return "是"
-        return "否"
-
-    # 顶背驰情况
-    if h15_sig == "顶背驰":
-        if pen_dir != "向上":
-            return "否"
-        if h15_extreme_price is None:
-            return "否"
-        # 获取60分钟向上笔的最高价
-        m60_high = _get_60m_pen_extreme_price(h60_result, "向上")
-        if m60_high is None:
-            return "否"
-        if _price_interval_aligned(h15_extreme_price - m60_high, m60_high):
-            return "是"
-        return "否"
-
-    # 其他情况
-    return "否"
+    """计算「区间价格对齐」字段值（无 trace）。"""
+    s, _ = _price_alignment_with_trace(h15_sig, pen_dir, h15_result, h60_result)
+    return s
 
 
 def _defense_detail(analysis: Dict[str, Any]) -> str:
@@ -953,6 +1034,8 @@ def build_snapshot_data(
     h15_result: Optional[Dict[str, Any]],
     sell_signals: Optional[Dict[str, bool]] = None,
     buy_signals: Optional[Dict[str, bool]] = None,
+    *,
+    emit_trace_logs: bool = False,
 ) -> Dict[str, Any]:
     """
     将状态机分析结果拍平为 CSV 行字典。
@@ -968,11 +1051,17 @@ def build_snapshot_data(
     dif, dea = _h15_macd(h15_result)
 
     chan_sig = _chan_signal(buy_signals, sell_signals)
-    h15_sig = _h15_signal(h15_result)
+    h15_detail_cached = _h15_signal_detail(h15_result)
+    h15_sig = h15_detail_cached.get("signal", "无信号")
     pen_dir = _pen_direction(analysis)
 
     # 先计算区间价格对齐（4条件判断需要）
-    price_alignment = _price_alignment(h15_sig, pen_dir, h15_result, h60_result)
+    price_alignment, _pa_trace = _price_alignment_with_trace(
+        h15_sig, pen_dir, h15_result, h60_result, h15_detail=h15_detail_cached
+    )
+    if emit_trace_logs:
+        for line in _pa_trace:
+            logging.info("price_align %s %s | %s", code, name, line)
 
     # 基于4条件判断确定交易信号
     trade_sig = _to_chinese_trade_signal(
