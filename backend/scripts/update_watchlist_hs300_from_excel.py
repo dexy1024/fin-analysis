@@ -8,12 +8,17 @@
     python3 backend/scripts/update_watchlist_hs300_from_excel.py path/to/hs300.xlsx
     python3 backend/scripts/update_watchlist_hs300_from_excel.py 000300cons.xls
 
+追加合并（保留已有 code+name，仅加入 Excel 中尚未出现的代码；同代码以已有为准）：
+
+    python3 backend/scripts/update_watchlist_hs300_from_excel.py 000905cons.xls --merge-existing
+
 可选参数：
     --out PATH          输出 JSON（默认 backend/data/watchlist_hs300.json）
     --sheet NAME|N      工作表名或 0 起索引（默认 0）
     --code-col COL      代码列表头（与表头一致，忽略首尾空格）；不指定则自动识别
     --name-col COL      名称列表头；不指定则自动识别
-    --strict-300        若行数不是 300 则退出码 1（仍写入文件）
+    --merge-existing    与 --out 指向的 JSON 已有 holdings 合并（按 code 去重，已有优先）
+    --strict-300        若行数不是 300 则退出码 1（仍写入文件；与 --merge-existing 并用时一般不适用）
 
 列名自动识别：优先「成份券代码 / Constituent Code」与「成份券名称 / Constituent Name」（中证指数
 表）；否则匹配常见「证券代码 / 简称」等表头，并避免将「指数代码」误当作股票代码列。
@@ -236,12 +241,40 @@ def _build_holdings(df: pd.DataFrame, code_col: str, name_col: str) -> list[dict
     return [{"code": c, "name": seen[c]} for c in sorted(seen.keys())]
 
 
-def _write_watchlist_hs300_json(out_path: str, excel_path: str, holdings: list[dict[str, str]]) -> None:
-    comment = (
-        "沪深300成份股名单（仅 code、name）。数据来源：本地 Excel "
-        f"{os.path.basename(excel_path)} 。勿手改 holdings；刷新请运行："
-        "python3 backend/scripts/update_watchlist_hs300_from_excel.py <xlsx>"
-    )
+def _load_holdings_json(path: str) -> list[dict[str, str]]:
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    rows = doc.get("holdings")
+    if not isinstance(rows, list):
+        raise ValueError("JSON 缺少 holdings 数组")
+    out: list[dict[str, str]] = []
+    for h in rows:
+        if isinstance(h, dict) and isinstance(h.get("code"), str) and isinstance(h.get("name"), str):
+            out.append({"code": h["code"], "name": h["name"]})
+    return out
+
+
+def _merge_holdings(
+    existing: list[dict[str, str]], from_excel: list[dict[str, str]]
+) -> tuple[list[dict[str, str]], int]:
+    """同 code 保留 existing 中的名称与条目；仅追加 Excel 中的新 code。输出按 code 排序。"""
+    merged: dict[str, str] = {}
+    for h in existing:
+        c = h.get("code", "").strip()
+        n = h.get("name", "").strip()
+        if c and n:
+            merged[c] = n
+    before = len(merged)
+    for h in from_excel:
+        c = h.get("code", "").strip()
+        n = h.get("name", "").strip()
+        if c and n and c not in merged:
+            merged[c] = n
+    added = len(merged) - before
+    return [{"code": c, "name": merged[c]} for c in sorted(merged.keys())], added
+
+
+def _write_watchlist_hs300_json(out_path: str, comment: str, holdings: list[dict[str, str]]) -> None:
     chunks: list[str] = [
         "{\n",
         '  "_comment": ' + json.dumps(comment, ensure_ascii=False) + ",\n",
@@ -272,7 +305,16 @@ def main() -> int:
     ap.add_argument("--sheet", default="0", help="工作表：名称或 0 起数字索引（默认 0）")
     ap.add_argument("--code-col", default=None, help="代码列表头（与 Excel 一致）")
     ap.add_argument("--name-col", default=None, help="名称列表头")
-    ap.add_argument("--strict-300", action="store_true", help="非 300 条则返回码 1")
+    ap.add_argument(
+        "--merge-existing",
+        action="store_true",
+        help="与 --out 已有 JSON 合并：仅追加新 code，同代码保留原名称",
+    )
+    ap.add_argument(
+        "--strict-300",
+        action="store_true",
+        help="非 300 条则返回码 1（与 --merge-existing 并用时一般不适用）",
+    )
     args = ap.parse_args()
 
     excel_path = os.path.abspath(args.excel)
@@ -300,18 +342,48 @@ def main() -> int:
 
     code_col, name_col = _pick_columns(df, args.code_col, args.name_col)
     holdings = _build_holdings(df, code_col, name_col)
-    n = len(holdings)
-    if n == 0:
+    n_excel = len(holdings)
+    if n_excel == 0:
         print("未解析到任何有效 code+name 行", file=sys.stderr)
         return 2
 
     out_path = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    _write_watchlist_hs300_json(out_path, excel_path, holdings)
+
+    added = 0
+    if args.merge_existing:
+        if not os.path.isfile(out_path):
+            print(f"--merge-existing 需要已有文件: {out_path}", file=sys.stderr)
+            return 2
+        try:
+            existing = _load_holdings_json(out_path)
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            print(f"读取已有 JSON 失败: {e}", file=sys.stderr)
+            return 2
+        holdings, added = _merge_holdings(existing, holdings)
+        comment = (
+            "成份池（仅 code、name）：在既有 watchlist 上按代码去重合并，并追加 "
+            f"{os.path.basename(excel_path)} 中的新标的（同代码保留原名称）。勿手改 holdings；"
+            "追加其它指数表请运行：python3 backend/scripts/update_watchlist_hs300_from_excel.py "
+            "<xls|xlsx> --merge-existing"
+        )
+    else:
+        comment = (
+            "沪深300成份股名单（仅 code、name）。数据来源：本地 Excel "
+            f"{os.path.basename(excel_path)} 。勿手改 holdings；刷新请运行："
+            "python3 backend/scripts/update_watchlist_hs300_from_excel.py <xls|xlsx>"
+        )
+
+    n = len(holdings)
+    _write_watchlist_hs300_json(out_path, comment, holdings)
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-    print(f"已写入 {out_path} ，共 {n} 条（代码列: {code_col!r}，名称列: {name_col!r}，UTC {ts}）")
-    if n != 300:
+    print(
+        f"已写入 {out_path} ，共 {n} 条（代码列: {code_col!r}，名称列: {name_col!r}，UTC {ts}）"
+    )
+    if args.merge_existing:
+        print(f"合并：Excel 解析 {n_excel} 条，新增 {added} 个代码（与已有去重后合计 {n}）")
+    if not args.merge_existing and n != 300:
         print(f"提示: 成份数量为 {n}（沪深300 通常为 300）", file=sys.stderr)
     if args.strict_300 and n != 300:
         return 1
