@@ -55,4 +55,5 @@ if [[ ! -f "${SCRIPT}" ]]; then
 fi
 
 cd "${BACKEND_DIR}"
+echo "HS300 快照详细日志 FIN_HS300_SNAPSHOT_VERBOSE=${FIN_HS300_SNAPSHOT_VERBOSE:-}(0=关) 输出至 stderr" >&2
 exec "${VENV_PY}" "${SCRIPT}"
