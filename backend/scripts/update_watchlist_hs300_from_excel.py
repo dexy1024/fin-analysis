@@ -3,9 +3,10 @@
 从 Excel 读取沪深300成份（代码 + 名称），写入 backend/data/watchlist_hs300.json
 （排版与 fetch_hs300_watchlist_json.py 一致）。
 
-依赖：pandas、openpyxl（.xlsx）。在仓库根目录执行：
+依赖：pandas、openpyxl（.xlsx）；部分 .xls 由 pandas 自带引擎可读。在仓库根目录执行：
 
     python3 backend/scripts/update_watchlist_hs300_from_excel.py path/to/hs300.xlsx
+    python3 backend/scripts/update_watchlist_hs300_from_excel.py 000300cons.xls
 
 可选参数：
     --out PATH          输出 JSON（默认 backend/data/watchlist_hs300.json）
@@ -14,8 +15,8 @@
     --name-col COL      名称列表头；不指定则自动识别
     --strict-300        若行数不是 300 则退出码 1（仍写入文件）
 
-列名自动识别：在表头中匹配「代码 / 证券代码 / 股票代码 / code / symbol」与
-「名称 / 证券简称 / 股票简称 / name」等常见写法（不区分大小写）。
+列名自动识别：优先「成份券代码 / Constituent Code」与「成份券名称 / Constituent Name」（中证指数
+表）；否则匹配常见「证券代码 / 简称」等表头，并避免将「指数代码」误当作股票代码列。
 """
 
 from __future__ import annotations
@@ -60,6 +61,32 @@ def _normalize_header(s: object) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
     return str(s).strip()
+
+
+def _is_constituent_stock_code_header(norm: str) -> bool:
+    """中证等指数成份表：优先「成份券代码 / Constituent Code」，避免误判「指数代码」。"""
+    low = norm.lower()
+    if "constituent code" in low:
+        return True
+    if ("成份券" in norm or "成分券" in norm) and "代码" in norm:
+        return True
+    return False
+
+
+def _is_constituent_stock_name_header(norm: str) -> bool:
+    low = norm.lower()
+    if "(eng)" in low or "name(eng)" in low or "英文名称" in norm:
+        return False
+    if "constituent name" in low:
+        return True
+    if "成份券名称" in norm or "成分券名称" in norm:
+        return True
+    return False
+
+
+def _is_index_meta_code_header(norm: str) -> bool:
+    low = norm.lower()
+    return "指数代码" in norm or "index code" in low
 
 
 def _cell_to_code_str(v: object) -> str | None:
@@ -131,35 +158,60 @@ def _pick_columns(
     indexed = [(i, raw) for i, raw in enumerate(raw_cols) if _normalize_header(raw)]
 
     if not best_c:
-        header_bonus: list[tuple[object, float]] = []
-        for i, raw in indexed:
-            norm = _normalize_header(raw)
-            low = norm.lower()
-            bonus = 0.0
-            for h in _CODE_HEADER_HINTS:
-                if h.lower() in low:
-                    bonus = 0.5
-                    break
-            header_bonus.append((raw, score_code_column(raw) + bonus, i))
-        header_bonus.sort(key=lambda t: (-t[1], t[2]))
-        if header_bonus and header_bonus[0][1] >= 0.5:
-            best_c = header_bonus[0][0]
+        cons_code = [
+            (raw, score_code_column(raw), i)
+            for i, raw in indexed
+            if _is_constituent_stock_code_header(_normalize_header(raw))
+        ]
+        if cons_code:
+            cons_code.sort(key=lambda t: (-t[1], t[2]))
+            if cons_code[0][1] >= 0.5:
+                best_c = cons_code[0][0]
+        if not best_c:
+            header_bonus: list[tuple[object, float, int]] = []
+            for i, raw in indexed:
+                norm = _normalize_header(raw)
+                low = norm.lower()
+                bonus = 0.0
+                for h in _CODE_HEADER_HINTS:
+                    if h.lower() in low:
+                        bonus = 0.5
+                        break
+                if _is_index_meta_code_header(norm):
+                    bonus -= 2.0
+                header_bonus.append((raw, score_code_column(raw) + bonus, i))
+            header_bonus.sort(key=lambda t: (-t[1], t[2]))
+            if header_bonus and header_bonus[0][1] >= 0.5:
+                best_c = header_bonus[0][0]
 
     if not best_n:
-        candidates = [(i, raw) for i, raw in indexed if raw != best_c]
-        header_bonus_n: list[tuple[object, float, int]] = []
-        for i, raw in candidates:
-            norm = _normalize_header(raw)
-            low = norm.lower()
-            bonus = 0.0
-            for h in _NAME_HEADER_HINTS:
-                if h.lower() in low:
-                    bonus = 0.5
-                    break
-            header_bonus_n.append((raw, score_name_column(raw) + bonus, i))
-        header_bonus_n.sort(key=lambda t: (-t[1], t[2]))
-        if header_bonus_n and header_bonus_n[0][1] >= 0.3:
-            best_n = header_bonus_n[0][0]
+        cons_name = [
+            (raw, score_name_column(raw), i)
+            for i, raw in indexed
+            if raw != best_c
+            and _is_constituent_stock_name_header(_normalize_header(raw))
+        ]
+        if cons_name:
+            cons_name.sort(key=lambda t: (-t[1], t[2]))
+            if cons_name[0][1] >= 0.3:
+                best_n = cons_name[0][0]
+        if not best_n:
+            candidates = [(i, raw) for i, raw in indexed if raw != best_c]
+            header_bonus_n: list[tuple[object, float, int]] = []
+            for i, raw in candidates:
+                norm = _normalize_header(raw)
+                low = norm.lower()
+                bonus = 0.0
+                for h in _NAME_HEADER_HINTS:
+                    if h.lower() in low:
+                        bonus = 0.5
+                        break
+                if "指数名称" in norm or "index name" in low:
+                    bonus -= 2.0
+                header_bonus_n.append((raw, score_name_column(raw) + bonus, i))
+            header_bonus_n.sort(key=lambda t: (-t[1], t[2]))
+            if header_bonus_n and header_bonus_n[0][1] >= 0.3:
+                best_n = header_bonus_n[0][0]
 
     if not best_c or not best_n:
         print("无法自动识别代码列/名称列，请用 --code-col / --name-col 指定。", file=sys.stderr)
