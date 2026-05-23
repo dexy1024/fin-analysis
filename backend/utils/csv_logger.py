@@ -228,6 +228,12 @@ def _get_hs300_csv_path(timestamp: Optional[datetime] = None) -> Path:
     return _ensure_logs_dir() / f"snapshots_hs300_{year}.csv"
 
 
+def _get_shenwan_v2_csv_path(timestamp: Optional[datetime] = None) -> Path:
+    """申万二级行业快照：logs/snapshots_shenwan_v2_YYYY.csv"""
+    year = (timestamp or datetime.now()).strftime("%Y")
+    return _ensure_logs_dir() / f"snapshots_shenwan_v2_{year}.csv"
+
+
 def _normalize_snapshot_header_row(cells: list[str]) -> list[str]:
     """表头比较前规范化：去空白、去掉首格 ZWSP/BOM，避免与 CSV_HEADERS 误判一致。"""
     if not cells:
@@ -1190,3 +1196,24 @@ def log_snapshot_hs300(data_dict: Dict[str, Any]) -> None:
         raise
     except Exception:
         logging.warning("csv_logger: HS300 快照写入失败", exc_info=True)
+
+
+def log_snapshot_shenwan_v2(data_dict: Dict[str, Any]) -> None:
+    """申万二级行业快照；写入 logs/snapshots_shenwan_v2_YYYY.csv，表头与自选一致。"""
+    global _snapshot_write_logged
+    try:
+        if not _snapshot_write_logged:
+            _snapshot_write_logged = True
+            logging.info(
+                "csv_logger: 申万行业快照列定义 %d 列，模块路径 %s",
+                len(CSV_HEADERS),
+                Path(__file__).resolve(),
+            )
+        time_str = data_dict.get("时间", "")
+        dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S") if time_str else datetime.now()
+        path = _get_shenwan_v2_csv_path(dt)
+        _append_snapshot_csv_row(path, data_dict)
+    except SnapshotCsvHeaderConflictError:
+        raise
+    except Exception:
+        logging.warning("csv_logger: 申万行业快照写入失败", exc_info=True)

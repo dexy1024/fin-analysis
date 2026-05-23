@@ -1,0 +1,388 @@
+[
+  {
+    "sector_code": "sw2_270300",
+    "sector_name": "光学光电子",
+    "stocks": [
+      {
+        "stock_code": "bj920001",
+        "stock_name": "纬达光电"
+      },
+      {
+        "stock_code": "bj920438",
+        "stock_name": "戈碧迦"
+      },
+      {
+        "stock_code": "sh600071",
+        "stock_name": "凤凰光学"
+      },
+      {
+        "stock_code": "sh600552",
+        "stock_name": "凯盛科技"
+      },
+      {
+        "stock_code": "sh600666",
+        "stock_name": "奥瑞德"
+      },
+      {
+        "stock_code": "sh600703",
+        "stock_name": "三安光电"
+      },
+      {
+        "stock_code": "sh600707",
+        "stock_name": "彩虹股份"
+      },
+      {
+        "stock_code": "sh603297",
+        "stock_name": "永新光学"
+      },
+      {
+        "stock_code": "sh603679",
+        "stock_name": "华体科技"
+      },
+      {
+        "stock_code": "sh603685",
+        "stock_name": "晨丰科技"
+      },
+      {
+        "stock_code": "sh603703",
+        "stock_name": "盛洋科技"
+      },
+      {
+        "stock_code": "sh603773",
+        "stock_name": "沃格光电"
+      },
+      {
+        "stock_code": "sh605218",
+        "stock_name": "伟时电子"
+      },
+      {
+        "stock_code": "sh605588",
+        "stock_name": "冠石科技"
+      },
+      {
+        "stock_code": "sh688010",
+        "stock_name": "福光股份"
+      },
+      {
+        "stock_code": "sh688055",
+        "stock_name": "龙腾光电"
+      },
+      {
+        "stock_code": "sh688079",
+        "stock_name": "美迪凯"
+      },
+      {
+        "stock_code": "sh688127",
+        "stock_name": "蓝特光学"
+      },
+      {
+        "stock_code": "sh688181",
+        "stock_name": "八亿时空"
+      },
+      {
+        "stock_code": "sh688195",
+        "stock_name": "腾景科技"
+      },
+      {
+        "stock_code": "sh688299",
+        "stock_name": "长阳科技"
+      },
+      {
+        "stock_code": "sh688322",
+        "stock_name": "奥比中光"
+      },
+      {
+        "stock_code": "sh688378",
+        "stock_name": "奥来德"
+      },
+      {
+        "stock_code": "sh688496",
+        "stock_name": "*ST清越"
+      },
+      {
+        "stock_code": "sh688502",
+        "stock_name": "茂莱光学"
+      },
+      {
+        "stock_code": "sh688538",
+        "stock_name": "和辉光电"
+      },
+      {
+        "stock_code": "sh688781",
+        "stock_name": "视涯科技"
+      },
+      {
+        "stock_code": "sz000020",
+        "stock_name": "深华发Ａ"
+      },
+      {
+        "stock_code": "sz000045",
+        "stock_name": "深纺织Ａ"
+      },
+      {
+        "stock_code": "sz000050",
+        "stock_name": "深天马Ａ"
+      },
+      {
+        "stock_code": "sz000100",
+        "stock_name": "TCL科技"
+      },
+      {
+        "stock_code": "sz000509",
+        "stock_name": "华塑控股"
+      },
+      {
+        "stock_code": "sz000536",
+        "stock_name": "华映科技"
+      },
+      {
+        "stock_code": "sz000725",
+        "stock_name": "京东方Ａ"
+      },
+      {
+        "stock_code": "sz000727",
+        "stock_name": "冠捷科技"
+      },
+      {
+        "stock_code": "sz001308",
+        "stock_name": "康冠科技"
+      },
+      {
+        "stock_code": "sz001373",
+        "stock_name": "翔腾新材"
+      },
+      {
+        "stock_code": "sz002036",
+        "stock_name": "联创电子"
+      },
+      {
+        "stock_code": "sz002106",
+        "stock_name": "莱宝高科"
+      },
+      {
+        "stock_code": "sz002137",
+        "stock_name": "实益达"
+      },
+      {
+        "stock_code": "sz002217",
+        "stock_name": "合力泰"
+      },
+      {
+        "stock_code": "sz002222",
+        "stock_name": "福晶科技"
+      },
+      {
+        "stock_code": "sz002273",
+        "stock_name": "水晶光电"
+      },
+      {
+        "stock_code": "sz002289",
+        "stock_name": "*ST宇顺"
+      },
+      {
+        "stock_code": "sz002387",
+        "stock_name": "维信诺"
+      },
+      {
+        "stock_code": "sz002449",
+        "stock_name": "国星光电"
+      },
+      {
+        "stock_code": "sz002456",
+        "stock_name": "欧菲光"
+      },
+      {
+        "stock_code": "sz002587",
+        "stock_name": "奥拓电子"
+      },
+      {
+        "stock_code": "sz002654",
+        "stock_name": "万润科技"
+      },
+      {
+        "stock_code": "sz002745",
+        "stock_name": "木林森"
+      },
+      {
+        "stock_code": "sz002808",
+        "stock_name": "*ST恒久"
+      },
+      {
+        "stock_code": "sz002845",
+        "stock_name": "同兴达"
+      },
+      {
+        "stock_code": "sz002876",
+        "stock_name": "三利谱"
+      },
+      {
+        "stock_code": "sz002952",
+        "stock_name": "亚世光电"
+      },
+      {
+        "stock_code": "sz002955",
+        "stock_name": "鸿合科技"
+      },
+      {
+        "stock_code": "sz002962",
+        "stock_name": "五方光电"
+      },
+      {
+        "stock_code": "sz002983",
+        "stock_name": "芯瑞达"
+      },
+      {
+        "stock_code": "sz002992",
+        "stock_name": "宝明科技"
+      },
+      {
+        "stock_code": "sz003015",
+        "stock_name": "日久光电"
+      },
+      {
+        "stock_code": "sz003019",
+        "stock_name": "宸展光电"
+      },
+      {
+        "stock_code": "sz300076",
+        "stock_name": "*ST宁视"
+      },
+      {
+        "stock_code": "sz300088",
+        "stock_name": "长信科技"
+      },
+      {
+        "stock_code": "sz300102",
+        "stock_name": "乾照光电"
+      },
+      {
+        "stock_code": "sz300120",
+        "stock_name": "经纬辉开"
+      },
+      {
+        "stock_code": "sz300162",
+        "stock_name": "雷曼光电"
+      },
+      {
+        "stock_code": "sz300219",
+        "stock_name": "鸿利智汇"
+      },
+      {
+        "stock_code": "sz300232",
+        "stock_name": "洲明科技"
+      },
+      {
+        "stock_code": "sz300241",
+        "stock_name": "瑞丰光电"
+      },
+      {
+        "stock_code": "sz300269",
+        "stock_name": "联建光电"
+      },
+      {
+        "stock_code": "sz300296",
+        "stock_name": "利亚德"
+      },
+      {
+        "stock_code": "sz300301",
+        "stock_name": "ST长方"
+      },
+      {
+        "stock_code": "sz300303",
+        "stock_name": "聚飞光电"
+      },
+      {
+        "stock_code": "sz300323",
+        "stock_name": "华灿光电"
+      },
+      {
+        "stock_code": "sz300331",
+        "stock_name": "苏大维格"
+      },
+      {
+        "stock_code": "sz300389",
+        "stock_name": "艾比森"
+      },
+      {
+        "stock_code": "sz300489",
+        "stock_name": "光智科技"
+      },
+      {
+        "stock_code": "sz300545",
+        "stock_name": "联得装备"
+      },
+      {
+        "stock_code": "sz300566",
+        "stock_name": "激智科技"
+      },
+      {
+        "stock_code": "sz300582",
+        "stock_name": "英飞特"
+      },
+      {
+        "stock_code": "sz300632",
+        "stock_name": "光莆股份"
+      },
+      {
+        "stock_code": "sz300701",
+        "stock_name": "森霸传感"
+      },
+      {
+        "stock_code": "sz300708",
+        "stock_name": "聚灿光电"
+      },
+      {
+        "stock_code": "sz300752",
+        "stock_name": "隆利科技"
+      },
+      {
+        "stock_code": "sz300808",
+        "stock_name": "久量股份"
+      },
+      {
+        "stock_code": "sz300889",
+        "stock_name": "爱克股份"
+      },
+      {
+        "stock_code": "sz300909",
+        "stock_name": "汇创达"
+      },
+      {
+        "stock_code": "sz300939",
+        "stock_name": "秋田微"
+      },
+      {
+        "stock_code": "sz300940",
+        "stock_name": "南极光"
+      },
+      {
+        "stock_code": "sz301045",
+        "stock_name": "天禄科技"
+      },
+      {
+        "stock_code": "sz301106",
+        "stock_name": "骏成科技"
+      },
+      {
+        "stock_code": "sz301183",
+        "stock_name": "东田微"
+      },
+      {
+        "stock_code": "sz301321",
+        "stock_name": "翰博高新"
+      },
+      {
+        "stock_code": "sz301379",
+        "stock_name": "天山电子"
+      },
+      {
+        "stock_code": "sz301421",
+        "stock_name": "波长光电"
+      },
+      {
+        "stock_code": "sz301479",
+        "stock_name": "弘景光电"
+      }
+    ]
+  }
+]

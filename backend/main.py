@@ -19,10 +19,16 @@ from services.first_buy_point import detect_first_buy_point, scan_first_buy_poin
 from services.indicators import get_history_indicators, get_index_kline, get_latest_indicators
 from services.kline_minute_sync import sync_minute_kline_to_csv
 from services.kline_scheduler import setup_kline_scheduler, shutdown_kline_scheduler, set_sse_callback, get_scheduler_status
+from services.observation_data import (
+    load_observation_hk_items,
+    load_observation_items,
+    load_observation_items_for_frontend,
+    load_observation_shenwan_v2_items,
+    lookup_shenwan_v2_sector_name,
+)
 from services import position_manager as pm
 
 WATCHLIST_FILE = Path(__file__).resolve().parents[0] / "data" / "watchlist.json"
-OBSERVATION_FILE = Path(__file__).resolve().parents[0] / "data" / "observation.json"
 
 
 def _kline_scheduler_disabled() -> bool:
@@ -186,6 +192,24 @@ def index_kline(
         description="为 true 时：日线仍走 get_index_kline 内部拉取；60/15 分钟先 sync_minute_kline_to_csv 写盘再读盘（拉取与展示分离）",
     ),
 ):
+    sym = symbol.strip()
+    if sym.lower().startswith("sw2_"):
+        try:
+            from services.shenwan_sector_kline import get_sw_sector_kline_by_code
+
+            return get_sw_sector_kline_by_code(
+                sym,
+                start_date=start_date,
+                period=period,
+                end_date=end_date,
+                refresh=refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logging.exception("获取申万行业K线失败: %s", sym)
+            raise HTTPException(status_code=500, detail="服务器内部错误") from exc
+
     try:
         if period in ("60", "15") and refresh:
             sync_minute_kline_to_csv(symbol, period, start_date, end_date)  # type: ignore[arg-type]
@@ -524,17 +548,14 @@ async def get_watchlist():
 
 @app.get("/api/observation")
 async def get_observation():
-    """读取用户观察/自选列表（backend/data/observation.json），仅用于前端显示"""
-    if not OBSERVATION_FILE.exists():
-        return {"observations": []}
-    try:
-        with open(OBSERVATION_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        observations = [item for item in data.get("observations", []) if isinstance(item, dict) and item.get("code")]
-        return {"observations": observations}
-    except Exception as exc:
-        logging.warning("读取 observation.json 失败: %s", exc)
-        return {"observations": []}
+    """观察列表：A 股/ETF + 港股 + 申万二级行业，供前端 Tab 展示"""
+    return {"observations": load_observation_items_for_frontend(include_hk=True)}
+
+
+@app.get("/api/observation-hk")
+async def get_observation_hk():
+    """仅港股观察列表（backend/data/observation_hk.json）"""
+    return {"observations": load_observation_hk_items()}
 
 
 @app.get("/api/broken-symbols")
@@ -580,19 +601,8 @@ async def get_symbols_config():
         except (OSError, json.JSONDecodeError, TypeError):
             logging.warning("读取 watchlist.json 失败")
 
-    # 用户观察列表
-    observation_symbols = []
-    if OBSERVATION_FILE.exists():
-        try:
-            with open(OBSERVATION_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            observation_symbols = [
-                {"code": str(item["code"]).strip(), "name": str(item.get("name", "")).strip()}
-                for item in data.get("observations", [])
-                if isinstance(item, dict) and item.get("code")
-            ]
-        except (OSError, json.JSONDecodeError, TypeError):
-            logging.warning("读取 observation.json 失败")
+    # 用户观察列表（含 observation_hk.json）
+    observation_symbols = load_observation_items(include_hk=True)
 
     # 合并自定义列表（去重）
     custom_codes = {s["code"] for s in watchlist_symbols}

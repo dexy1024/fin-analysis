@@ -48,33 +48,10 @@ TZ_SH = ZoneInfo("Asia/Shanghai")
 # ---------------------------------------------------------------------------
 
 def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
-    """读取 watchlist.json 和 observation.json，返回去重后的 (code, name) 列表。"""
-    symbols: List[Tuple[str, str]] = []
+    """读取 watchlist.json、observation.json、observation_hk.json，返回去重后的 (code, name) 列表。"""
+    from services.observation_data import load_watchlist_observation_symbols
 
-    watchlist_path = ROOT_DIR / "backend" / "data" / "watchlist.json"
-    if watchlist_path.is_file():
-        try:
-            data = json.loads(watchlist_path.read_text(encoding="utf-8"))
-            for item in data.get("holdings", []):
-                if isinstance(item, dict) and item.get("code"):
-                    symbols.append((str(item["code"]).strip(), str(item.get("name", "")).strip()))
-        except Exception:  # noqa: BLE001
-            logging.warning("trade_command_engine: 读取 watchlist.json 失败")
-
-    observation_path = ROOT_DIR / "backend" / "data" / "observation.json"
-    if observation_path.is_file():
-        try:
-            data = json.loads(observation_path.read_text(encoding="utf-8"))
-            for item in data.get("observations", []):
-                if isinstance(item, dict) and item.get("code"):
-                    code = str(item["code"]).strip()
-                    name = str(item.get("name", "")).strip()
-                    if not any(c == code for c, _ in symbols):
-                        symbols.append((code, name))
-        except Exception:  # noqa: BLE001
-            logging.warning("trade_command_engine: 读取 observation.json 失败")
-
-    return symbols
+    return load_watchlist_observation_symbols(include_hk=True)
 
 
 def _load_hs300_symbols() -> List[Tuple[str, str]]:
@@ -95,6 +72,13 @@ def _load_hs300_symbols() -> List[Tuple[str, str]]:
         logging.warning("trade_command_engine: 读取 watchlist_hs300.json 失败")
         return []
     return out
+
+
+def _load_shenwan_v2_symbols() -> List[Tuple[str, str]]:
+    """读取 backend/data/observation_shenwan_v2.json，返回 (sw2_code, 行业名称)。"""
+    from services.shenwan_sector_kline import load_shenwan_v2_observation_pairs
+
+    return load_shenwan_v2_observation_pairs()
 
 
 # ---------------------------------------------------------------------------
@@ -1658,6 +1642,9 @@ def _run_trade_command_engine_core(
     snapshot_writer: Callable[[Dict[str, Any]], None],
     verbose_progress: bool = False,
     snapshot_kind: str = "batch",
+    kline_fetcher: Optional[
+        Callable[[str, str, str, str, str], Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]]
+    ] = None,
 ) -> Optional[Path]:
     """
     自选与 HS300 批量共用：上证指数风控 + 每只标的沿用与主引擎相同的状态机与 build_snapshot_data。
@@ -1739,38 +1726,46 @@ def _run_trade_command_engine_core(
 
         # 静默拉取三周期数据（refresh=False，只读本地缓存）
         # 统一使用本地缓存数据（由kline_scheduler负责从网络同步到本地CSV）
-        try:
-            daily_result = get_index_kline(
-                symbol=code,
-                start_date=daily_start,
-                end_date=None,
-                period="daily",
-                refresh=False,  # 只读本地，不重新获取
+        if kline_fetcher is not None:
+            daily_result, h60_result, h15_result = kline_fetcher(
+                code, name, daily_start, h60_start, h15_start
             )
-        except Exception as e:  # noqa: BLE001
-            logging.warning("trade_command_engine: 日线读取失败 %s: %s", code, e)
+        else:
+            try:
+                daily_result = get_index_kline(
+                    symbol=code,
+                    start_date=daily_start,
+                    end_date=None,
+                    period="daily",
+                    refresh=False,  # 只读本地，不重新获取
+                )
+            except Exception as e:  # noqa: BLE001
+                logging.warning("trade_command_engine: 日线读取失败 %s: %s", code, e)
+                daily_result = None
 
-        try:
-            h60_result = get_index_kline(
-                symbol=code,
-                start_date=h60_start,
-                end_date=None,
-                period="60",
-                refresh=False,  # 只读本地，不重新获取
-            )
-        except Exception as e:  # noqa: BLE001
-            logging.warning("trade_command_engine: 60m读取失败 %s: %s", code, e)
+            try:
+                h60_result = get_index_kline(
+                    symbol=code,
+                    start_date=h60_start,
+                    end_date=None,
+                    period="60",
+                    refresh=False,  # 只读本地，不重新获取
+                )
+            except Exception as e:  # noqa: BLE001
+                logging.warning("trade_command_engine: 60m读取失败 %s: %s", code, e)
+                h60_result = None
 
-        try:
-            h15_result = get_index_kline(
-                symbol=code,
-                start_date=h15_start,
-                end_date=None,
-                period="15",
-                refresh=False,  # 只读本地，不重新获取
-            )
-        except Exception as e:  # noqa: BLE001
-            logging.warning("trade_command_engine: 15m读取失败 %s: %s", code, e)
+            try:
+                h15_result = get_index_kline(
+                    symbol=code,
+                    start_date=h15_start,
+                    end_date=None,
+                    period="15",
+                    refresh=False,  # 只读本地，不重新获取
+                )
+            except Exception as e:  # noqa: BLE001
+                logging.warning("trade_command_engine: 15m读取失败 %s: %s", code, e)
+                h15_result = None
 
         # 终极状态机判定（单标异常不中断全量报告）
         try:
@@ -1938,5 +1933,74 @@ def export_hs300_snapshots_to_csv() -> Optional[Path]:
         len(symbols),
     )
     print(f"[HS300] CSV 已追加写入 {out}（本轮尝试 {len(symbols)} 只）")
+    return out
+
+
+def _fetch_shenwan_v2_sector_klines(
+    code: str,
+    name: str,
+    daily_start: str,
+    h60_start: str,
+    h15_start: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """申万行业：日线官方指数；60m/15m 成分股等权合成。"""
+    from services.shenwan_sector_kline import get_sw_sector_kline
+
+    daily = h60 = h15 = None
+    try:
+        daily = get_sw_sector_kline(code, name, start_date=daily_start, period="daily")
+    except Exception as e:  # noqa: BLE001
+        logging.warning("trade_command_engine: 申万行业日线失败 %s (%s): %s", name, code, e)
+    try:
+        h60 = get_sw_sector_kline(code, name, start_date=h60_start, period="60")
+    except Exception as e:  # noqa: BLE001
+        logging.warning("trade_command_engine: 申万行业60m失败 %s (%s): %s", name, code, e)
+    try:
+        h15 = get_sw_sector_kline(code, name, start_date=h15_start, period="15")
+    except Exception as e:  # noqa: BLE001
+        logging.warning("trade_command_engine: 申万行业15m失败 %s (%s): %s", name, code, e)
+    return daily, h60, h15
+
+
+def export_shenwan_v2_snapshots_to_csv() -> Optional[Path]:
+    """
+    按与 logs/snapshots_YYYY_new.csv 相同的 build_snapshot_data 逻辑，
+    将 observation_shenwan_v2.json 行业列表写入 logs/snapshots_shenwan_v2_YYYY.csv。
+    行业指数仅日线可用，60m/15m 相关列为空或默认值。
+    """
+    from utils.csv_logger import _get_shenwan_v2_csv_path, log_snapshot_shenwan_v2
+    from utils.snapshot_run_audit import assert_snapshot_write_allowed, log_snapshot_engine_run
+
+    assert_snapshot_write_allowed()
+    symbols = _load_shenwan_v2_symbols()
+    log_snapshot_engine_run("shenwan_v2", False, len(symbols))
+    if not symbols:
+        logging.warning("trade_command_engine: observation_shenwan_v2.json 为空或未找到，跳过")
+        return None
+
+    timestamp = datetime.now()
+    _verbose = os.environ.get("FIN_SHENWAN_SNAPSHOT_VERBOSE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    _run_trade_command_engine_core(
+        symbols,
+        timestamp=timestamp,
+        generate_report=False,
+        collect_report_records=False,
+        snapshot_writer=log_snapshot_shenwan_v2,
+        verbose_progress=_verbose,
+        snapshot_kind="shenwan_v2",
+        kline_fetcher=_fetch_shenwan_v2_sector_klines,
+    )
+    out = _get_shenwan_v2_csv_path(timestamp)
+    logging.info(
+        "trade_command_engine: 申万行业快照已写入 %s，标的 %d",
+        out,
+        len(symbols),
+    )
+    print(f"[SHENWAN_V2] CSV 已追加写入 {out}（本轮 {len(symbols)} 个行业）")
     return out
 

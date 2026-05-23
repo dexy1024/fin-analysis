@@ -702,7 +702,7 @@ function App() {
     }
   }, [])
 
-  /** 用户观察/自选列表（从 backend/data/observation.json 读取，仅显示用） */
+  /** 用户观察/自选列表（observation.json + observation_hk，仅显示用） */
   const [observation, setObservation] = useState<WatchlistItem[]>([])
 
   // 加载 observation

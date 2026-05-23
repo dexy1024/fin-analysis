@@ -365,6 +365,11 @@ export interface ObservationResponse {
   observations: WatchlistItem[]
 }
 
+/** 申万二级行业代码（sw2_*），仅支持日线 K 线 */
+export function isShenwanSectorCode(code: string): boolean {
+  return code.trim().toLowerCase().startsWith('sw2_')
+}
+
 /** 读取用户观察/自选列表 */
 export async function fetchObservation(): Promise<ObservationResponse> {
   const resp = await fetchWithRetry(`${API_BASE_URL}/api/observation`, { cache: 'no-store' })

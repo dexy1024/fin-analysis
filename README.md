@@ -1,6 +1,6 @@
 # fin-analysis
 
-本地优先的 A 股 / ETF / 指数 **缠论** 可视化 + **双防线雷达**：后端 FastAPI 负责 K 线缓存、缠论计算、定时同步与雷达；前端 React 展示日 K / 60 分钟图、双防线简讯与 Tab 显隐策略。
+本地优先的 A 股 / ETF / 指数 **缠论** 可视化 + **双防线雷达**：后端 FastAPI 负责 K 线缓存、缠论计算、定时同步与雷达；前端 React 展示日 K / 60 分钟图、双防线简讯与 Tab 显隐策略。另含**申万二级行业**离线脚本：抓取行业/成分股 JSON 与行业相对强度打标 CSV（见 [§4.8](#48-申万二级行业与成分股离线脚本)）。
 
 ---
 
@@ -170,6 +170,90 @@ python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 - **Mock K2（反包）**：开 10.85，高 **11.50**（须高于 K1 高 11.05），低 **10.82**（须高于 K1 低 10.80），收 11.45。  
 - **日线 2026-04-13**：由上述两根合成——开 11.03，高 11.50，低 10.80，收 11.45；成交量为两根 60m 成交量之和（夹具里可用占位额）。
 
+### 4.8 申万二级行业与成分股（离线脚本）
+
+与主站缠论/雷达**独立**：手动不定期执行，产物写在**项目根目录**，不经过 FastAPI。
+
+| 产物 | 说明 |
+|------|------|
+| `shenwan_v2_sectors.json` | 申万二级行业列表 + 各行业成分股 |
+| `shenwan_v2_analysis_result.csv` | 行业指数相对沪深300的量化打标结果 |
+| `logs/shenwan_v2_fetch_*.log` | 抓取脚本日志 |
+| `logs/shenwan_v2_analysis_*.log` | 打标脚本日志 |
+
+**数据源（新浪财经）**
+
+- 行业列表：`Market_Center.getHQNodes` → 节点「申万二级」，行业代码为 `sw2_*`（如 `sw2_270100`）。
+- 成分股：`Market_Center.getHQNodeData`，`node={sector_code}` 分页（每页最多 100 条）；`stock_code` 为新浪 `symbol`（`sh` / `sz` / `bj` + 6 位）。
+
+**`shenwan_v2_sectors.json` 结构示例**
+
+```json
+{
+  "sector_code": "sw2_270100",
+  "sector_name": "半导体",
+  "stocks": [
+    { "stock_code": "sh603501", "stock_name": "豪威集团" },
+    { "stock_code": "sh688981", "stock_name": "中芯国际" }
+  ]
+}
+```
+
+当前约 **131** 个申万二级行业（以新浪节点为准）。兼容旧字段 `code` / `name`，读写时会归一为 `sector_code` / `sector_name`。
+
+**推荐用法：两个 Shell 脚本（稳定优先，带外层重试）**
+
+在仓库根目录执行（需 `chmod +x` 或 `bash` 调用）：
+
+```bash
+# ① 偶尔更新：行业列表 + 成分股 → shenwan_v2_sectors.json
+./fetch_shenwan_v2_sectors.sh              # 仅补没有 stocks 的行业（日常）
+./fetch_shenwan_v2_sectors.sh --force      # 强制重抓列表与全部成分股
+
+# ② 不定期：基于 JSON 中的行业 code/name 打标 → shenwan_v2_analysis_result.csv
+./run_shenwan_v2_analysis.sh               # 需先有 shenwan_v2_sectors.json
+```
+
+| 脚本 | 默认行为 | 重试 |
+|------|----------|------|
+| `fetch_shenwan_v2_sectors.sh` | `--stable` 慢速抓取；轮次间遇限流冷却 **90s**；成功前校验**每个**行业均有 `stocks` | 默认最多 **12** 轮（`SHENWAN_FETCH_MAX_ROUNDS`） |
+| `run_shenwan_v2_analysis.sh` | `--analysis-only`，**顺序**打标（`workers=1`），不抓成分股 | 默认最多 **6** 轮（`SHENWAN_ANALYSIS_MAX_ROUNDS`），间隔 **60s** |
+
+可选参数：`--max-rounds N`、`--cooldown SEC`；其余参数会透传给 Python。
+
+**打标逻辑（`run_shenwan_v2_analysis.sh` / `--analysis-only`）**
+
+- 基准：沪深300 `sh000300`，近 **100** 个交易日对齐。
+- 行业 K 线：优先新浪 `CN_MarketData.getKLineData`（含 `sw2_*` 与 801 代码变体）；新浪无数据时回退**申万宏源**官方 `trend` 接口（与 akshare `index_hist_sw` 同源）。
+- 输出列：`行业代码`、`行业名称`、`近20日涨幅`、`超额收益率`、`是否跑赢大盘`、`是否均线多头`、`是否综合满足`（跑赢 + 均线多头同时为 1）。
+
+**Python 入口（`backend/scripts/shenwan_v2_sector_analysis.py`）**
+
+也可直接调用（`-o` 默认为当前目录，产物写在指定目录下）：
+
+```bash
+# 抓取（等同 fetch 脚本核心）
+python3 backend/scripts/shenwan_v2_sector_analysis.py --sectors-only --stable --refresh-stocks -o .
+python3 backend/scripts/shenwan_v2_sector_analysis.py --sectors-only --stable --force-refresh-sectors -o .
+
+# 仅打标（等同 run 脚本核心）
+python3 backend/scripts/shenwan_v2_sector_analysis.py --analysis-only --workers 1 -o .
+
+# 一步完成：先补抓缺失成分股再打标（不推荐日常，耗时长）
+python3 backend/scripts/shenwan_v2_sector_analysis.py --workers 1 -o .
+```
+
+| 参数 | 作用 |
+|------|------|
+| `--sectors-only` | 只写 `shenwan_v2_sectors.json` |
+| `--analysis-only` | 只读 JSON 写 CSV，**不**抓行业/成分股 |
+| `--refresh-stocks` | 保留行业列表，只补缺失 `stocks` |
+| `--force-refresh-sectors` | 重抓行业列表 + 全部成分股 |
+| `--stable` | 放慢成分股请求、加长 456 限流退避 |
+| `--workers N` | 打标并发数，默认 **1**（稳定） |
+
+抓取过程中每完成一个行业会**增量写盘** JSON，中断后再次执行 `./fetch_shenwan_v2_sectors.sh` 可从缺 `stocks` 的行业继续。
+
 ---
 
 ## 5. 前端逻辑（`frontend/src`）
@@ -219,11 +303,17 @@ python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 fin-analysis/
 ├── README.md
 ├── restart_services.sh          # 重启后端+前端，日志写入 logs/
+├── fetch_shenwan_v2_sectors.sh  # 申万二级：行业+成分股 → shenwan_v2_sectors.json
+├── run_shenwan_v2_analysis.sh   # 申万二级：行业打标 → shenwan_v2_analysis_result.csv
+├── shenwan_v2_sectors.json      # 申万二级行业与成分股（脚本生成）
+├── shenwan_v2_analysis_result.csv
 ├── backend/
 │   ├── main.py                  # 路由与 lifespan
 │   ├── requirements.txt
 │   ├── run_defense_radar.py     # 命令行跑雷达
 │   ├── data/                    # 日线 CSV、kline_60_*.csv
+│   ├── scripts/
+│   │   └── shenwan_v2_sector_analysis.py  # 申万二级抓取/打标 Python 实现
 │   └── services/
 │       ├── indicators.py        # get_index_kline、缠论、响应缓存+mtime
 │       ├── index_cache.py       # 日线落盘
@@ -240,6 +330,8 @@ fin-analysis/
 │       └── ...
 └── logs/
     ├── defense_radar/           # *.md、last_summary.json
+    ├── shenwan_v2_fetch_*.log   # 申万成分股抓取日志
+    ├── shenwan_v2_analysis_*.log
     └── backend_*.log / frontend_*.log
 ```
 
@@ -260,6 +352,9 @@ fin-analysis/
 | 有警报的 Tab 不显示 | 摘要请求失败被 catch 成空 Map；或后端未写 `last_summary.json` |
 | 60m 报错「本地缓存不存在」 | 未跑过定时任务或从未对该 symbol `refresh=true` |
 | 中枢长时间不变 | 本地 CSV 未更新；或仅命中 TTL 内缓存（港股日线） |
+| 申万抓取反复失败 / 456 | 新浪限流；加大 `./fetch_shenwan_v2_sectors.sh --cooldown`，或隔几分钟再跑（会跳过已有 `stocks` 的行业） |
+| 打标报错「未找到 shenwan_v2_sectors.json」 | 先执行 `./fetch_shenwan_v2_sectors.sh` |
+| CSV 行业数少于 131 | 部分行业 K 线拉取失败被跳过；查看 `logs/shenwan_v2_analysis_*.log` 中 warning |
 
 ---
 

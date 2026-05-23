@@ -39,34 +39,10 @@ BUY_SELL_SIGNALS_JSON = "buy_sell_signals.json"
 # ---------------------------------------------------------------------------
 
 def _load_watchlist_observation_symbols() -> List[Tuple[str, str]]:
-    """读取 watchlist.json 和 observation.json，返回 (code, name) 列表。"""
-    symbols: List[Tuple[str, str]] = []
-    root = Path(__file__).resolve().parents[2]
+    """读取 watchlist.json、observation.json、observation_hk.json，返回 (code, name) 列表。"""
+    from services.observation_data import load_watchlist_observation_symbols
 
-    watchlist_path = root / "backend" / "data" / "watchlist.json"
-    if watchlist_path.is_file():
-        try:
-            data = json.loads(watchlist_path.read_text(encoding="utf-8"))
-            for item in data.get("holdings", []):
-                if isinstance(item, dict) and item.get("code"):
-                    symbols.append((str(item["code"]).strip(), str(item.get("name", "")).strip()))
-        except Exception:  # noqa: BLE001
-            logging.warning("buy_sell_signals: 读取 watchlist.json 失败")
-
-    observation_path = root / "backend" / "data" / "observation.json"
-    if observation_path.is_file():
-        try:
-            data = json.loads(observation_path.read_text(encoding="utf-8"))
-            for item in data.get("observations", []):
-                if isinstance(item, dict) and item.get("code"):
-                    code = str(item["code"]).strip()
-                    name = str(item.get("name", "")).strip()
-                    if not any(c == code for c, _ in symbols):
-                        symbols.append((code, name))
-        except Exception:  # noqa: BLE001
-            logging.warning("buy_sell_signals: 读取 observation.json 失败")
-
-    return symbols
+    return load_watchlist_observation_symbols(include_hk=True)
 
 
 def _build_date_to_idx(data: List[Dict[str, Any]]) -> Dict[str, int]:

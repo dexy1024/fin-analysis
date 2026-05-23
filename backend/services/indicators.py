@@ -1945,13 +1945,57 @@ def get_index_kline(
     if df.empty:
         raise ValueError("指定日期区间内没有指数K线数据")
 
-    # 缠论计算仅需最近258根K线，超过则截断以保持计算聚焦和性能
-    KLINE_CALC_LIMIT = 258
-    if len(df) > KLINE_CALC_LIMIT:
-        df = df.iloc[-KLINE_CALC_LIMIT:].reset_index(drop=True)
+    result = build_kline_response_from_ohlc_df(
+        symbol,
+        df,
+        period=period,
+        start_date=start_ts.strftime("%Y-%m-%d"),
+        end_date=end_ts.strftime("%Y-%m-%d"),
+    )
+    _kline_cache_set(cache_key, result, symbol=symbol, period=period)
+    total_ms = int((time.time() - start_perf) * 1000)
+    logging.info(
+        "PERF kline %s %s rows=%d cache=miss total=%dms",
+        symbol, period, len(result.get("data", [])), total_ms,
+    )
+    return result
+
+
+def build_kline_response_from_ohlc_df(
+    symbol: str,
+    df: pd.DataFrame,
+    *,
+    period: str,
+    start_date: str,
+    end_date: str,
+) -> Dict[str, Any]:
+    """
+    由已含 date/open/high/low/close/volume 的 DataFrame 构建与 get_index_kline 同结构的响应。
+    供申万行业指数等无本地分钟线缓存的数据源复用缠论流水线。
+    """
+    work = df.copy()
+    base_cols = ["date", "open", "high", "low", "close", "volume"]
+    work = work[[c for c in base_cols if c in work.columns]].copy()
+    work["date"] = pd.to_datetime(work["date"])
+    if period == "daily":
+        if getattr(work["date"].dtype, "tz", None) is not None:
+            work["date"] = work["date"].dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)
+        work["date"] = work["date"].dt.normalize()
+    work = work.sort_values("date").reset_index(drop=True)
+    if work.empty:
+        raise ValueError("指定日期区间内没有K线数据")
+
+    macd_part = _calc_macd(work["close"])
+    work = pd.concat([work, macd_part], axis=1)
+    boll_part = _calc_boll(work["close"], period=20, num_std=2.0)
+    work = pd.concat([work, boll_part], axis=1)
+
+    kline_calc_limit = 258
+    if len(work) > kline_calc_limit:
+        work = work.iloc[-kline_calc_limit:].reset_index(drop=True)
 
     rows: List[Dict[str, Any]] = []
-    for _, row in df.iterrows():
+    for _, row in work.iterrows():
         dt = row["date"]
         if isinstance(dt, pd.Timestamp):
             date_str = dt.strftime("%Y-%m-%d %H:%M") if period in ("60", "15") else dt.strftime("%Y-%m-%d")
@@ -1964,64 +2008,43 @@ def get_index_kline(
             "low": float(row["low"]),
             "close": float(row["close"]),
             "volume": float(row["volume"]),
-        }
-        if period in ("daily", "60", "15"):
-            item["macd"] = {
+            "macd": {
                 "dif": float(row["dif"]) if pd.notna(row.get("dif")) else 0.0,
                 "dea": float(row["dea"]) if pd.notna(row.get("dea")) else 0.0,
                 "macd": float(row["macd"]) if pd.notna(row.get("macd")) else 0.0,
-            }
-            item["boll"] = {
+            },
+            "boll": {
                 "upper": float(row["upper"]) if pd.notna(row.get("upper")) else None,
                 "middle": float(row["middle"]) if pd.notna(row.get("middle")) else None,
                 "lower": float(row["lower"]) if pd.notna(row.get("lower")) else None,
-            }
+            },
+        }
         rows.append(item)
 
-    fractals: List[Dict[str, Any]] = []
-    pens: List[Dict[str, Any]] = []
-    segments: List[Dict[str, Any]] = []
-    pens_effective: List[Dict[str, Any]] = []
-    chan_times: Dict[str, float] = {}
-    if period in ("daily", "60", "15"):
-        t0 = time.time()
-        source_bars: List[Dict[str, Any]] = []
-        for _, row in df.iterrows():
-            source_bars.append(
-                {
-                    "date": row["date"],
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row["volume"]),
-                },
-            )
-        t1 = time.time()
-        standardized_bars = _merge_inclusive_bars(source_bars)
-        t2 = time.time()
-        fractals = _find_fractals_from_standardized(standardized_bars)
-        t3 = time.time()
-        raw_idx = _raw_date_index_map(rows)
-        pens = _build_bi_from_fractals(fractals, raw_idx)
-        t4 = time.time()
-        segments = _build_segments_from_pens(pens)
-        t5 = time.time()
-        pens_effective = _normalize_effective_pens(pens)
-        t6 = time.time()
-        chan_times = {
-            "prepare": round(t1 - t0, 3),
-            "merge_bars": round(t2 - t1, 3),
-            "fractals": round(t3 - t2, 3),
-            "pens": round(t4 - t3, 3),
-            "segments": round(t5 - t4, 3),
-            "effective_pens": round(t6 - t5, 3),
-        }
+    t0 = time.time()
+    source_bars: List[Dict[str, Any]] = []
+    for _, row in work.iterrows():
+        source_bars.append(
+            {
+                "date": row["date"],
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            },
+        )
+    standardized_bars = _merge_inclusive_bars(source_bars)
+    fractals = _find_fractals_from_standardized(standardized_bars)
+    raw_idx = _raw_date_index_map(rows)
+    pens = _build_bi_from_fractals(fractals, raw_idx)
+    segments = _build_segments_from_pens(pens)
+    pens_effective = _normalize_effective_pens(pens)
 
     result: Dict[str, Any] = {
         "symbol": symbol,
-        "start_date": start_ts.strftime("%Y-%m-%d"),
-        "end_date": end_ts.strftime("%Y-%m-%d"),
+        "start_date": start_date,
+        "end_date": end_date,
         "period": period,
         "adjust": _kline_adjust_label(symbol),
         "data": rows,
@@ -2030,20 +2053,8 @@ def get_index_kline(
         "segments": segments,
         "pens_effective": pens_effective,
     }
-    if period in ("daily", "60", "15"):
-        tc0 = time.time()
-        last_close = float(rows[-1]["close"]) if rows else 0.0
-        result["centrals"] = _build_centrals(pens_effective, last_close, rows, max_visible=3)
-        tc1 = time.time()
-        chan_times["centrals"] = round(tc1 - tc0, 3)
-        chan_times["total"] = round(tc1 - t0, 3) if 't0' in dir() else 0
-    else:
-        result["centrals"] = []
-    _kline_cache_set(cache_key, result, symbol=symbol, period=period)
-    total_ms = int((time.time() - start_perf) * 1000)
-    logging.info(
-        "PERF kline %s %s rows=%d cache=miss total=%dms chan=%s",
-        symbol, period, len(rows), total_ms, chan_times,
-    )
+    last_close = float(rows[-1]["close"]) if rows else 0.0
+    result["centrals"] = _build_centrals(pens_effective, last_close, rows, max_visible=3)
+    _ = time.time() - t0
     return result
 

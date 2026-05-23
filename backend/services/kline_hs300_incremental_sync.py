@@ -1,9 +1,8 @@
 """
-沪深300（watchlist_hs300.json）K 线：手动同步（可选日线 + 增量 60m/15m）。
+K 线增量同步（HS300 / kline_scheduler / watchlist+observation 共用）。
 
-- 日线：先按本地 a_daily_*.csv 最后一根交易日的 date 作为 get_index_kline 的 start_date（无文件则用最近 380 自然日
-  与 kline_scheduler 冷启动一致）；再 sync_a_share_daily_cache_merged 拉网与本地按 date 合并写回，
-  最后 get_index_kline(..., daily, refresh=False) 仅重算返回段。
+- 日线：按本地日线 CSV 最后一根交易日为起点（无文件则 380 自然日冷启动）；A 股/ETF 用
+  sync_a_share_daily_cache_merged 合并写回；指数/港股拉网写回对应 index_daily_*.csv / hk_daily_*.csv。
 - 60m/15m：读 kline_{60|15}_*.csv 最后一根为起点；无有效缓存时 60m=79 日、15m=25 日。
 """
 
@@ -13,13 +12,26 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Iterable, Literal, Optional
 
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from services.index_cache import _a_share_daily_cache_path, sync_a_share_daily_cache_merged
-from services.indicators import _kline_15_cache_path, _kline_60_cache_path, get_index_kline
+from services.index_cache import (
+    _a_share_daily_cache_path,
+    _cache_path,
+    _hk_daily_cache_path,
+    load_hk_daily_dataframe,
+    load_index_daily_dataframe,
+    sync_a_share_daily_cache_merged,
+)
+from services.indicators import (
+    _kline_15_cache_path,
+    _kline_60_cache_path,
+    _split_kline_symbol,
+    get_index_kline,
+)
 from services.kline_minute_sync import sync_minute_kline_to_csv
 from services.trade_command_engine import _load_hs300_symbols
 
@@ -34,8 +46,8 @@ def _daily_start_date() -> str:
 
 
 def incremental_daily_start_date(code: str) -> str:
-    """本地 a_daily_*.csv 最后一根交易日；无文件或读失败则 380 自然日冷启动。"""
-    path = _a_share_daily_cache_path(code)
+    """本地日线 CSV 最后一根交易日；无文件或读失败则 380 自然日冷启动。"""
+    path = _resolve_daily_cache_path(code)
     if not path.is_file():
         return _daily_start_date()
     try:
@@ -99,6 +111,154 @@ def incremental_start_date(symbol: str, period: MinutePeriod) -> str:
     return last.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _resolve_daily_cache_path(code: str) -> Path:
+    c = code.strip().lower()
+    if c.startswith("hk"):
+        return _hk_daily_cache_path(code)
+    if (c.startswith("sh") or c.startswith("sz")) and len(c) > 8:
+        return _cache_path(code)
+    return _a_share_daily_cache_path(code)
+
+
+def _last_daily_bar_date(code: str) -> Optional[str]:
+    path = _resolve_daily_cache_path(code)
+    if not path.is_file():
+        return None
+    try:
+        df = pd.read_csv(path, parse_dates=["date"])
+    except Exception:
+        return None
+    if df.empty or "date" not in df.columns:
+        return None
+    last = pd.to_datetime(df["date"]).max()
+    return last.strftime("%Y-%m-%d") if pd.notna(last) else None
+
+
+def _last_minute_bar_date(symbol: str, period: MinutePeriod) -> Optional[str]:
+    last = last_bar_timestamp(symbol, period)
+    return last.strftime("%Y-%m-%d") if last is not None else None
+
+
+@dataclass
+class SymbolFreshness:
+    code: str
+    name: str
+    daily_last: Optional[str] = None
+    m60_last: Optional[str] = None
+    m15_last: Optional[str] = None
+    needs_daily: bool = False
+    needs_60: bool = False
+    needs_15: bool = False
+
+    @property
+    def needs_any(self) -> bool:
+        return self.needs_daily or self.needs_60 or self.needs_15
+
+    @property
+    def periods_to_sync(self) -> tuple[Period, ...]:
+        out: list[Period] = []
+        if self.needs_daily:
+            out.append("daily")
+        if self.needs_60:
+            out.append("60")
+        if self.needs_15:
+            out.append("15")
+        return tuple(out)
+
+    def missing_labels(self) -> str:
+        parts: list[str] = []
+        if self.needs_daily:
+            parts.append("daily")
+        if self.needs_60:
+            parts.append("60m")
+        if self.needs_15:
+            parts.append("15m")
+        return "+".join(parts)
+
+
+@dataclass
+class StaleAuditReport:
+    target_date: str
+    total: int
+    fresh: int
+    stale: list[SymbolFreshness] = field(default_factory=list)
+    need_daily: int = 0
+    need_60: int = 0
+    need_15: int = 0
+
+
+def _check_symbol_freshness(code: str, name: str, target_date: str) -> SymbolFreshness:
+    daily_last = _last_daily_bar_date(code)
+    m60_last = _last_minute_bar_date(code, "60")
+    m15_last = _last_minute_bar_date(code, "15")
+    return SymbolFreshness(
+        code=code,
+        name=name,
+        daily_last=daily_last,
+        m60_last=m60_last,
+        m15_last=m15_last,
+        needs_daily=(daily_last or "") < target_date,
+        needs_60=(m60_last or "") < target_date,
+        needs_15=(m15_last or "") < target_date,
+    )
+
+
+def audit_kline_freshness(
+    pairs: list[tuple[str, str]],
+    target_date: Optional[str] = None,
+) -> StaleAuditReport:
+    """扫描给定标的列表，找出相对 target_date 未齐 daily/60m/15m 的项。"""
+    target = target_date or datetime.now(TZ_SH).strftime("%Y-%m-%d")
+    stale: list[SymbolFreshness] = []
+    need_daily = need_60 = need_15 = 0
+    for code, name in pairs:
+        sf = _check_symbol_freshness(code, name, target)
+        if sf.needs_any:
+            stale.append(sf)
+            if sf.needs_daily:
+                need_daily += 1
+            if sf.needs_60:
+                need_60 += 1
+            if sf.needs_15:
+                need_15 += 1
+    return StaleAuditReport(
+        target_date=target,
+        total=len(pairs),
+        fresh=len(pairs) - len(stale),
+        stale=stale,
+        need_daily=need_daily,
+        need_60=need_60,
+        need_15=need_15,
+    )
+
+
+def audit_hs300_kline_freshness(target_date: Optional[str] = None) -> StaleAuditReport:
+    """扫描 watchlist_hs300.json，找出相对 target_date 未齐 daily/60m/15m 的标的。"""
+    return audit_kline_freshness(_load_hs300_symbols(), target_date)
+
+
+def _accumulate_sync_result(
+    summary: BatchSummary,
+    result: SymbolSyncResult,
+    period_list: tuple[Period, ...],
+) -> None:
+    if "daily" in period_list and result.touched_daily:
+        if result.error_daily is None:
+            summary.ok_daily += 1
+        else:
+            summary.fail_daily += 1
+    if "60" in period_list and result.touched_60:
+        if result.error_60 is None:
+            summary.ok_60 += 1
+        else:
+            summary.fail_60 += 1
+    if "15" in period_list and result.touched_15:
+        if result.error_15 is None:
+            summary.ok_15 += 1
+        else:
+            summary.fail_15 += 1
+
+
 @dataclass
 class SymbolSyncResult:
     code: str
@@ -154,7 +314,15 @@ def _sync_symbol(
     for p in period_list:
         try:
             if p == "daily":
-                sync_a_share_daily_cache_merged(code)
+                api_sym, src = _split_kline_symbol(code)
+                if src == "a_share":
+                    sync_a_share_daily_cache_merged(code)
+                elif src == "index":
+                    load_index_daily_dataframe(api_sym, force_refresh=True)
+                elif src == "hk":
+                    load_hk_daily_dataframe(code, force_refresh=True)
+                else:
+                    raise ValueError(f"不支持标的: {code}")
                 payload = get_index_kline(
                     symbol=code,
                     start_date=daily_start,
@@ -186,6 +354,26 @@ def _sync_symbol(
                 res.error_15 = msg
                 res.touched_15 = True
     return res
+
+
+def sync_codes_incremental(
+    codes: Iterable[str],
+    periods: tuple[Period, ...],
+    *,
+    code_to_name: Optional[dict[str, str]] = None,
+    sleep_sec: float = 0.0,
+    log_label: str = "kline_incremental",
+) -> None:
+    """对给定 code 列表按周期做增量同步（kline_scheduler / 脚本共用）。"""
+    period_list = tuple(dict.fromkeys(periods))
+    names = code_to_name or {}
+    for code in codes:
+        sym = str(code).strip()
+        if not sym:
+            continue
+        _sync_symbol(sym, names.get(sym, ""), period_list, dry_run=False)
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
 
 
 def run_hs300_kline_incremental(
@@ -224,21 +412,7 @@ def run_hs300_kline_incremental(
             continue
         r = _sync_symbol(code, name, period_list, dry_run=False)
         summary.results.append(r)
-        if "daily" in period_list and r.touched_daily:
-            if r.error_daily is None:
-                summary.ok_daily += 1
-            else:
-                summary.fail_daily += 1
-        if "60" in period_list and r.touched_60:
-            if r.error_60 is None:
-                summary.ok_60 += 1
-            else:
-                summary.fail_60 += 1
-        if "15" in period_list and r.touched_15:
-            if r.error_15 is None:
-                summary.ok_15 += 1
-            else:
-                summary.fail_15 += 1
+        _accumulate_sync_result(summary, r, period_list)
         if sleep_sec > 0:
             time.sleep(sleep_sec)
 
@@ -246,6 +420,184 @@ def run_hs300_kline_incremental(
         _log_incremental_failures(summary, period_list)
 
     return summary
+
+
+def run_kline_stale_repair(
+    pairs: list[tuple[str, str]],
+    *,
+    label: str = "K线",
+    target_date: Optional[str] = None,
+    sleep_sec: float = 0.2,
+    limit: Optional[int] = None,
+    dry_run: bool = False,
+) -> tuple[StaleAuditReport, BatchSummary]:
+    """
+    仅对 audit 中未齐 target_date 的标的，按缺失周期从本地末根增量补跑。
+    """
+    report = audit_kline_freshness(pairs, target_date)
+    stale_list = report.stale
+    if limit is not None:
+        stale_list = stale_list[: max(0, limit)]
+
+    summary = BatchSummary(symbols=len(stale_list))
+    all_periods: tuple[Period, ...] = ("daily", "60", "15")
+
+    logging.info(
+        "%s 增量补跑: target=%s 待补=%d/%d (缺 daily=%d 60m=%d 15m=%d) dry_run=%s",
+        label,
+        report.target_date,
+        len(stale_list),
+        report.total,
+        report.need_daily,
+        report.need_60,
+        report.need_15,
+        dry_run,
+    )
+
+    for sf in stale_list:
+        periods = sf.periods_to_sync
+        if not periods:
+            continue
+        if dry_run:
+            logging.info(
+                "dry-run %s %s 缺 %s | daily=%s 60m=%s 15m=%s",
+                sf.code,
+                sf.name or "-",
+                sf.missing_labels(),
+                sf.daily_last or "-",
+                sf.m60_last or "-",
+                sf.m15_last or "-",
+            )
+            summary.results.append(_sync_symbol(sf.code, sf.name, periods, dry_run=True))
+        else:
+            r = _sync_symbol(sf.code, sf.name, periods, dry_run=False)
+            summary.results.append(r)
+            _accumulate_sync_result(summary, r, periods)
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
+
+    if not dry_run:
+        _log_incremental_failures(summary, all_periods)
+
+    return report, summary
+
+
+def run_hs300_kline_stale_repair(
+    *,
+    target_date: Optional[str] = None,
+    sleep_sec: float = 0.2,
+    limit: Optional[int] = None,
+    dry_run: bool = False,
+) -> tuple[StaleAuditReport, BatchSummary]:
+    """HS300：仅补未齐标的的缺失周期（增量）。"""
+    return run_kline_stale_repair(
+        _load_hs300_symbols(),
+        label="HS300",
+        target_date=target_date,
+        sleep_sec=sleep_sec,
+        limit=limit,
+        dry_run=dry_run,
+    )
+
+
+def run_hs300_kline_sync_until_fresh(
+    *,
+    target_date: Optional[str] = None,
+    sleep_sec: float = 1.0,
+    max_rounds: int = 10,
+    stale_only: bool = False,
+    dry_run: bool = False,
+    limit: Optional[int] = None,
+    codes: Optional[list[str]] = None,
+) -> tuple[StaleAuditReport, int]:
+    """
+    全量 incremental（可选）→ 扫描 → 仅补缺失周期 → 未齐则重试，直到全部最新或达 max_rounds。
+    """
+    target = target_date or datetime.now(TZ_SH).strftime("%Y-%m-%d")
+    rounds = 0
+    periods: tuple[Period, ...] = ("daily", "60", "15")
+
+    if dry_run:
+        report = audit_hs300_kline_freshness(target)
+        logging.info(
+            "dry-run 扫描: target=%s 已齐=%d/%d 待补=%d (缺 daily=%d 60m=%d 15m=%d)",
+            report.target_date,
+            report.fresh,
+            report.total,
+            len(report.stale),
+            report.need_daily,
+            report.need_60,
+            report.need_15,
+        )
+        for sf in report.stale[:30]:
+            logging.info(
+                "  %s %s 缺 %s | daily=%s 60m=%s 15m=%s",
+                sf.code,
+                sf.name or "-",
+                sf.missing_labels(),
+                sf.daily_last or "-",
+                sf.m60_last or "-",
+                sf.m15_last or "-",
+            )
+        if len(report.stale) > 30:
+            logging.info("  ... 其余 %d 条省略", len(report.stale) - 30)
+        return report, 0
+
+    if not stale_only:
+        logging.info("HS300 第 1 轮: 全量同步 daily+60m+15m (sleep=%.1fs)", sleep_sec)
+        run_hs300_kline_incremental(
+            periods=periods,
+            sleep_sec=sleep_sec,
+            limit=limit,
+            codes=codes,
+            dry_run=False,
+        )
+        rounds += 1
+
+    while rounds < max_rounds:
+        report = audit_hs300_kline_freshness(target)
+        if limit is not None:
+            report.stale = report.stale[: max(0, limit)]
+        if not report.stale:
+            logging.info(
+                "HS300 全部已齐: target=%s (%d/%d) 共 %d 轮",
+                target,
+                report.fresh,
+                report.total,
+                rounds,
+            )
+            return report, rounds
+
+        logging.info(
+            "HS300 第 %d 轮补跑: target=%s 待补=%d/%d (缺 daily=%d 60m=%d 15m=%d)",
+            rounds + 1,
+            target,
+            len(report.stale),
+            report.total,
+            report.need_daily,
+            report.need_60,
+            report.need_15,
+        )
+        run_hs300_kline_stale_repair(
+            target_date=target,
+            sleep_sec=sleep_sec,
+            limit=limit,
+            dry_run=False,
+        )
+        rounds += 1
+        if limit is not None:
+            break
+
+    report = audit_hs300_kline_freshness(target)
+    if report.stale:
+        logging.warning(
+            "HS300 仍未全齐: target=%s 待补=%d/%d (已跑 %d 轮，可加 --max-rounds 或 --sleep)",
+            target,
+            len(report.stale),
+            report.total,
+            rounds,
+        )
+    return report, rounds
 
 
 def _truncate_err(msg: str, max_len: int = 220) -> str:

@@ -1,8 +1,9 @@
 """
 后台定时任务（北京时间 Asia/Shanghai）：不依赖浏览器。
 独立线程睡眠到下一槽位唤醒执行。
-- 10:31 / 11:31 / 14:01 / 15:01：全量 60m refresh；破位与买卖信号 JSON；SSE 通知
-- 16:01：全量日线 refresh + 上述
+- 10:31 / 11:31 / 14:01 / 15:01：增量 60m/15m（自本地末根起拉）；破位与买卖信号 JSON；SSE 通知
+- 16:01：增量日线 + 60m/15m + 上述
+- 交易时段 15m 独立槽：仅增量 15m
 
 止损、双防线雷达（last_summary.json）改手动；不由此调度自动跑。
 
@@ -30,8 +31,7 @@ from zoneinfo import ZoneInfo
 
 from services.buy_sell_signals import compute_and_save_buy_sell_signals
 from services.defense_radar import DEFENSE_RADAR_WATCHLIST, _load_watchlist_observation_symbols, compute_and_save_broken_symbols
-from services.indicators import get_index_kline
-from services.kline_minute_sync import sync_minute_kline_to_csv
+from services.kline_hs300_incremental_sync import Period, sync_codes_incremental
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -39,8 +39,8 @@ TZ_SH = ZoneInfo("Asia/Shanghai")
 _SCHEDULER_EXPECTED_EXCEPTIONS = (ValueError, OSError, TypeError, KeyError, RuntimeError)
 
 
-def _daily_start_date() -> str:
-    return (datetime.now(TZ_SH) - timedelta(days=380)).strftime("%Y-%m-%d")
+# 每标的同步后的间隔，略降频避免新浪 456（增量单次数据量已变小）
+_SYNC_SLEEP_SEC = 1.0
 
 # (hour, minute, include_daily)
 _KLINE_SLOTS: tuple[tuple[int, int, bool], ...] = (
@@ -109,15 +109,6 @@ def set_sse_callback(callback: Callable[[bool, str], None]) -> None:
     logging.info("kline_scheduler: SSE 广播回调已设置")
 
 
-def _h60_start_date() -> str:
-    return (datetime.now(TZ_SH) - timedelta(days=79)).strftime("%Y-%m-%d")
-
-
-def _h15_start_date() -> str:
-    """15分钟：每天 16 根，250 根 ≈ 16 个交易日 ≈ 25 个自然日。与 trade_command_engine 保持一致。"""
-    return (datetime.now(TZ_SH) - timedelta(days=25)).strftime("%Y-%m-%d")
-
-
 # 15分钟独立同步槽位：交易时间内每根15分钟K线结束后1分钟触发
 # 上午 9:30-11:30 / 下午 13:00-15:00
 _H15_SLOTS: tuple[tuple[int, int], ...] = (
@@ -135,49 +126,43 @@ def sync_symbol_list_for_kline() -> list[str]:
     return codes
 
 
-def _sync_all_daily() -> None:
-    """写回日线 CSV；随后任意 get_index_kline(..., daily, refresh=false) 会因 mtime 变化重算日线 ABC 中枢。"""
-    for sym in sync_symbol_list_for_kline():
-        try:
-            get_index_kline(
-                symbol=sym,
-                start_date=_daily_start_date(),
-                end_date=None,
-                period="daily",
-                refresh=True,
-            )
-        except _SCHEDULER_EXPECTED_EXCEPTIONS:
-            logging.exception("kline_scheduler: 日线同步失败 %s", sym)
+def _kline_symbol_name_map() -> dict[str, str]:
+    names = {code: name for code, name in DEFENSE_RADAR_WATCHLIST}
+    names["sh000001"] = "上证指数"
+    for code, name in _load_watchlist_observation_symbols():
+        names.setdefault(code, name)
+    return names
 
 
-def _sync_all_60m() -> None:
-    """写回 kline_60_*.csv（拉取与消费分离：仅 sync 写盘）。"""
-    h60 = _h60_start_date()
-    for sym in sync_symbol_list_for_kline():
-        try:
-            sync_minute_kline_to_csv(sym, "60", h60, end_date=None)
-        except _SCHEDULER_EXPECTED_EXCEPTIONS:
-            logging.exception("kline_scheduler: 60m 同步失败 %s", sym)
-
-
-def _sync_all_15m() -> None:
-    """写回 kline_15_*.csv。"""
-    h15 = _h15_start_date()
-    for sym in sync_symbol_list_for_kline():
-        try:
-            sync_minute_kline_to_csv(sym, "15", h15, end_date=None)
-        except _SCHEDULER_EXPECTED_EXCEPTIONS:
-            logging.exception("kline_scheduler: 15m 同步失败 %s", sym)
+def _sync_periods_incremental(periods: tuple[Period, ...]) -> None:
+    """自本地末根增量拉取并合并写 CSV（与 sync_watchlist_observation / HS300 脚本一致）。"""
+    codes = sync_symbol_list_for_kline()
+    logging.info(
+        "kline_scheduler: 增量同步 %s，标的数=%d，间隔=%.1fs",
+        ",".join(periods),
+        len(codes),
+        _SYNC_SLEEP_SEC,
+    )
+    try:
+        sync_codes_incremental(
+            codes,
+            periods,
+            code_to_name=_kline_symbol_name_map(),
+            sleep_sec=_SYNC_SLEEP_SEC,
+            log_label="kline_scheduler",
+        )
+    except _SCHEDULER_EXPECTED_EXCEPTIONS:
+        logging.exception("kline_scheduler: 增量同步批次失败")
 
 
 def run_scheduled_slot(include_daily: bool) -> None:
-    """单次槽位任务：可选全量日线同步 → 全量 60m → 全量 15m → 破位与买卖信号 JSON → SSE。"""
+    """单次槽位任务：增量 K 线 → 破位与买卖信号 JSON → SSE。"""
     timestamp = datetime.now(TZ_SH).isoformat()
     logging.info("kline_scheduler: 槽位开始 include_daily=%s", include_daily)
     if include_daily:
-        _sync_all_daily()
-    _sync_all_60m()
-    _sync_all_15m()
+        _sync_periods_incremental(("daily", "60", "15"))
+    else:
+        _sync_periods_incremental(("60", "15"))
 
     # 计算 watchlist + observation 的破位状态
     try:
@@ -293,8 +278,8 @@ def _scheduler_worker_loop() -> None:
         if slot_type == 'main':
             run_scheduled_slot(include_daily)
         else:
-            _sync_all_15m()
-            logging.info("kline_scheduler: 15m 独立同步完成")
+            _sync_periods_incremental(("15",))
+            logging.info("kline_scheduler: 15m 独立增量同步完成")
             # 注意：此处不写 logs/snapshots_*.csv；快照仅由 run_trade_command.py / generate_snapshots.sh（或外部 cron）触发。
         global _last_slot_time, _slot_execution_count
         with _slot_lock:
