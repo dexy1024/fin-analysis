@@ -1,0 +1,364 @@
+[
+  {
+    "sector_code": "sw2_640700",
+    "sector_name": "自动化设备",
+    "stocks": [
+      {
+        "stock_code": "bj920096",
+        "stock_name": "嘉晨智能"
+      },
+      {
+        "stock_code": "bj920125",
+        "stock_name": "鸿仕达"
+      },
+      {
+        "stock_code": "bj920178",
+        "stock_name": "锐翔智能"
+      },
+      {
+        "stock_code": "bj920396",
+        "stock_name": "常辅股份"
+      },
+      {
+        "stock_code": "bj920405",
+        "stock_name": "海希通讯"
+      },
+      {
+        "stock_code": "bj920425",
+        "stock_name": "乐创技术"
+      },
+      {
+        "stock_code": "bj920578",
+        "stock_name": "巨能股份"
+      },
+      {
+        "stock_code": "bj920579",
+        "stock_name": "机科股份"
+      },
+      {
+        "stock_code": "bj920593",
+        "stock_name": "鼎智科技"
+      },
+      {
+        "stock_code": "bj920885",
+        "stock_name": "星辰科技"
+      },
+      {
+        "stock_code": "sh600215",
+        "stock_name": "派斯林"
+      },
+      {
+        "stock_code": "sh603015",
+        "stock_name": "弘讯科技"
+      },
+      {
+        "stock_code": "sh603025",
+        "stock_name": "大豪科技"
+      },
+      {
+        "stock_code": "sh603082",
+        "stock_name": "北自科技"
+      },
+      {
+        "stock_code": "sh603203",
+        "stock_name": "快克智能"
+      },
+      {
+        "stock_code": "sh603275",
+        "stock_name": "众辰科技"
+      },
+      {
+        "stock_code": "sh603283",
+        "stock_name": "赛腾股份"
+      },
+      {
+        "stock_code": "sh603416",
+        "stock_name": "信捷电气"
+      },
+      {
+        "stock_code": "sh603583",
+        "stock_name": "捷昌驱动"
+      },
+      {
+        "stock_code": "sh603666",
+        "stock_name": "亿嘉和"
+      },
+      {
+        "stock_code": "sh603960",
+        "stock_name": "克来机电"
+      },
+      {
+        "stock_code": "sh605186",
+        "stock_name": "健麾信息"
+      },
+      {
+        "stock_code": "sh605288",
+        "stock_name": "凯迪股份"
+      },
+      {
+        "stock_code": "sh688003",
+        "stock_name": "天准科技"
+      },
+      {
+        "stock_code": "sh688017",
+        "stock_name": "绿的谐波"
+      },
+      {
+        "stock_code": "sh688025",
+        "stock_name": "杰普特"
+      },
+      {
+        "stock_code": "sh688090",
+        "stock_name": "瑞松科技"
+      },
+      {
+        "stock_code": "sh688097",
+        "stock_name": "博众精工"
+      },
+      {
+        "stock_code": "sh688125",
+        "stock_name": "安达智能"
+      },
+      {
+        "stock_code": "sh688160",
+        "stock_name": "步科股份"
+      },
+      {
+        "stock_code": "sh688165",
+        "stock_name": "埃夫特"
+      },
+      {
+        "stock_code": "sh688170",
+        "stock_name": "德龙激光"
+      },
+      {
+        "stock_code": "sh688215",
+        "stock_name": "瑞晟智能"
+      },
+      {
+        "stock_code": "sh688218",
+        "stock_name": "江苏北人"
+      },
+      {
+        "stock_code": "sh688255",
+        "stock_name": "凯尔达"
+      },
+      {
+        "stock_code": "sh688290",
+        "stock_name": "景业智能"
+      },
+      {
+        "stock_code": "sh688306",
+        "stock_name": "均普智能"
+      },
+      {
+        "stock_code": "sh688310",
+        "stock_name": "迈得医疗"
+      },
+      {
+        "stock_code": "sh688320",
+        "stock_name": "禾川科技"
+      },
+      {
+        "stock_code": "sh688329",
+        "stock_name": "艾隆科技"
+      },
+      {
+        "stock_code": "sh688395",
+        "stock_name": "正弦电气"
+      },
+      {
+        "stock_code": "sh688455",
+        "stock_name": "科捷智能"
+      },
+      {
+        "stock_code": "sh688518",
+        "stock_name": "联赢激光"
+      },
+      {
+        "stock_code": "sh688559",
+        "stock_name": "海目星"
+      },
+      {
+        "stock_code": "sh688570",
+        "stock_name": "天玛智控"
+      },
+      {
+        "stock_code": "sh688623",
+        "stock_name": "双元科技"
+      },
+      {
+        "stock_code": "sh688646",
+        "stock_name": "ST逸飞"
+      },
+      {
+        "stock_code": "sh688686",
+        "stock_name": "奥普特"
+      },
+      {
+        "stock_code": "sh688698",
+        "stock_name": "伟创电气"
+      },
+      {
+        "stock_code": "sh688777",
+        "stock_name": "中控技术"
+      },
+      {
+        "stock_code": "sh688816",
+        "stock_name": "易思维"
+      },
+      {
+        "stock_code": "sz000988",
+        "stock_name": "华工科技"
+      },
+      {
+        "stock_code": "sz001223",
+        "stock_name": "欧克科技"
+      },
+      {
+        "stock_code": "sz001266",
+        "stock_name": "宏英智能"
+      },
+      {
+        "stock_code": "sz002008",
+        "stock_name": "大族激光"
+      },
+      {
+        "stock_code": "sz002184",
+        "stock_name": "海得控制"
+      },
+      {
+        "stock_code": "sz002334",
+        "stock_name": "英威腾"
+      },
+      {
+        "stock_code": "sz002698",
+        "stock_name": "博实股份"
+      },
+      {
+        "stock_code": "sz002747",
+        "stock_name": "埃斯顿"
+      },
+      {
+        "stock_code": "sz002957",
+        "stock_name": "科瑞技术"
+      },
+      {
+        "stock_code": "sz002975",
+        "stock_name": "博杰股份"
+      },
+      {
+        "stock_code": "sz002979",
+        "stock_name": "雷赛智能"
+      },
+      {
+        "stock_code": "sz300024",
+        "stock_name": "机器人"
+      },
+      {
+        "stock_code": "sz300048",
+        "stock_name": "合康新能"
+      },
+      {
+        "stock_code": "sz300083",
+        "stock_name": "创世纪"
+      },
+      {
+        "stock_code": "sz300097",
+        "stock_name": "智云股份"
+      },
+      {
+        "stock_code": "sz300124",
+        "stock_name": "汇川技术"
+      },
+      {
+        "stock_code": "sz300227",
+        "stock_name": "光韵达"
+      },
+      {
+        "stock_code": "sz300276",
+        "stock_name": "三丰智能"
+      },
+      {
+        "stock_code": "sz300278",
+        "stock_name": "华昌达"
+      },
+      {
+        "stock_code": "sz300400",
+        "stock_name": "劲拓股份"
+      },
+      {
+        "stock_code": "sz300461",
+        "stock_name": "田中精机"
+      },
+      {
+        "stock_code": "sz300484",
+        "stock_name": "蓝海华腾"
+      },
+      {
+        "stock_code": "sz300486",
+        "stock_name": "东杰智能"
+      },
+      {
+        "stock_code": "sz300607",
+        "stock_name": "拓斯达"
+      },
+      {
+        "stock_code": "sz300747",
+        "stock_name": "锐科激光"
+      },
+      {
+        "stock_code": "sz300757",
+        "stock_name": "罗博特科"
+      },
+      {
+        "stock_code": "sz300802",
+        "stock_name": "矩子科技"
+      },
+      {
+        "stock_code": "sz301021",
+        "stock_name": "英诺激光"
+      },
+      {
+        "stock_code": "sz301029",
+        "stock_name": "怡合达"
+      },
+      {
+        "stock_code": "sz301112",
+        "stock_name": "信邦智能"
+      },
+      {
+        "stock_code": "sz301199",
+        "stock_name": "迈赫股份"
+      },
+      {
+        "stock_code": "sz301312",
+        "stock_name": "智立方"
+      },
+      {
+        "stock_code": "sz301320",
+        "stock_name": "豪江智能"
+      },
+      {
+        "stock_code": "sz301418",
+        "stock_name": "协昌科技"
+      },
+      {
+        "stock_code": "sz301510",
+        "stock_name": "固高科技"
+      },
+      {
+        "stock_code": "sz301512",
+        "stock_name": "智信精密"
+      },
+      {
+        "stock_code": "sz301568",
+        "stock_name": "思泰克"
+      },
+      {
+        "stock_code": "sz301633",
+        "stock_name": "港迪技术"
+      }
+    ]
+  }
+]

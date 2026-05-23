@@ -12,8 +12,12 @@ venv/
 frontend/node_modules/
 frontend/dist/
 
-# 运行日志（*.log 常轮转；快照 CSV 与 K 线数据纳入 Git）
+# 运行日志（*.log 常轮转）
 logs/*.log
+
+# K 线缓存、快照、分析结果等 CSV：本地生成，不纳入 Git
+*.csv
+!backend/tests/fixtures/**/*.csv
 
 # 双防线雷达摘要与报告：纳入 Git，便于回滚对照与前端摘要一致性
 # （目录 logs/defense_radar/ 下 *.json、*.md 会被跟踪）
