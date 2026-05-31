@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 from zoneinfo import ZoneInfo
 
 from services.indicators import _axis_date_key, _merge_inclusive_bars, get_index_kline
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -615,8 +616,8 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             period="daily",
             refresh=refresh,
         )
-    except (ValueError, OSError, TypeError, KeyError, RuntimeError) as exc:
-        logging.exception("defense_radar: 拉取日线失败 %s", code)
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+        logging.warning("defense_radar: 拉取日线失败 %s: %s", code, exc)
         return DefenseRow(
             code=code,
             name=name,
@@ -626,6 +627,9 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             last_price=None,
             error=str(exc),
         )
+    except Exception:
+        logging.exception("defense_radar: 拉取日线未预期异常 %s", code)
+        raise
 
     centrals_raw = payload.get("centrals") or []
     centrals = _sort_centrals_chronologically(list(centrals_raw))
@@ -650,8 +654,8 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             period="60",
             refresh=refresh,
         )
-    except (ValueError, OSError, TypeError, KeyError, RuntimeError) as exc:
-        logging.exception("defense_radar: 读取60分钟失败 %s", code)
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+        logging.warning("defense_radar: 读取60分钟失败 %s: %s", code, exc)
         return DefenseRow(
             code=code,
             name=name,
@@ -661,6 +665,9 @@ def _compute_defense_row(code: str, name: str, *, refresh: bool = False) -> Defe
             last_price=None,
             error=str(exc),
         )
+    except Exception:
+        logging.exception("defense_radar: 读取60分钟未预期异常 %s", code)
+        raise
 
     bars = h60.get("data") or []
     if not bars:
@@ -804,9 +811,12 @@ def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float]
             period="daily",
             refresh=False,
         )
-    except (ValueError, OSError, TypeError, KeyError, RuntimeError):
-        logging.warning("defense_radar: 日线数据获取失败 %s", sym)
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+        logging.warning("defense_radar: 日线数据获取失败 %s: %s", sym, exc)
         return False, None, None, None
+    except Exception:
+        logging.exception("defense_radar: 日线数据获取未预期异常 %s", sym)
+        raise
 
     centrals_raw = daily.get("centrals") or []
     centrals = _sort_centrals_chronologically(list(centrals_raw))
@@ -823,9 +833,12 @@ def _is_symbol_broken(code: str) -> Tuple[bool, Optional[float], Optional[float]
             period="60",
             refresh=False,
         )
-    except (ValueError, OSError, TypeError, KeyError, RuntimeError):
-        logging.warning("defense_radar: 60分钟数据获取失败 %s", sym)
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+        logging.warning("defense_radar: 60分钟数据获取失败 %s: %s", sym, exc)
         return False, a_zd, c_zd, None
+    except Exception:
+        logging.exception("defense_radar: 60分钟数据获取未预期异常 %s", sym)
+        raise
 
     bars = h60.get("data") or []
     if not bars:

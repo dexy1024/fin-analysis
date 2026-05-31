@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 申万二级：抓取行业列表 + 成分股 → shenwan_v2_sectors.json
+# 申万二级：抓取行业列表 + 成分股 → shenwan_v2_sectors.json（并同步 shenwan_v2_sector_codes.json）
 # 偏稳定：慢速请求、Python 内重试 + 本脚本外层重试，直至全部行业都有 stocks。
 #
 # 在仓库根目录执行:

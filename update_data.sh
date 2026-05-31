@@ -1,51 +1,34 @@
 #!/bin/bash
-# 数据更新脚本 - 手动触发 60分钟数据同步
+# 手动更新 上证指数 + watchlist.json + observation.json + observation_hk.json 的 K 线
+# - 始终：60m / 15m
+# - 日线：仅北京时间 16:00 及之后执行时才拉（当日收盘后；可用 --force-daily 强制）
+# 慢速拉取防新浪限流；不含 DEFENSE_RADAR 雷达核心列表（由 kline_scheduler 定时跑）
+# 默认：标的间隔 8s、周期间隔 5s、最多 5 轮（遇 456 可再加大 --sleep）
+#
+# 用法:
+#   ./update_data.sh
+#   ./update_data.sh --sleep 12 --period-sleep 8
+#   ./update_data.sh --sleep 12 --max-rounds 6
+#   ./update_data.sh --force-daily   # 16 点前也拉日线
 
-cd "$(dirname "$0")/backend" || exit 1
+set -euo pipefail
+cd "$(dirname "$0")" || exit 1
 
 echo "========================================"
-echo "开始同步 60分钟数据 + 雷达摘要"
-echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "上证 + watchlist + observation + observation_hk K 线同步（慢速）"
+echo "时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "========================================"
 
-/usr/bin/python3 << 'EOF'
-from services.kline_scheduler import run_scheduled_slot
-import logging
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s: %(message)s'
-)
-
-try:
-    print("\n[1/2] 开始更新 60分钟数据...")
-    run_scheduled_slot(include_daily=False)
-    print("\n[2/2] 更新完成!")
-    print("\n最新数据文件:")
-    import os
-    import glob
-    files = glob.glob("../backend/data/kline_60_*.csv")
-    for f in sorted(files, key=os.path.getmtime, reverse=True)[:5]:
-        mtime = os.path.getmtime(f)
-        from datetime import datetime
-        dt = datetime.fromtimestamp(mtime)
-        print(f"  {os.path.basename(f)} - 更新时间: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # 显示雷达摘要
-    import glob
-    radar_files = glob.glob("../logs/defense_radar/defense_radar_*.md")
-    if radar_files:
-        latest = max(radar_files, key=os.path.getmtime)
-        print(f"\n雷达摘要: {os.path.basename(latest)}")
-        
-except Exception as e:
-    print(f"\n错误: {e}")
-    import traceback
-    traceback.print_exc()
-EOF
+/usr/bin/python3 update_data.py "$@"
+rc=$?
 
 echo ""
 echo "========================================"
-echo "执行完成"
+if [ "$rc" -eq 0 ]; then
+  echo "执行完成"
+else
+  echo "执行完成（部分标的未齐，exit=$rc）"
+fi
 echo "========================================"
+
+exit "$rc"

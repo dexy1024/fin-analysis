@@ -1,4 +1,4 @@
-"""观察标的 JSON：A 股/ETF（observation.json）、港股（observation_hk.json）、申万二级（observation_shenwan_v2.json）。"""
+"""观察标的 JSON：A 股/ETF（observation.json）、港股（observation_hk.json）。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,19 @@ from typing import Any
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 OBSERVATION_FILE = DATA_DIR / "observation.json"
 OBSERVATION_HK_FILE = DATA_DIR / "observation_hk.json"
-OBSERVATION_SHENWAN_V2_FILE = DATA_DIR / "observation_shenwan_v2.json"
+def _resolve_hide_when_broken(raw: Any, default: bool) -> bool:
+    """破位（60m 现价 < MIN(日线 A-ZD, C-ZD)）时是否隐藏 Tab；默认 True。"""
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip().lower()
+        if s in ("false", "0", "no", "off"):
+            return False
+        if s in ("true", "1", "yes", "on"):
+            return True
+    return default
 
 
 def _read_observations_file(path: Path, *, log_label: str) -> list[dict[str, Any]]:
@@ -18,6 +30,7 @@ def _read_observations_file(path: Path, *, log_label: str) -> list[dict[str, Any
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        default_hide = _resolve_hide_when_broken(data.get("hideWhenBroken"), True)
         items = data.get("observations", [])
         out: list[dict[str, Any]] = []
         for item in items:
@@ -26,6 +39,9 @@ def _read_observations_file(path: Path, *, log_label: str) -> list[dict[str, Any
                     {
                         "code": str(item["code"]).strip(),
                         "name": str(item.get("name", "")).strip(),
+                        "hideWhenBroken": _resolve_hide_when_broken(
+                            item.get("hideWhenBroken"), default_hide
+                        ),
                     }
                 )
         return out
@@ -56,25 +72,9 @@ def load_observation_hk_items() -> list[dict[str, Any]]:
     return _read_observations_file(OBSERVATION_HK_FILE, log_label="observation_data")
 
 
-def load_observation_shenwan_v2_items() -> list[dict[str, Any]]:
-    """申万二级行业观察列表（observation_shenwan_v2.json）。"""
-    return _read_observations_file(OBSERVATION_SHENWAN_V2_FILE, log_label="observation_data")
-
-
 def load_observation_items_for_frontend(*, include_hk: bool = True) -> list[dict[str, Any]]:
-    """
-    前端展示用：observation.json + observation_hk.json，去重。
-    不含 watchlist、observation_shenwan_v2（申万行业仅后台快照用，不在前台 Tab 展示）。
-    """
+    """前端展示用：observation.json + observation_hk.json，去重。"""
     return load_observation_items(include_hk=include_hk)
-
-
-def lookup_shenwan_v2_sector_name(sector_code: str) -> str:
-    code = sector_code.strip()
-    for item in load_observation_shenwan_v2_items():
-        if item["code"] == code:
-            return str(item.get("name", "")).strip()
-    return ""
 
 
 def load_observation_pairs(*, include_hk: bool = True) -> list[tuple[str, str]]:

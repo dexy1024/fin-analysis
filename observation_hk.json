@@ -1,0 +1,9 @@
+{
+  "_comment": "港股观察标的（与 observation.json 的 A 股/ETF 分开维护）。直接编辑此文件，无需重启服务。必填字段：code、name。code 以 hk 开头。",
+  "observations": [
+    
+    { "code": "hk06862", "name": "海底捞" },
+    { "code": "hk01810", "name": "小米集团" },
+    { "code": "hk01177", "name": "中国生物制药" }
+  ]
+}

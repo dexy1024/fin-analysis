@@ -21,10 +21,10 @@ from services.indicators import (
     _save_kline_60_cache,
     build_kline_response_from_ohlc_df,
 )
-from services.observation_data import load_observation_shenwan_v2_items, lookup_shenwan_v2_sector_name
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SECTORS_JSON = ROOT_DIR / "shenwan_v2_sectors.json"
+SECTOR_CODES_JSON = ROOT_DIR / "shenwan_v2_sector_codes.json"
 
 MIN_CONSTITUENTS = 5
 MAX_SYNC_CONSTITUENTS = 40
@@ -105,8 +105,45 @@ def resolve_sw_index_code(sector_code: str, sector_name: str) -> Optional[str]:
     return None
 
 
+@lru_cache(maxsize=1)
+def _sector_code_name_map() -> dict[str, str]:
+    """sw2_* → 行业名称（shenwan_v2_sector_codes.json，缺则回退 shenwan_v2_sectors.json）。"""
+    mapping: dict[str, str] = {}
+    for path in (SECTOR_CODES_JSON, SECTORS_JSON):
+        if not path.is_file():
+            continue
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logging.warning("shenwan_sector_kline: 读取 %s 失败: %s", path.name, exc)
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("sector_code") or row.get("code") or "").strip()
+            name = str(row.get("sector_name") or row.get("name") or "").strip()
+            if code and name and code not in mapping:
+                mapping[code] = name
+    return mapping
+
+
+def lookup_shenwan_v2_sector_name(sector_code: str) -> str:
+    return _sector_code_name_map().get(sector_code.strip(), "")
+
+
+def load_shenwan_v2_sector_pairs() -> list[tuple[str, str]]:
+    """全部申万二级 (code, name)，来自 shenwan_v2_sector_codes.json。"""
+    pairs: list[tuple[str, str]] = []
+    for code, name in _sector_code_name_map().items():
+        if code.startswith("sw2_"):
+            pairs.append((code, name))
+    pairs.sort(key=lambda x: x[0])
+    return pairs
+
+
 def load_shenwan_v2_observation_pairs() -> list[tuple[str, str]]:
-    return [(item["code"], item["name"]) for item in load_observation_shenwan_v2_items()]
+    """兼容旧名；等同 load_shenwan_v2_sector_pairs。"""
+    return load_shenwan_v2_sector_pairs()
 
 
 def constituent_codes(sector_code: str) -> list[str]:
@@ -338,7 +375,7 @@ def get_sw_sector_kline_by_code(
 ) -> dict[str, Any]:
     name = lookup_shenwan_v2_sector_name(sector_code)
     if not name:
-        raise ValueError(f"未在 observation_shenwan_v2.json 中找到行业: {sector_code}")
+        raise ValueError(f"未在 shenwan_v2_sector_codes.json 中找到行业: {sector_code}")
     return get_sw_sector_kline(
         sector_code,
         name,

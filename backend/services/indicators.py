@@ -23,6 +23,7 @@ from services.index_cache import (
     load_hk_daily_dataframe,
     load_index_daily_dataframe,
 )
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 KLINE_60_CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 _KLINE_RESP_CACHE_TTL_SECONDS = 300
@@ -177,8 +178,8 @@ def _kline_cache_set(
 
 def _refresh_daily_cache_for_kline_symbol(symbol: str) -> None:
     """
-    60 分钟请求时顺带从网络刷新指数/A 股日线本地缓存，使日线与盘中行情同步，
-    避免仅依赖「最后一根日期 < 今天」才更新导致的当日日线滞后。
+    从网络刷新指数/A 股日线本地缓存（供显式日线拉取或脚本调用）。
+    分钟同步不再调用；盘中/收盘日线由 kline_scheduler 16:01 与 daily 增量同步负责。
     港股日线无此 CSV 缓存，跳过。
     """
     api_sym, src = _split_kline_symbol(symbol)
@@ -284,8 +285,10 @@ def _merge_kline_ohlcv_with_cache(path: Path, df: pd.DataFrame) -> pd.DataFrame:
         return incoming
     try:
         existing = _normalize_kline_ohlcv_df(pd.read_csv(path, parse_dates=["date"]))
-    except Exception:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         return incoming
+    except Exception:
+        raise
     merged = pd.concat([existing, incoming], ignore_index=True)
     return merged.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
@@ -310,8 +313,10 @@ def _load_kline_60_cache(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timesta
         return None
     try:
         df = pd.read_csv(path, parse_dates=["date"])
-    except Exception:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         return None
+    except Exception:
+        raise
     if df.empty:
         return None
     req = {"date", "open", "high", "low", "close", "volume"}
@@ -374,8 +379,10 @@ def _load_kline_15_cache(symbol: str, start_ts: pd.Timestamp, end_ts: pd.Timesta
         return None
     try:
         df = pd.read_csv(path, parse_dates=["date"])
-    except Exception:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         return None
+    except Exception:
+        raise
     if df.empty:
         return None
     req = {"date", "open", "high", "low", "close", "volume"}

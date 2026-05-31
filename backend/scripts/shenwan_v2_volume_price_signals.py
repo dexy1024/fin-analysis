@@ -2,12 +2,13 @@
 """
 申万二级行业：量价资金面趋势监控（无缠论指标）。
 
-基于本地 shenwan_v2_sectors.json，拉取申万官方行业指数日 K（含成交额），计算：
+基于本地 shenwan_v2_sector_codes.json，拉取申万官方行业指数日 K（含成交额），计算：
   - is_120h：当前收盘价是否为过去 120 个交易日新高
   - volume_surge：近 5 日均成交额 / 近 60 日均成交额 > 1.5
   - ma20_up：20 日均线拐头向上（MA20 > 1 日前 MA20）
 
-输出 CSV 仅保留同时满足上述三项的行业，按成交额暴增倍数降序排列。
+输出 03_shenwan_v2_volume_price_signals.csv：仅保留同时满足上述三项的行业（当日快照）。
+追加 logs/04_shenwan_v2_volume_price_signals_history.csv：满足三项条件的行业历史长表（按数据日期 upsert）。
 
 用法：
     python3 backend/scripts/shenwan_v2_volume_price_signals.py
@@ -30,9 +31,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 import akshare as ak
 import pandas as pd
 
-# 与 shenwan_v2_sector_analysis 共用行业 JSON 约定
-SECTORS_JSON = "shenwan_v2_sectors.json"
-RESULT_CSV = "shenwan_v2_volume_price_signals.csv"
+# 行业 code/name 列表由 shenwan_v2_sector_analysis.load_sectors_json 读取
+RESULT_CSV = "03_shenwan_v2_volume_price_signals.csv"
+RESULT_HISTORY_CSV = "logs/04_shenwan_v2_volume_price_signals_history.csv"
 
 HIGH_WINDOW = 120
 VOLUME_SHORT = 5
@@ -44,8 +45,13 @@ MIN_BARS = max(HIGH_WINDOW, VOLUME_LONG, MA_WINDOW + 1, RETURN_WINDOW + 1)
 
 # 复用已有脚本中的行业加载与 801 代码映射
 _SCRIPT_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _SCRIPT_DIR.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS  # noqa: E402
 
 from shenwan_v2_sector_analysis import (  # noqa: E402
     _sector_code,
@@ -53,6 +59,21 @@ from shenwan_v2_sector_analysis import (  # noqa: E402
     build_sw_index_code_map,
     load_sectors_json,
     resolve_sw_index_code,
+    warn_if_sector_data_lags,
+    write_snapshot_and_append_history,
+    fetch_benchmark_kline,
+)
+
+VOLUME_SIGNAL_COLUMNS = (
+    "数据日期",
+    "行业代码",
+    "行业名称",
+    "is_120h",
+    "volume_surge",
+    "成交额暴增倍数",
+    "近20日涨幅",
+    "ma20_up",
+    "最新收盘价",
 )
 
 
@@ -109,13 +130,13 @@ def compute_signals(df: pd.DataFrame) -> dict[str, Any]:
     return_20 = _pct_return(close, RETURN_WINDOW)
 
     return {
+        "数据日期": df["date"].iloc[-1].strftime("%Y-%m-%d"),
         "is_120h": is_120h,
         "volume_surge": volume_surge,
         "成交额暴增倍数": round(volume_ratio, 4),
         "近20日涨幅": round(return_20, 4),
         "ma20_up": ma20_up,
         "最新收盘价": round(current_close, 4),
-        "数据日期": df["date"].iloc[-1].strftime("%Y-%m-%d"),
     }
 
 
@@ -133,9 +154,12 @@ def analyze_sector(
     try:
         df = fetch_sector_ohlc_amount(sw_index_code)
         signals = compute_signals(df)
-    except Exception as exc:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
         logging.warning("跳过 %s (%s)：%s", name, code, exc)
         return None
+    except Exception:
+        logging.exception("volume_price_signals: %s (%s) 未预期异常", name, code)
+        raise
 
     return {
         "行业代码": code,
@@ -177,20 +201,28 @@ def run_analysis(output_dir: Path, *, workers: int = 1) -> Path:
     if not results:
         raise RuntimeError("无任何行业分析结果")
 
-    df = pd.DataFrame(results)
+    df = pd.DataFrame(results)[list(VOLUME_SIGNAL_COLUMNS)]
+    benchmark = fetch_benchmark_kline()
+    warn_if_sector_data_lags(benchmark, df, label="量价信号")
+    csv_path = output_dir / RESULT_CSV
+    history_path = output_dir / RESULT_HISTORY_CSV
     filtered = df[
         (df["is_120h"] == 1) & (df["volume_surge"] == 1) & (df["ma20_up"] == 1)
-    ].sort_values("成交额暴增倍数", ascending=False).reset_index(drop=True)
-
-    csv_path = output_dir / RESULT_CSV
-    filtered.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    ]
+    write_snapshot_and_append_history(
+        filtered,
+        history_path,
+        snapshot_path=csv_path,
+        sort_snapshot_by="成交额暴增倍数",
+    )
 
     logging.info(
-        "完成 %d / %d 个行业，满足三项条件 %d 个 → %s",
+        "完成 %d / %d 个行业，满足三项条件 %d 个 → %s（历史长表 %s）",
         len(df),
         total,
         len(filtered),
         csv_path,
+        history_path,
     )
     return csv_path
 
@@ -216,9 +248,12 @@ def main() -> None:
 
     try:
         csv_path = run_analysis(output_dir, workers=args.workers)
-    except Exception as exc:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
         logging.error("执行失败：%s", exc)
         sys.exit(1)
+    except Exception:
+        logging.exception("执行未预期异常")
+        raise
 
     print(f"结果文件：{csv_path}")
 

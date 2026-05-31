@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -23,11 +23,7 @@ from services.observation_data import (
     load_observation_hk_items,
     load_observation_items,
     load_observation_items_for_frontend,
-    load_observation_shenwan_v2_items,
-    lookup_shenwan_v2_sector_name,
 )
-from services import position_manager as pm
-
 WATCHLIST_FILE = Path(__file__).resolve().parents[0] / "data" / "watchlist.json"
 
 
@@ -36,15 +32,19 @@ def _kline_scheduler_disabled() -> bool:
     return os.environ.get("DISABLE_KLINE_SCHEDULER", "").strip().lower() in ("1", "true", "yes")
 
 
-# SSE 客户端队列 - 存储 asyncio.Queue 对象
-_sse_clients: list = []
+@dataclass
+class _SseClient:
+    """SSE 客户端：队列 + 所属事件循环（供跨线程安全推送）"""
+    queue: asyncio.Queue
+    loop: asyncio.AbstractEventLoop
+
+
+_sse_clients: list[_SseClient] = []
 _sse_clients_lock = threading.Lock()
 
 
 def notify_sse_clients(include_daily: bool, timestamp: str):
     """调度完成后通知所有 SSE 客户端（在线程中调用）"""
-    import asyncio
-    
     message = {
         "type": "radar_updated",
         "timestamp": timestamp,
@@ -54,33 +54,18 @@ def notify_sse_clients(include_daily: bool, timestamp: str):
     _send_sse_message(message)
 
 
-def notify_stop_loss(code: str, reason: str, price: float):
-    """止损触发时 SSE 推送告警"""
-    message = {
-        "type": "stop_loss_triggered",
-        "code": code,
-        "reason": reason,
-        "price": price,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "message": f"【止损告警】{code} 触发{reason}，现价 {price:.2f}，已自动清仓！"
-    }
-    _send_sse_message(message)
-
-
 def _send_sse_message(message: dict):
     """通用 SSE 消息发送（线程安全）"""
-    import asyncio
-
     with _sse_clients_lock:
         clients_snapshot = list(_sse_clients)
 
     disconnected = []
     for client in clients_snapshot:
         try:
-            if hasattr(client, '_loop'):
-                client._loop.call_soon_threadsafe(client.put_nowait, message)
-            else:
-                client.put_nowait(message)
+            if client.loop.is_closed():
+                disconnected.append(client)
+                continue
+            asyncio.run_coroutine_threadsafe(client.queue.put(message), client.loop)
         except Exception as e:
             logging.debug("SSE: 客户端队列写入失败: %s", e)
             disconnected.append(client)
@@ -106,8 +91,6 @@ async def lifespan(app: FastAPI):
     try:
         # 设置 SSE 广播回调
         set_sse_callback(notify_sse_clients)
-        # 设置持仓管理 SSE 回调
-        pm.set_sse_callback(notify_stop_loss)
         if _kline_scheduler_disabled():
             logging.info("main: DISABLE_KLINE_SCHEDULER 已启用，不启动 kline 定时调度")
         else:
@@ -288,13 +271,10 @@ async def root():
 @app.get("/api/sse/radar-updates")
 async def sse_radar_updates():
     """SSE 端点：实时推送雷达数据更新"""
-    from asyncio import Queue
-    
-    client_queue = Queue()
-    # 保存当前事件循环，供线程回调使用
-    client_queue._loop = asyncio.get_event_loop()
+    client_queue: asyncio.Queue = asyncio.Queue()
+    sse_client = _SseClient(queue=client_queue, loop=asyncio.get_running_loop())
     with _sse_clients_lock:
-        _sse_clients.append(client_queue)
+        _sse_clients.append(sse_client)
 
     async def event_generator():
         # 发送初始连接成功消息
@@ -316,8 +296,8 @@ async def sse_radar_updates():
         finally:
             # 客户端断开，从列表中移除
             with _sse_clients_lock:
-                if client_queue in _sse_clients:
-                    _sse_clients.remove(client_queue)
+                if sse_client in _sse_clients:
+                    _sse_clients.remove(sse_client)
     
     return StreamingResponse(
         event_generator(),
@@ -468,66 +448,6 @@ async def scan_first_buy_point():
     except Exception as e:
         logging.exception("扫描一买信号未知异常")
         raise HTTPException(status_code=500, detail="扫描失败，请查看后端日志") from e
-
-
-@app.get("/api/positions")
-async def get_positions():
-    """获取当前所有持仓"""
-    holdings = pm.get_holdings()
-    return {
-        "count": len(holdings),
-        "positions": [
-            {
-                "code": p.code,
-                "name": p.name,
-                "signal_type": p.signal_type,
-                "buy_date": p.buy_date,
-                "buy_price": p.buy_price,
-                "amount": p.amount,
-                "tactical_stop": p.tactical_stop,
-                "strategic_stop": p.strategic_stop,
-            }
-            for p in holdings
-        ],
-    }
-
-
-@app.post("/api/positions/buy")
-async def position_buy(
-    code: str = Query(..., description="股票代码"),
-    name: str = Query("", description="股票名称"),
-    signal_type: str = Query(..., description="信号类型: first_buy 或 second_buy"),
-    price: float = Query(..., description="买入价格"),
-    amount: float = Query(..., description="买入金额（元）"),
-    tactical_stop: float = Query(..., description="战术止损线"),
-    strategic_stop: float = Query(..., description="战略止损线"),
-):
-    """手动记录买入持仓"""
-    position = pm.buy(code, name, signal_type, price, amount, tactical_stop, strategic_stop)
-    return {"ok": True, "position": asdict(position)}
-
-
-@app.post("/api/positions/sell")
-async def position_sell(
-    code: str = Query(..., description="股票代码"),
-    price: float = Query(..., description="卖出价格"),
-    reason: str = Query(..., description="清仓原因"),
-):
-    """手动清仓"""
-    position = pm.sell_all(code, price, reason)
-    if position:
-        return {"ok": True, "position": asdict(position)}
-    return {"ok": False, "message": "该代码没有持仓"}
-
-
-@app.get("/api/positions/history")
-async def get_position_history():
-    """获取所有持仓历史（含已清仓）"""
-    all_positions = pm.get_all_positions()
-    return {
-        "count": len(all_positions),
-        "positions": [asdict(p) for p in all_positions],
-    }
 
 
 @app.get("/api/watchlist")

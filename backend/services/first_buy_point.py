@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from services.indicators import get_index_kline
-from services.position_manager import buy as pm_buy, get_holdings
 
 
 @dataclass
@@ -492,26 +491,6 @@ def detect_first_buy_point(
             f"[{code}] 检测到一买信号: date={signal.date}, "
             f"price={signal.price}, area_ratio={signal.area_ratio:.2f}"
         )
-
-        # 自动记录买入持仓（一买买入 10000 元）
-        try:
-            # 检查是否已有该代码持仓，避免重复买入
-            existing = [p for p in get_holdings() if p.code == code]
-            if not existing:
-                pm_buy(
-                    code=code,
-                    name=name or code,
-                    signal_type="first_buy",
-                    price=float(signal.price),
-                    amount=10000.0,
-                    tactical_stop=float(signal.stop_loss),
-                    strategic_stop=float(signal.stop_loss),
-                )
-                logging.info(f"[{code}] 一买自动买入: 金额=10000元 @ {signal.price}")
-            else:
-                logging.info(f"[{code}] 已有持仓，跳过一买自动买入")
-        except Exception as e:
-            logging.warning(f"[{code}] 一买自动买入记录失败: {e}")
 
         return signal
         

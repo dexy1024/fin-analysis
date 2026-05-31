@@ -302,42 +302,6 @@ export async function runDefenseRadarDiagnosis(refresh = false): Promise<{ ok: b
   return (await resp.json()) as { ok: boolean; path: string }
 }
 
-// ==================== 持仓管理 ====================
-
-export interface Position {
-  code: string
-  name: string
-  signal_type: string
-  buy_date: string
-  buy_price: number
-  amount: number
-  tactical_stop: number
-  strategic_stop: number
-}
-
-export interface PositionsResponse {
-  count: number
-  positions: Position[]
-}
-
-/** 获取当前持仓列表 */
-export async function fetchPositions(): Promise<PositionsResponse> {
-  const resp = await fetchWithRetry(`${API_BASE_URL}/api/positions`, { cache: 'no-store' })
-  if (!resp.ok) {
-    let msg = '持仓请求失败'
-    try {
-      const data = (await resp.json()) as { detail?: string }
-      if (data.detail) {
-        msg = data.detail
-      }
-    } catch {
-      // ignore
-    }
-    throw new Error(msg)
-  }
-  return (await resp.json()) as PositionsResponse
-}
-
 /** 用户持仓/自选列表 */
 export interface WatchlistItem {
   code: string
@@ -345,6 +309,8 @@ export interface WatchlistItem {
   cost?: number
   shares?: number
   note?: string
+  /** 观察列表：破位时不显示 Tab；默认 true（省略等同 true） */
+  hideWhenBroken?: boolean
 }
 
 export interface WatchlistResponse {

@@ -1,9 +1,9 @@
 """
 后台定时任务（北京时间 Asia/Shanghai）：不依赖浏览器。
 独立线程睡眠到下一槽位唤醒执行。
-- 10:31 / 11:31 / 14:01 / 15:01：增量 60m/15m（自本地末根起拉）；破位与买卖信号 JSON；SSE 通知
+- 10:31 / 11:31 / 14:01 / 15:01：增量 60m/15m（仅补未齐标的，慢速多轮）；破位与买卖信号 JSON；SSE 通知
 - 16:01：增量日线 + 60m/15m + 上述
-- 交易时段 15m 独立槽：仅增量 15m
+- 交易时段 15m 独立槽：仅增量 15m（同样慢速稳定模式）
 
 止损、双防线雷达（last_summary.json）改手动；不由此调度自动跑。
 
@@ -31,16 +31,16 @@ from zoneinfo import ZoneInfo
 
 from services.buy_sell_signals import compute_and_save_buy_sell_signals
 from services.defense_radar import DEFENSE_RADAR_WATCHLIST, _load_watchlist_observation_symbols, compute_and_save_broken_symbols
-from services.kline_hs300_incremental_sync import Period, sync_codes_incremental
+from services.kline_hs300_incremental_sync import Period, run_pairs_kline_sync_stable
+from utils.expected_exceptions import SCHEDULER_EXPECTED_EXCEPTIONS as _SCHEDULER_EXPECTED_EXCEPTIONS
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
-# 调度任务中可预期的业务异常（网络、数据、IO问题），捕获后记录日志即可，不应导致调度线程崩溃
-_SCHEDULER_EXPECTED_EXCEPTIONS = (ValueError, OSError, TypeError, KeyError, RuntimeError)
 
-
-# 每标的同步后的间隔，略降频避免新浪 456（增量单次数据量已变小）
-_SYNC_SLEEP_SEC = 1.0
+# 每标的同步后的间隔（防新浪 456；可通过环境变量微调）
+_SYNC_SLEEP_SEC = float(os.environ.get("KLINE_SYNC_SLEEP_SEC", "3.5"))
+_PERIOD_SLEEP_SEC = float(os.environ.get("KLINE_SYNC_PERIOD_SLEEP_SEC", "2.0"))
+_MAX_SYNC_ROUNDS = int(os.environ.get("KLINE_SYNC_MAX_ROUNDS", "3"))
 
 # (hour, minute, include_daily)
 _KLINE_SLOTS: tuple[tuple[int, int, bool], ...] = (
@@ -134,25 +134,29 @@ def _kline_symbol_name_map() -> dict[str, str]:
     return names
 
 
+def _scheduler_pairs() -> list[tuple[str, str]]:
+    names = _kline_symbol_name_map()
+    return [(code, names.get(code, "")) for code in sync_symbol_list_for_kline()]
+
+
 def _sync_periods_incremental(periods: tuple[Period, ...]) -> None:
-    """自本地末根增量拉取并合并写 CSV（与 sync_watchlist_observation / HS300 脚本一致）。"""
-    codes = sync_symbol_list_for_kline()
-    logging.info(
-        "kline_scheduler: 增量同步 %s，标的数=%d，间隔=%.1fs",
-        ",".join(periods),
-        len(codes),
-        _SYNC_SLEEP_SEC,
-    )
+    """仅补未齐标的，多轮重试；慢速拉取提高新浪限流下的成功率。"""
+    pairs = _scheduler_pairs()
     try:
-        sync_codes_incremental(
-            codes,
-            periods,
-            code_to_name=_kline_symbol_name_map(),
+        run_pairs_kline_sync_stable(
+            pairs,
+            periods=periods,
             sleep_sec=_SYNC_SLEEP_SEC,
-            log_label="kline_scheduler",
+            period_sleep_sec=_PERIOD_SLEEP_SEC,
+            max_rounds=_MAX_SYNC_ROUNDS,
+            etf_em_fallback=True,
+            label="kline_scheduler",
         )
     except _SCHEDULER_EXPECTED_EXCEPTIONS:
-        logging.exception("kline_scheduler: 增量同步批次失败")
+        logging.warning("kline_scheduler: 稳定增量同步失败", exc_info=True)
+    except Exception:
+        logging.exception("kline_scheduler: 稳定增量同步未预期异常")
+        raise
 
 
 def run_scheduled_slot(include_daily: bool) -> None:
@@ -169,14 +173,20 @@ def run_scheduled_slot(include_daily: bool) -> None:
         broken_path = compute_and_save_broken_symbols()
         logging.info("kline_scheduler: 破位状态已写入 %s", broken_path)
     except _SCHEDULER_EXPECTED_EXCEPTIONS:
-        logging.exception("kline_scheduler: 破位状态计算失败")
+        logging.warning("kline_scheduler: 破位状态计算失败", exc_info=True)
+    except Exception:
+        logging.exception("kline_scheduler: 破位状态计算未预期异常")
+        raise
 
     # 计算 watchlist + observation 的买卖信号
     try:
         buy_sell_path = compute_and_save_buy_sell_signals()
         logging.info("kline_scheduler: 买卖信号已写入 %s", buy_sell_path)
     except _SCHEDULER_EXPECTED_EXCEPTIONS:
-        logging.exception("kline_scheduler: 买卖信号计算失败")
+        logging.warning("kline_scheduler: 买卖信号计算失败", exc_info=True)
+    except Exception:
+        logging.exception("kline_scheduler: 买卖信号计算未预期异常")
+        raise
 
     # 调度完成后广播 SSE 消息
     try:
@@ -287,7 +297,10 @@ def _scheduler_worker_loop() -> None:
             _slot_execution_count += 1
         logging.info("kline_scheduler: 槽位任务执行完成，继续下一次循环")
     except _SCHEDULER_EXPECTED_EXCEPTIONS:
-        logging.exception("kline_scheduler: 槽位执行失败")
+        logging.warning("kline_scheduler: 槽位执行失败", exc_info=True)
+    except Exception:
+        logging.exception("kline_scheduler: 槽位执行未预期异常")
+        raise
 
 
 def _scheduler_worker() -> None:
@@ -336,7 +349,10 @@ def _check_and_run_missed_slot() -> None:
                 _slot_execution_count += 1
             logging.info("kline_scheduler: 补跑槽位完成")
         except _SCHEDULER_EXPECTED_EXCEPTIONS:
-            logging.exception("kline_scheduler: 补跑槽位失败")
+            logging.warning("kline_scheduler: 补跑槽位失败", exc_info=True)
+        except Exception:
+            logging.exception("kline_scheduler: 补跑槽位未预期异常")
+            raise
     else:
         logging.info("kline_scheduler: 上一个槽位 %s 已过去%.0f秒，无需补跑", last_slot.isoformat(), elapsed)
 

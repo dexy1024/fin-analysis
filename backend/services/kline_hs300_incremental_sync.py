@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as time_of_day
 from pathlib import Path
 from typing import Iterable, Literal, Optional
 
@@ -34,10 +34,95 @@ from services.indicators import (
 )
 from services.kline_minute_sync import sync_minute_kline_to_csv
 from services.trade_command_engine import _load_hs300_symbols
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 Period = Literal["daily", "60", "15"]
 MinutePeriod = Literal["60", "15"]
+
+# 与 kline_scheduler 槽位对齐：槽位触发后对应 60m/15m K 线应已落盘
+_60M_AVAIL_AFTER: tuple[tuple[int, int, int, int], ...] = (
+    (10, 31, 10, 30),
+    (11, 31, 11, 30),
+    (14, 1, 14, 0),
+    (15, 1, 15, 0),
+)
+_15M_AVAIL_AFTER: tuple[tuple[int, int, int, int], ...] = tuple(
+    (
+        trig_h,
+        trig_m,
+        (trig_h * 60 + trig_m - 1) // 60,
+        (trig_h * 60 + trig_m - 1) % 60,
+    )
+    for trig_h, trig_m in (
+        (9, 46),
+        (10, 1),
+        (10, 16),
+        (10, 31),
+        (10, 46),
+        (11, 1),
+        (11, 16),
+        (11, 31),
+        (13, 16),
+        (13, 31),
+        (13, 46),
+        (14, 1),
+        (14, 16),
+        (14, 31),
+        (14, 46),
+        (15, 1),
+    )
+)
+
+
+def _is_hk_symbol(code: str) -> bool:
+    c = code.strip().lower()
+    return c.startswith("hk") or (c.isdigit() and len(c) == 5)
+
+
+def _expected_last_minute_bar(now: datetime, period: MinutePeriod) -> pd.Timestamp | None:
+    """
+    返回当前时刻 A 股/ETF 应已可用的最后一根分钟 K 线时间戳（上海时区）。
+    非交易日或当日首根 60m 尚未到点时返回 None（仍用「末根日期 < target_date」判定）。
+    """
+    if now.weekday() >= 5:
+        return None
+    slots = _60M_AVAIL_AFTER if period == "60" else _15M_AVAIL_AFTER
+    t = now.timetz() if now.tzinfo else now.time()
+    bar_h, bar_m = None, None
+    for avail_h, avail_m, bh, bm in slots:
+        if t >= time_of_day(avail_h, avail_m):
+            bar_h, bar_m = bh, bm
+    if bar_h is None:
+        return None
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ts = day.replace(hour=bar_h, minute=bar_m, second=0, microsecond=0)
+    return pd.Timestamp(ts.replace(tzinfo=None))
+
+
+def _minute_bar_needs_sync(
+    code: str,
+    period: MinutePeriod,
+    target_date: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """分钟 K 是否落后于 target_date 或当日应收的最后一根。"""
+    last = last_bar_timestamp(code, period)
+    if last is None:
+        return True
+    last_date = last.strftime("%Y-%m-%d")
+    if last_date < target_date:
+        return True
+    if last_date > target_date:
+        return False
+    if _is_hk_symbol(code):
+        return False
+    now_sh = now or datetime.now(TZ_SH)
+    expected = _expected_last_minute_bar(now_sh, period)
+    if expected is None or expected.strftime("%Y-%m-%d") < target_date:
+        return False
+    return last < expected
 
 
 def _daily_start_date() -> str:
@@ -52,8 +137,10 @@ def incremental_daily_start_date(code: str) -> str:
         return _daily_start_date()
     try:
         df = pd.read_csv(path, parse_dates=["date"])
-    except Exception:
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         return _daily_start_date()
+    except Exception:
+        raise
     if df.empty or "date" not in df.columns:
         return _daily_start_date()
     req = {"date", "open", "high", "low", "close", "volume"}
@@ -84,8 +171,10 @@ def last_bar_timestamp(symbol: str, period: MinutePeriod) -> Optional[pd.Timesta
         return None
     try:
         df = pd.read_csv(path, parse_dates=["date"])
-    except Exception:
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         return None
+    except Exception:
+        raise
     if df.empty or "date" not in df.columns:
         return None
     req = {"date", "open", "high", "low", "close", "volume"}
@@ -126,8 +215,10 @@ def _last_daily_bar_date(code: str) -> Optional[str]:
         return None
     try:
         df = pd.read_csv(path, parse_dates=["date"])
-    except Exception:
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         return None
+    except Exception:
+        raise
     if df.empty or "date" not in df.columns:
         return None
     last = pd.to_datetime(df["date"]).max()
@@ -187,10 +278,17 @@ class StaleAuditReport:
     need_15: int = 0
 
 
-def _check_symbol_freshness(code: str, name: str, target_date: str) -> SymbolFreshness:
+def _check_symbol_freshness(
+    code: str,
+    name: str,
+    target_date: str,
+    *,
+    now: datetime | None = None,
+) -> SymbolFreshness:
     daily_last = _last_daily_bar_date(code)
     m60_last = _last_minute_bar_date(code, "60")
     m15_last = _last_minute_bar_date(code, "15")
+    now_sh = now or datetime.now(TZ_SH)
     return SymbolFreshness(
         code=code,
         name=name,
@@ -198,8 +296,8 @@ def _check_symbol_freshness(code: str, name: str, target_date: str) -> SymbolFre
         m60_last=m60_last,
         m15_last=m15_last,
         needs_daily=(daily_last or "") < target_date,
-        needs_60=(m60_last or "") < target_date,
-        needs_15=(m15_last or "") < target_date,
+        needs_60=_minute_bar_needs_sync(code, "60", target_date, now=now_sh),
+        needs_15=_minute_bar_needs_sync(code, "15", target_date, now=now_sh),
     )
 
 
@@ -296,6 +394,7 @@ def _sync_symbol(
     periods: Iterable[Period],
     *,
     dry_run: bool,
+    period_sleep_sec: float = 0.0,
 ) -> SymbolSyncResult:
     period_list = tuple(periods)
     daily_start = incremental_daily_start_date(code) if "daily" in period_list else ""
@@ -341,8 +440,10 @@ def _sync_symbol(
                 else:
                     res.rows_15 = n
                     res.touched_15 = True
-        except Exception as exc:  # noqa: BLE001
-            logging.exception("kline_hs300_incremental: %s %s 失败", code, p)
+            if period_sleep_sec > 0 and p != period_list[-1]:
+                time.sleep(period_sleep_sec)
+        except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+            logging.warning("kline_hs300_incremental: %s %s 失败: %s", code, p, exc, exc_info=True)
             msg = f"{type(exc).__name__}: {exc}"
             if p == "daily":
                 res.error_daily = msg
@@ -353,6 +454,9 @@ def _sync_symbol(
             else:
                 res.error_15 = msg
                 res.touched_15 = True
+        except Exception:
+            logging.exception("kline_hs300_incremental: %s %s 未预期异常", code, p)
+            raise
     return res
 
 
@@ -428,6 +532,8 @@ def run_kline_stale_repair(
     label: str = "K线",
     target_date: Optional[str] = None,
     sleep_sec: float = 0.2,
+    period_sleep_sec: float = 0.0,
+    sync_periods: Optional[tuple[Period, ...]] = None,
     limit: Optional[int] = None,
     dry_run: bool = False,
 ) -> tuple[StaleAuditReport, BatchSummary]:
@@ -456,6 +562,8 @@ def run_kline_stale_repair(
 
     for sf in stale_list:
         periods = sf.periods_to_sync
+        if sync_periods is not None:
+            periods = tuple(p for p in periods if p in sync_periods)
         if not periods:
             continue
         if dry_run:
@@ -468,9 +576,13 @@ def run_kline_stale_repair(
                 sf.m60_last or "-",
                 sf.m15_last or "-",
             )
-            summary.results.append(_sync_symbol(sf.code, sf.name, periods, dry_run=True))
+            summary.results.append(
+                _sync_symbol(sf.code, sf.name, periods, dry_run=True, period_sleep_sec=period_sleep_sec)
+            )
         else:
-            r = _sync_symbol(sf.code, sf.name, periods, dry_run=False)
+            r = _sync_symbol(
+                sf.code, sf.name, periods, dry_run=False, period_sleep_sec=period_sleep_sec
+            )
             summary.results.append(r)
             _accumulate_sync_result(summary, r, periods)
         if sleep_sec > 0:
@@ -598,6 +710,179 @@ def run_hs300_kline_sync_until_fresh(
             rounds,
         )
     return report, rounds
+
+
+def _needs_any_for_periods(sf: SymbolFreshness, periods: tuple[Period, ...]) -> bool:
+    if "daily" in periods and sf.needs_daily:
+        return True
+    if "60" in periods and sf.needs_60:
+        return True
+    if "15" in periods and sf.needs_15:
+        return True
+    return False
+
+
+def audit_kline_freshness_for_periods(
+    pairs: list[tuple[str, str]],
+    periods: tuple[Period, ...],
+    target_date: Optional[str] = None,
+) -> StaleAuditReport:
+    """扫描 freshness，但仅按指定周期统计/判定 stale。"""
+    report = audit_kline_freshness(pairs, target_date)
+    stale = [sf for sf in report.stale if _needs_any_for_periods(sf, periods)]
+    need_daily = sum(1 for sf in stale if sf.needs_daily and "daily" in periods)
+    need_60 = sum(1 for sf in stale if sf.needs_60 and "60" in periods)
+    need_15 = sum(1 for sf in stale if sf.needs_15 and "15" in periods)
+    return StaleAuditReport(
+        target_date=report.target_date,
+        total=report.total,
+        fresh=report.total - len(stale),
+        stale=stale,
+        need_daily=need_daily,
+        need_60=need_60,
+        need_15=need_15,
+    )
+
+
+def etf_15m_em_fallback(
+    pairs: list[tuple[str, str]],
+    sleep_sec: float,
+    *,
+    periods: tuple[Period, ...],
+    target_date: Optional[str] = None,
+) -> int:
+    """ETF 15m 新浪仍失败时，东财分段从增量起点补拉。"""
+    from services.index_cache import _is_likely_etf_code
+    from services.kline_15_backfill_em import backfill_etf_15m_em_to_csv
+
+    if "15" not in periods:
+        return 0
+
+    report = audit_kline_freshness_for_periods(pairs, periods, target_date)
+    n = 0
+    for sf in report.stale:
+        if not sf.needs_15 or not _is_likely_etf_code(sf.code):
+            continue
+        start = incremental_start_date(sf.code, "15")
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
+        try:
+            backfill_etf_15m_em_to_csv(
+                sf.code,
+                start[:10],
+                None,
+                chunk_calendar_days=3,
+                sleep_sec=max(0.8, sleep_sec * 0.4),
+            )
+            logging.info("%s ETF 15m 东财增量补拉完成", sf.code)
+            n += 1
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("%s ETF 15m 东财补拉失败", sf.code, exc_info=True)
+        except Exception:
+            logging.exception("%s ETF 15m 东财补拉未预期异常", sf.code)
+            raise
+    return n
+
+
+def run_pairs_kline_sync_stable(
+    pairs: list[tuple[str, str]],
+    *,
+    periods: tuple[Period, ...],
+    sleep_sec: float = 3.5,
+    period_sleep_sec: float = 2.0,
+    max_rounds: int = 3,
+    etf_em_fallback: bool = True,
+    label: str = "kline_sync",
+) -> StaleAuditReport:
+    """
+    稳定模式：仅补未齐标的，多轮重试；放慢节奏降低新浪 456 限流概率。
+    返回最后一轮 audit 结果。
+    """
+    target = datetime.now(TZ_SH).strftime("%Y-%m-%d")
+    period_list = tuple(dict.fromkeys(periods))
+    logging.info(
+        "%s 稳定同步: 标的=%d 周期=%s sleep=%.1fs 周期间隔=%.1fs 最多%d轮",
+        label,
+        len(pairs),
+        ",".join(period_list),
+        sleep_sec,
+        period_sleep_sec,
+        max_rounds,
+    )
+
+    report: StaleAuditReport | None = None
+    for round_i in range(1, max(1, max_rounds) + 1):
+        try:
+            run_kline_stale_repair(
+                pairs,
+                label=label,
+                target_date=target,
+                sleep_sec=sleep_sec,
+                period_sleep_sec=period_sleep_sec,
+                sync_periods=period_list,
+                dry_run=False,
+            )
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("%s 第 %d 轮补跑异常", label, round_i, exc_info=True)
+        except Exception:
+            logging.exception("%s 第 %d 轮补跑未预期异常", label, round_i)
+            raise
+
+        if etf_em_fallback and "15" in period_list:
+            try:
+                etf_15m_em_fallback(pairs, sleep_sec, periods=period_list, target_date=target)
+            except EXPECTED_BUSINESS_EXCEPTIONS:
+                logging.warning("%s ETF 15m 东财 fallback 异常", label, exc_info=True)
+            except Exception:
+                logging.exception("%s ETF 15m 东财 fallback 未预期异常", label)
+                raise
+
+        report = audit_kline_freshness_for_periods(pairs, period_list, target)
+        logging.info(
+            "%s 第 %d 轮: 已齐 %d/%d，仍缺 %d (daily=%d 60m=%d 15m=%d)",
+            label,
+            round_i,
+            report.fresh,
+            report.total,
+            len(report.stale),
+            report.need_daily,
+            report.need_60,
+            report.need_15,
+        )
+        if not report.stale:
+            logging.info("%s 全部标的已齐", label)
+            return report
+
+        if round_i < max_rounds:
+            round_pause = max(sleep_sec * 2.5, 15.0)
+            logging.info(
+                "%s 第 %d 轮仍有 %d 个未齐，%.0fs 后再补跑（防新浪 456 限流）",
+                label,
+                round_i,
+                len(report.stale),
+                round_pause,
+            )
+            time.sleep(round_pause)
+
+    assert report is not None
+    if report.stale:
+        logging.warning(
+            "%s %d 轮后仍有 %d 个标的未齐（可加 sleep 或 max_rounds）",
+            label,
+            max_rounds,
+            len(report.stale),
+        )
+        for sf in report.stale[:15]:
+            logging.warning(
+                "  %s %s 缺 %s | daily=%s 60m=%s 15m=%s",
+                sf.code,
+                sf.name or "-",
+                sf.missing_labels(),
+                sf.daily_last or "-",
+                sf.m60_last or "-",
+                sf.m15_last or "-",
+            )
+    return report
 
 
 def _truncate_err(msg: str, max_len: int = 220) -> str:

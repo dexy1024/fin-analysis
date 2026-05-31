@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-将 backend/data/observation_shenwan_v2.json 申万二级行业跑出与
-logs/snapshots_YYYY_new.csv 同字段的快照，写入 logs/snapshots_shenwan_v2_YYYY.csv。
+基于 shenwan_v2_sector_codes.json 跑出与 logs/snapshots_YYYY_new.csv 同字段的快照，
+写入 logs/snapshots_shenwan_v2_YYYY.csv（缺 60m/15m 时不写入）。
 
 用法（仓库根目录）：
     ./generate_snapshots_shenwan_v2.sh --write
@@ -9,7 +9,8 @@ logs/snapshots_YYYY_new.csv 同字段的快照，写入 logs/snapshots_shenwan_v
 或：
     cd backend && FIN_SNAPSHOT_ALLOW=1 python3 scripts/export_snapshots_shenwan_v2.py
 
-说明：行业指数仅 AKShare 日线可用，无 60m/15m 本地缓存；对应列多为「无信号」/「-」。
+说明：申万行业指数无官方 60m/15m K 线；缺分钟数据时不写入快照（避免误导性默认值）。
+      若需启用，须先同步各行业成分股 60m/15m 并完成等权合成（见 shenwan_sector_kline.py）。
 """
 
 from __future__ import annotations

@@ -26,6 +26,16 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from services.chan_hourly_signals import (
+    _detect_first_buy_point,
+    _detect_first_sell_point,
+    _detect_second_buy_point,
+    _detect_second_sell_point,
+    _detect_third_buy_point,
+    _detect_third_sell_point,
+)
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
@@ -68,21 +78,24 @@ def _load_hs300_symbols() -> List[Tuple[str, str]]:
                 code = str(item["code"]).strip()
                 nm = str(item.get("name", "")).strip()
                 out.append((code, nm))
-    except Exception:  # noqa: BLE001
-        logging.warning("trade_command_engine: 读取 watchlist_hs300.json 失败")
+    except EXPECTED_BUSINESS_EXCEPTIONS:
+        logging.warning("trade_command_engine: 读取 watchlist_hs300.json 失败", exc_info=True)
         return []
+    except Exception:
+        logging.exception("trade_command_engine: 读取 watchlist_hs300.json 未预期异常")
+        raise
     return out
 
 
 def _load_shenwan_v2_symbols() -> List[Tuple[str, str]]:
-    """读取 backend/data/observation_shenwan_v2.json，返回 (sw2_code, 行业名称)。"""
+    """读取 shenwan_v2_sector_codes.json，返回 (sw2_code, 行业名称)。"""
     from services.shenwan_sector_kline import load_shenwan_v2_observation_pairs
 
     return load_shenwan_v2_observation_pairs()
 
 
 # ---------------------------------------------------------------------------
-# 持仓加载（复用 position_manager 逻辑）
+# 持仓加载（watchlist.json 为唯一权威来源）
 # ---------------------------------------------------------------------------
 
 def _load_holding_codes() -> set[str]:
@@ -97,17 +110,19 @@ def _load_holding_codes() -> set[str]:
             for item in data.get("holdings", [])
             if isinstance(item, dict) and item.get("code")
         }
-    except Exception:  # noqa: BLE001
-        logging.warning("trade_command_engine: 读取 watchlist.json 失败")
+    except EXPECTED_BUSINESS_EXCEPTIONS:
+        logging.warning("trade_command_engine: 读取 watchlist.json 失败", exc_info=True)
         return set()
+    except Exception:
+        logging.exception("trade_command_engine: 读取 watchlist.json 未预期异常")
+        raise
 
 
 def _load_holding_amounts() -> Dict[str, int]:
     """
     返回 watchlist 中各标的的持仓金额(元)。
-    金额优先级：positions.json(真实交易记录) > watchlist.json(shares*cost) > 默认 10,000
+    金额来源：watchlist.json(shares*cost) > 默认 10,000
     """
-    # 1. 先拿到 watchlist 中的持仓 code 列表（唯一持仓来源）
     watchlist_path = ROOT_DIR / "backend" / "data" / "watchlist.json"
     holding_amounts: Dict[str, int] = {}
     if not watchlist_path.is_file():
@@ -124,26 +139,12 @@ def _load_holding_amounts() -> Dict[str, int]:
                     holding_amounts[code] = int(float(shares) * float(cost))
                 else:
                     holding_amounts[code] = 10_000  # 默认仓位
-    except Exception:  # noqa: BLE001
-        logging.warning("trade_command_engine: 读取 watchlist.json 失败")
+    except EXPECTED_BUSINESS_EXCEPTIONS:
+        logging.warning("trade_command_engine: 读取 watchlist.json 失败", exc_info=True)
         return {}
-
-    # 2. 用 positions.json 中的真实金额覆盖（如有）
-    positions_file = ROOT_DIR / "data" / "positions.json"
-    if positions_file.is_file():
-        try:
-            with open(positions_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for p in data:
-                if isinstance(p, dict) and p.get("status") == "holding":
-                    code = str(p["code"]).strip()
-                    # 只在 watchlist 中的标才覆盖金额
-                    if code in holding_amounts:
-                        amount = int(float(p.get("amount", 0) or 0))
-                        if amount > 0:
-                            holding_amounts[code] = amount
-        except Exception:  # noqa: BLE001
-            logging.warning("trade_command_engine: 读取 positions.json 金额失败")
+    except Exception:
+        logging.exception("trade_command_engine: 读取 watchlist.json 未预期异常")
+        raise
 
     return holding_amounts
 
@@ -793,29 +794,30 @@ def _compute_market_state(
             h60_close = float(index_h60["data"][-1]["close"])
             if h60_close > 0:
                 latest_close = h60_close
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             pass
+        except Exception:
+            logging.exception("trade_command_engine: 大盘60m收盘价解析未预期异常")
+            raise
     if index_h15 and index_h15.get("data"):
         try:
             h15_close = float(index_h15["data"][-1]["close"])
             if h15_close > 0:
                 latest_close = h15_close
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             pass
+        except Exception:
+            logging.exception("trade_command_engine: 大盘15m收盘价解析未预期异常")
+            raise
 
     result["price"] = latest_close
     result["c_zd"] = daily_czd
     result["a_zd"] = daily_azd
 
-    # 60分钟卖点检测：复用 buy_sell_signals 的一卖/二卖/三卖检测
+    # 60分钟卖点检测：复用 chan_hourly_signals 的一卖/二卖/三卖检测
     h60_sell_triggered = False
     if index_h60 and index_h60.get("data") and index_h60.get("centrals") and index_h60.get("pens_effective"):
         try:
-            from services.buy_sell_signals import (
-                _detect_first_sell_point,
-                _detect_second_sell_point,
-                _detect_third_sell_point,
-            )
             h60_data = index_h60["data"]
             h60_centrals = index_h60["centrals"]
             h60_pens = index_h60["pens_effective"]
@@ -825,23 +827,21 @@ def _compute_market_state(
             second_sell, _ = _detect_second_sell_point(h60_data, h60_pens, h60_fractals)
             third_sell = _detect_third_sell_point(h60_data, h60_centrals, h60_pens, h60_fractals)
             h60_sell_triggered = first_sell or second_sell or third_sell
-        except Exception:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS:
             # 降级为简单笔方向切换检测
             pens_eff = index_h60["pens_effective"]
             if len(pens_eff) >= 2:
                 h60_sell_triggered = (
                     pens_eff[-2]["direction"] == "up" and pens_eff[-1]["direction"] == "down"
                 )
+        except Exception:
+            logging.exception("trade_command_engine: 大盘60m卖点检测未预期异常")
+            raise
 
     # 15分钟卖点检测：与60分钟卖点并列，增加灵敏度
     h15_sell_triggered = False
     if index_h15 and index_h15.get("data") and index_h15.get("centrals") and index_h15.get("pens_effective"):
         try:
-            from services.buy_sell_signals import (
-                _detect_first_sell_point,
-                _detect_second_sell_point,
-                _detect_third_sell_point,
-            )
             h15_data = index_h15["data"]
             h15_centrals = index_h15["centrals"]
             h15_pens = index_h15["pens_effective"]
@@ -851,12 +851,15 @@ def _compute_market_state(
             second_sell, _ = _detect_second_sell_point(h15_data, h15_pens, h15_fractals)
             third_sell = _detect_third_sell_point(h15_data, h15_centrals, h15_pens, h15_fractals)
             h15_sell_triggered = first_sell or second_sell or third_sell
-        except Exception:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS:
             pens_eff = index_h15["pens_effective"]
             if len(pens_eff) >= 2:
                 h15_sell_triggered = (
                     pens_eff[-2]["direction"] == "up" and pens_eff[-1]["direction"] == "down"
                 )
+        except Exception:
+            logging.exception("trade_command_engine: 大盘15m卖点检测未预期异常")
+            raise
 
     # 三级风控判定（带容差）：以 min(A-ZD, C-ZD) 为战略底线，max 为战术防线
     min_zd = min(daily_azd, daily_czd)
@@ -975,74 +978,70 @@ def _classify_symbol_state(
         h60_pens = h60_result.get("pens_effective", [])
         h60_fractals = h60_result.get("fractals", [])
         try:
-            from services.buy_sell_signals import (
-                _detect_first_buy_point,
-                _detect_second_buy_point,
-                _detect_third_buy_point,
-                _detect_first_sell_point,
-                _detect_second_sell_point,
-                _detect_third_sell_point,
+            h60_first_buy, h60_first_buy_info = _detect_first_buy_point(
+                h60_data, h60_centrals, h60_pens, h60_fractals
             )
-        except Exception as e:
-            logging.warning("trade_command_engine: %s 60m买卖点模块导入异常: %s", code, e)
-        else:
-            if _detect_first_buy_point:
-                try:
-                    h60_first_buy, h60_first_buy_info = _detect_first_buy_point(
-                        h60_data, h60_centrals, h60_pens, h60_fractals
-                    )
-                except Exception:
-                    logging.exception("trade_command_engine: %s 一买检测异常", code)
-            if _detect_second_buy_point:
-                try:
-                    h60_second_buy, h60_second_buy_info = _detect_second_buy_point(
-                        h60_data, h60_pens, h60_fractals
-                    )
-                except Exception:
-                    logging.exception("trade_command_engine: %s 二买检测异常", code)
-            if _detect_third_buy_point:
-                try:
-                    h60_third_buy, h60_third_buy_info = _detect_third_buy_point(
-                        h60_data, h60_centrals, h60_pens, h60_fractals
-                    )
-                except Exception:
-                    logging.exception("trade_command_engine: %s 三买检测异常", code)
-            # 卖点检测（含 info，用于后续失效检查）
-            first_sell_info = None
-            second_sell_info = None
-            if _detect_first_sell_point:
-                try:
-                    h60_sell_signals["first_sell"], first_sell_info = _detect_first_sell_point(
-                        h60_data, h60_centrals, h60_pens, h60_fractals
-                    )
-                except Exception:
-                    logging.exception("trade_command_engine: %s 一卖检测异常", code)
-            if _detect_second_sell_point:
-                try:
-                    h60_sell_signals["second_sell"], second_sell_info = _detect_second_sell_point(
-                        h60_data, h60_pens, h60_fractals
-                    )
-                except Exception:
-                    logging.exception("trade_command_engine: %s 二卖检测异常", code)
-            if _detect_third_sell_point:
-                try:
-                    h60_sell_signals["third_sell"] = _detect_third_sell_point(
-                        h60_data, h60_centrals, h60_pens, h60_fractals
-                    )
-                except Exception:
-                    logging.exception("trade_command_engine: %s 三卖检测异常", code)
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("trade_command_engine: %s 一买检测异常", code, exc_info=True)
+        except Exception:
+            logging.exception("trade_command_engine: %s 一买检测未预期异常", code)
+            raise
+        try:
+            h60_second_buy, h60_second_buy_info = _detect_second_buy_point(
+                h60_data, h60_pens, h60_fractals
+            )
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("trade_command_engine: %s 二买检测异常", code, exc_info=True)
+        except Exception:
+            logging.exception("trade_command_engine: %s 二买检测未预期异常", code)
+            raise
+        try:
+            h60_third_buy, h60_third_buy_info = _detect_third_buy_point(
+                h60_data, h60_centrals, h60_pens, h60_fractals
+            )
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("trade_command_engine: %s 三买检测异常", code, exc_info=True)
+        except Exception:
+            logging.exception("trade_command_engine: %s 三买检测未预期异常", code)
+            raise
+        # 卖点检测（含 info，用于后续失效检查）
+        first_sell_info = None
+        second_sell_info = None
+        try:
+            h60_sell_signals["first_sell"], first_sell_info = _detect_first_sell_point(
+                h60_data, h60_centrals, h60_pens, h60_fractals
+            )
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("trade_command_engine: %s 一卖检测异常", code, exc_info=True)
+        except Exception:
+            logging.exception("trade_command_engine: %s 一卖检测未预期异常", code)
+            raise
+        try:
+            h60_sell_signals["second_sell"], second_sell_info = _detect_second_sell_point(
+                h60_data, h60_pens, h60_fractals
+            )
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("trade_command_engine: %s 二卖检测异常", code, exc_info=True)
+        except Exception:
+            logging.exception("trade_command_engine: %s 二卖检测未预期异常", code)
+            raise
+        try:
+            h60_sell_signals["third_sell"] = _detect_third_sell_point(
+                h60_data, h60_centrals, h60_pens, h60_fractals
+            )
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("trade_command_engine: %s 三卖检测异常", code, exc_info=True)
+        except Exception:
+            logging.exception("trade_command_engine: %s 三卖检测未预期异常", code)
+            raise
 
-            # 卖点信号：不做失效过滤，检测到什么信号就记录什么
-            # 客观缠论信号应保持原始检测结果，供CSV和前端一致展示
-
-            # DEBUG: 记录卖点检测结果
-            if h60_sell_signals.get("second_sell"):
-                logging.debug(
-                    "trade_command_engine: %s 二卖检测通过 (一卖=%s, 二卖=%s)",
-                    code,
-                    h60_sell_signals.get("first_sell"),
-                    h60_sell_signals.get("second_sell"),
-                )
+        if h60_sell_signals.get("second_sell"):
+            logging.debug(
+                "trade_command_engine: %s 二卖检测通过 (一卖=%s, 二卖=%s)",
+                code,
+                h60_sell_signals.get("first_sell"),
+                h60_sell_signals.get("second_sell"),
+            )
 
     # 15分钟分析
     h15_bottom_div = False
@@ -1688,8 +1687,11 @@ def _run_trade_command_engine_core(
             period="daily",
             refresh=False,
         )
-    except Exception as e:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
         logging.warning("trade_command_engine: 大盘日线拉取失败: %s", e)
+    except Exception:
+        logging.exception("trade_command_engine: 大盘日线拉取未预期异常")
+        raise
 
     try:
         index_h60 = get_index_kline(
@@ -1699,8 +1701,11 @@ def _run_trade_command_engine_core(
             period="60",
             refresh=False,
         )
-    except Exception as e:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
         logging.warning("trade_command_engine: 大盘60m拉取失败: %s", e)
+    except Exception:
+        logging.exception("trade_command_engine: 大盘60m拉取未预期异常")
+        raise
 
     try:
         index_h15 = get_index_kline(
@@ -1710,8 +1715,11 @@ def _run_trade_command_engine_core(
             period="15",
             refresh=False,
         )
-    except Exception as e:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
         logging.warning("trade_command_engine: 大盘15m拉取失败: %s", e)
+    except Exception:
+        logging.exception("trade_command_engine: 大盘15m拉取未预期异常")
+        raise
 
     market_info = _compute_market_state(index_daily, index_h60, index_h15)
     market_state = market_info["state"]
@@ -1739,9 +1747,12 @@ def _run_trade_command_engine_core(
                     period="daily",
                     refresh=False,  # 只读本地，不重新获取
                 )
-            except Exception as e:  # noqa: BLE001
+            except EXPECTED_BUSINESS_EXCEPTIONS as e:
                 logging.warning("trade_command_engine: 日线读取失败 %s: %s", code, e)
                 daily_result = None
+            except Exception:
+                logging.exception("trade_command_engine: 日线读取未预期异常 %s", code)
+                raise
 
             try:
                 h60_result = get_index_kline(
@@ -1751,9 +1762,12 @@ def _run_trade_command_engine_core(
                     period="60",
                     refresh=False,  # 只读本地，不重新获取
                 )
-            except Exception as e:  # noqa: BLE001
+            except EXPECTED_BUSINESS_EXCEPTIONS as e:
                 logging.warning("trade_command_engine: 60m读取失败 %s: %s", code, e)
                 h60_result = None
+            except Exception:
+                logging.exception("trade_command_engine: 60m读取未预期异常 %s", code)
+                raise
 
             try:
                 h15_result = get_index_kline(
@@ -1763,9 +1777,12 @@ def _run_trade_command_engine_core(
                     period="15",
                     refresh=False,  # 只读本地，不重新获取
                 )
-            except Exception as e:  # noqa: BLE001
+            except EXPECTED_BUSINESS_EXCEPTIONS as e:
                 logging.warning("trade_command_engine: 15m读取失败 %s: %s", code, e)
                 h15_result = None
+            except Exception:
+                logging.exception("trade_command_engine: 15m读取未预期异常 %s", code)
+                raise
 
         # 终极状态机判定（单标异常不中断全量报告）
         try:
@@ -1806,16 +1823,22 @@ def _run_trade_command_engine_core(
                         )
                         for line in td.get("trace") or []:
                             logging.info("h15背驰 %s | %s", code, line)
-                    except Exception:
+                    except EXPECTED_BUSINESS_EXCEPTIONS:
                         logging.debug("h15背驰 trace 失败 %s", code, exc_info=True)
+                    except Exception:
+                        logging.exception("h15背驰 trace 未预期异常 %s", code)
+                        raise
             except SnapshotCsvHeaderConflictError:
                 logging.error(
                     "trade_command_engine: 快照 CSV 表头与程序不一致，已中止本批次（未再写入后续标的）。标的=%s",
                     code,
                 )
                 raise
-            except Exception:
+            except EXPECTED_BUSINESS_EXCEPTIONS:
                 logging.warning("trade_command_engine: CSV快照写入失败 %s", code, exc_info=True)
+            except Exception:
+                logging.exception("trade_command_engine: CSV快照写入未预期异常 %s", code)
+                raise
 
             if collect_report_records:
                 radar = _build_radar_checklist(analysis)
@@ -1829,8 +1852,11 @@ def _run_trade_command_engine_core(
                     "command": command,
                     "current_holding": current_holding,
                 })
-        except Exception as e:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS as e:
             logging.warning("trade_command_engine: 标的 %s 分析失败: %s", code, e)
+        except Exception:
+            logging.exception("trade_command_engine: 标的 %s 分析未预期异常", code)
+            raise
 
     # 按状态优先级排序：SELL > BUY_2 > BUY_3 > BUY_1 > HOLD > IGNORE
     priority = {"SELL": 0, "BUY_2": 1, "BUY_3": 2, "BUY_1": 3, "HOLD": 4, "IGNORE": 5}
@@ -1949,24 +1975,64 @@ def _fetch_shenwan_v2_sector_klines(
     daily = h60 = h15 = None
     try:
         daily = get_sw_sector_kline(code, name, start_date=daily_start, period="daily")
-    except Exception as e:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
         logging.warning("trade_command_engine: 申万行业日线失败 %s (%s): %s", name, code, e)
+    except Exception:
+        logging.exception("trade_command_engine: 申万行业日线未预期异常 %s (%s)", name, code)
+        raise
     try:
         h60 = get_sw_sector_kline(code, name, start_date=h60_start, period="60")
-    except Exception as e:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
         logging.warning("trade_command_engine: 申万行业60m失败 %s (%s): %s", name, code, e)
+    except Exception:
+        logging.exception("trade_command_engine: 申万行业60m未预期异常 %s (%s)", name, code)
+        raise
     try:
         h15 = get_sw_sector_kline(code, name, start_date=h15_start, period="15")
-    except Exception as e:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
         logging.warning("trade_command_engine: 申万行业15m失败 %s (%s): %s", name, code, e)
+    except Exception:
+        logging.exception("trade_command_engine: 申万行业15m未预期异常 %s (%s)", name, code)
+        raise
     return daily, h60, h15
+
+
+def _shenwan_v2_minute_kline_ready(
+    code: str,
+    name: str,
+    *,
+    h60_start: str,
+    h15_start: str,
+) -> tuple[bool, str]:
+    """
+    申万行业无官方 60m/15m 指数；仅当本地已有成分股合成的分钟 K 线时才可跑缠论快照。
+    缺数据时返回 (False, 原因)，避免用日线硬填导致 60m笔方向等列出现误导默认值。
+    """
+    from services.shenwan_sector_kline import get_sw_sector_kline
+
+    missing: list[str] = []
+    for period, start in (("60", h60_start), ("15", h15_start)):
+        try:
+            payload = get_sw_sector_kline(code, name, start_date=start, period=period, refresh=False)
+        except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+            missing.append(f"{period}m({exc})")
+            continue
+        except Exception:
+            logging.exception("trade_command_engine: 申万行业 %sm 读取未预期异常 %s (%s)", period, name, code)
+            raise
+        if not payload or not payload.get("data"):
+            missing.append(f"{period}m(无数据)")
+    if missing:
+        return False, "；".join(missing)
+    return True, ""
 
 
 def export_shenwan_v2_snapshots_to_csv() -> Optional[Path]:
     """
-    按与 logs/snapshots_YYYY_new.csv 相同的 build_snapshot_data 逻辑，
-    将 observation_shenwan_v2.json 行业列表写入 logs/snapshots_shenwan_v2_YYYY.csv。
-    行业指数仅日线可用，60m/15m 相关列为空或默认值。
+    将 shenwan_v2_sector_codes.json 行业列表写入 logs/snapshots_shenwan_v2_YYYY.csv。
+
+    申万二级行业指数仅有官方日线，无 60m/15m 指数 K 线；缠论快照依赖分钟结构，
+    缺分钟数据时不写入（见 _shenwan_v2_minute_kline_ready）。
     """
     from utils.csv_logger import _get_shenwan_v2_csv_path, log_snapshot_shenwan_v2
     from utils.snapshot_run_audit import assert_snapshot_write_allowed, log_snapshot_engine_run
@@ -1975,7 +2041,23 @@ def export_shenwan_v2_snapshots_to_csv() -> Optional[Path]:
     symbols = _load_shenwan_v2_symbols()
     log_snapshot_engine_run("shenwan_v2", False, len(symbols))
     if not symbols:
-        logging.warning("trade_command_engine: observation_shenwan_v2.json 为空或未找到，跳过")
+        logging.warning("trade_command_engine: shenwan_v2_sector_codes.json 为空或未找到，跳过")
+        return None
+
+    h60_start = _h60_start_date()
+    h15_start = _h15_start_date()
+    probe_code, probe_name = symbols[0]
+    ready, reason = _shenwan_v2_minute_kline_ready(
+        probe_code, probe_name, h60_start=h60_start, h15_start=h15_start
+    )
+    if not ready:
+        msg = (
+            "申万行业缠论快照已跳过：无可用 60m/15m 分钟 K 线（申万指数无官方分钟线，"
+            "需先同步成分股分钟线并完成等权合成）。"
+            f" 探针 {probe_name}({probe_code}): {reason}"
+        )
+        logging.error("trade_command_engine: %s", msg)
+        print(f"[SHENWAN_V2] {msg}")
         return None
 
     timestamp = datetime.now()

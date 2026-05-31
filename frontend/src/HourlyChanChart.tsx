@@ -150,23 +150,6 @@ function buildHourlyTooltip(
   )
 }
 
-export interface HourlyBuyConditions {
-  /** 条件1：现价在一级或极限防线 ±1% 带内 */
-  radarZoneOk: boolean
-  /** 条件2：60m 有效笔末笔向下 */
-  pen60mDown: boolean
-  /** 条件3：MACD 绿柱面积较上一跌段缩小 */
-  macdMomentumOk: boolean
-  /** 条件4：合并后末三 K 严格底分型 */
-  blueTriangleStrict: boolean
-  /** 条件5：60m 现价在 C 中枢内（ZD～ZG） */
-  inCCentral: boolean
-  /** 条件6：60m 底背驰点落在当前向上笔内 */
-  hasBottomDivInSwitch: boolean
-  /** 条件7：60m BOLL 站回中轨 */
-  bollBuy: boolean
-}
-
 /** 用户持仓信息（从 watchlist.json 读取） */
 export interface HoldingInfo {
   code: string
@@ -182,7 +165,6 @@ export function HourlyChanChart({
   dailyAZd,
   dailyCZd,
   dailyMacd,
-  buyConditions,
   holdingInfo,
 }: {
   data: IndexKlineResponse
@@ -193,8 +175,6 @@ export function HourlyChanChart({
   dailyCZd: number | null
   /** 日线最后一根K线MACD（用于卖点防卖飞过滤） */
   dailyMacd?: { macd: number }
-  /** 60分钟买点7条件（后端定时计算） */
-  buyConditions?: HourlyBuyConditions
   /** 用户持仓信息（可选） */
   holdingInfo?: HoldingInfo
 }) {
@@ -250,11 +230,14 @@ export function HourlyChanChart({
 
   const pensEff = indexKline.pens_effective ?? []
   const lastPen = pensEff.length > 0 ? pensEff[pensEff.length - 1] : null
+  const lastPenIsUp = lastPen?.direction === 'up'
   const penDirLabel = lastPen
-    ? lastPen.direction === 'up'
+    ? lastPenIsUp
       ? '向上'
       : '向下'
     : '—'
+  const penDirDisplay = lastPen ? (lastPenIsUp ? '一笔上' : '一笔下') : '—'
+  const penDirColor = lastPen ? (lastPenIsUp ? '#22c55e' : '#ef4444') : undefined
 
   const dates = indexKline.data.map((p) => p.date)
   const difSeries = indexKline.data.map((p) =>
@@ -494,26 +477,16 @@ export function HourlyChanChart({
     thirdBuyPoint?.hasSignal &&
     secondBuyPoint.date === thirdBuyPoint.date
 
-  // 优先使用后端定时计算的7个条件
-  const buyConditionChecklist = buyConditions
-    ? [
-        { label: '【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)', ok: buyConditions.radarZoneOk },
-        { label: '【60m】现价在 C 中枢内（ZD～ZG）', ok: buyConditions.inCCentral },
-        { label: '【60m】有效笔：前一下笔、当前上笔', ok: buyConditions.pen60mDown },
-        { label: '【60m】当前向上笔内有底分型', ok: buyConditions.blueTriangleStrict },
-        { label: '【60m】底背驰点落在当前向上笔内', ok: buyConditions.hasBottomDivInSwitch },
-        { label: '【60m】MACD 转强', ok: buyConditions.macdMomentumOk },
-        { label: '【60m】BOLL 站回中轨', ok: buyConditions.bollBuy },
-      ]
-    : [
-        { label: '【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)', ok: flags.keepDailySupport },
-        { label: '【60m】现价在 C 中枢内（ZD～ZG）', ok: flags.inCCentral },
-        { label: '【60m】有效笔：前一下笔、当前上笔', ok: flags.switchedDownToUp },
-        { label: '【60m】当前向上笔内有底分型', ok: flags.hasBottomFractalInSwitch },
-        { label: '【60m】底背驰点落在当前向上笔内', ok: flags.hasBottomDivInSwitch },
-        { label: '【60m】MACD 转强', ok: flags.macdBuy },
-        { label: '【60m】BOLL 站回中轨', ok: flags.bollBuy },
-      ]
+  // 与当前 K 线同步：由 computeHourlyBuySellState 实时计算，不依赖后端雷达缓存
+  const buyConditionChecklist = [
+    { label: '【日线】未跌破绝对防线 MIN(C-ZD, A-ZD)', ok: flags.keepDailySupport },
+    { label: '【60m】现价在 C 中枢内（ZD～ZG）', ok: flags.inCCentral },
+    { label: '【60m】有效笔：前一下笔、当前上笔', ok: flags.switchedDownToUp },
+    { label: '【60m】当前向上笔内有底分型', ok: flags.hasBottomFractalInSwitch },
+    { label: '【60m】底背驰点落在当前向上笔内', ok: flags.hasBottomDivInSwitch },
+    { label: '【60m】MACD 转强', ok: flags.macdBuy },
+    { label: '【60m】BOLL 站回中轨', ok: flags.bollBuy },
+  ]
 
   const priceYExtent = mainChartYExtent(indexKline.data, [
     ...centrals.flatMap((c) => [Number(c.zd), Number(c.zg)]),
@@ -1505,6 +1478,17 @@ export function HourlyChanChart({
                   {lastDate}
                 </span>
               </div>
+              {lastPen && (
+                <div className="central-compare-row" style={{ marginTop: '0.75rem' }}>
+                  <span className="central-compare-label">当前笔（15min）</span>
+                  <span
+                    className="central-compare-ref"
+                    style={{ color: penDirColor, fontWeight: 600 }}
+                  >
+                    {penDirDisplay}
+                  </span>
+                </div>
+              )}
               <div className="central-compare-row central-compare-row--spaced" style={{ marginTop: '12px' }}>
                 <span className="central-compare-label">日线 C-ZD</span>
                 <span className="central-compare-ref">

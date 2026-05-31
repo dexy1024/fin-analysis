@@ -3,6 +3,8 @@
 
 与 get_index_kline(period=60|15) 解耦——后者只读本地 CSV 并计算指标/缠论。
 调度器、kline_scheduler、手动脚本及 API ?refresh=true 时应调用本模块，而非在消费侧拉网。
+
+日线不在此刷新：由 kline_scheduler 16:01 槽位（include_daily）及增量同步中的 daily 周期统一处理。
 """
 
 from __future__ import annotations
@@ -22,12 +24,12 @@ from services.indicators import (
     _fetch_hk_min_from_akshare,
     _fetch_hk_min_from_yfinance,
     _meihua2test_extend_end_ts_if_demo,
-    _refresh_daily_cache_for_kline_symbol,
     _save_kline_15_cache,
     _save_kline_60_cache,
     _split_kline_symbol,
     _to_sina_symbol,
 )
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 PeriodMinute = Literal["60", "15"]
 
@@ -43,22 +45,31 @@ def _fetch_hk_minute_raw(
     if period == "60":
         try:
             return _fetch_hk_60m_from_akshare(api_sym, start_ts, end_ts)
-        except Exception:
-            logging.exception("kline_minute_sync: 港股 60m AKShare 失败，尝试 15m 聚合 %s", api_sym)
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("kline_minute_sync: 港股 60m AKShare 失败，尝试 15m 聚合 %s", api_sym, exc_info=True)
             time.sleep(_HK_FETCH_GAP_SEC)
             try:
                 raw15 = _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
                 return _aggregate_hk_15m_to_60m(raw15)
-            except Exception:
-                logging.exception("kline_minute_sync: 港股 60m 15m 聚合失败，回退 yfinance %s", api_sym)
+            except EXPECTED_BUSINESS_EXCEPTIONS:
+                logging.warning("kline_minute_sync: 港股 60m 15m 聚合失败，回退 yfinance %s", api_sym, exc_info=True)
                 time.sleep(_HK_FETCH_GAP_SEC)
                 return _fetch_hk_60m_from_yfinance(api_sym, start_ts, end_ts)
+            except Exception:
+                logging.exception("kline_minute_sync: 港股 60m 15m 聚合未预期异常 %s", api_sym)
+                raise
+        except Exception:
+            logging.exception("kline_minute_sync: 港股 60m AKShare 未预期异常 %s", api_sym)
+            raise
     try:
         return _fetch_hk_min_from_akshare(api_sym, start_ts, end_ts, period="15")
-    except Exception:
-        logging.exception("kline_minute_sync: 港股 15m AKShare 失败，回退 yfinance %s", api_sym)
+    except EXPECTED_BUSINESS_EXCEPTIONS:
+        logging.warning("kline_minute_sync: 港股 15m AKShare 失败，回退 yfinance %s", api_sym, exc_info=True)
         time.sleep(_HK_FETCH_GAP_SEC)
         return _fetch_hk_min_from_yfinance(api_sym, start_ts, end_ts, interval="15m")
+    except Exception:
+        logging.exception("kline_minute_sync: 港股 15m AKShare 未预期异常 %s", api_sym)
+        raise
 
 
 def _minute_range_ts(symbol: str, start_date: str, end_date: str | None, period: PeriodMinute) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -107,11 +118,6 @@ def sync_minute_kline_to_csv(
     sym = symbol.strip()
     start_ts, end_ts = _minute_range_ts(sym, start_date, end_date, period)
     api_sym, src = _split_kline_symbol(sym)
-
-    try:
-        _refresh_daily_cache_for_kline_symbol(sym)
-    except Exception:
-        logging.exception("kline_minute_sync: 顺带刷新日线失败 %s", sym)
 
     if period == "60":
         if src in ("a_share", "index"):

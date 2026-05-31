@@ -26,8 +26,13 @@ from typing import Any
 import pandas as pd
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _SCRIPT_DIR.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS  # noqa: E402
 
 from shenwan_v2_sector_analysis import (  # noqa: E402
     RESULT_CSV as ANALYSIS_CSV,
@@ -43,8 +48,8 @@ from shenwan_v2_volume_price_signals import (  # noqa: E402
     fetch_sector_ohlc_amount,
 )
 
-RESULT_CSV = "shenwan_v2_trend_sectors.csv"
-ACTIONABLE_CSV = "shenwan_v2_actionable_sectors.csv"
+RESULT_CSV = "06_shenwan_v2_trend_sectors.csv"
+ACTIONABLE_CSV = "07_shenwan_v2_actionable_sectors.csv"
 
 TIER_CORE = "核心"
 TIER_MAIN = "主线"
@@ -259,8 +264,11 @@ def _fetch_revival_flags(
         try:
             df = fetch_sector_ohlc_amount(sw)
             out[code] = _check_b_revival(df)
+        except EXPECTED_BUSINESS_EXCEPTIONS:
+            logging.warning("复活检测失败 %s", code, exc_info=True)
         except Exception:
-            logging.exception("复活检测失败 %s", code)
+            logging.exception("复活检测未预期异常 %s", code)
+            raise
         time.sleep(0.15)
     return out
 
@@ -538,14 +546,23 @@ def run_trend_sectors(
     volume = _load_csv(volume_path, "量价信号")
     crowding = _load_csv(crowding_path, "拥挤度")
 
-    dates = {
-        str(analysis["数据日期"].iloc[0]),
-        str(volume["数据日期"].iloc[0]),
-        str(crowding["数据日期"].iloc[0]),
-    }
+    if analysis.empty:
+        raise RuntimeError(f"量化打标结果为空：{analysis_path}")
+    if crowding.empty:
+        raise RuntimeError(f"拥挤度结果为空：{crowding_path}")
+
+    data_date = str(analysis["数据日期"].iloc[0])
+    dates = {data_date, str(crowding["数据日期"].iloc[0])}
+    if not volume.empty:
+        dates.add(str(volume["数据日期"].iloc[0]))
+    else:
+        logging.warning(
+            "量价信号结果为空（当日无行业同时满足 120 日新高+放量+MA20 向上），"
+            "趋势合并将跳过量价三重，数据日期沿用量化打标 %s",
+            data_date,
+        )
     if len(dates) > 1:
         logging.warning("三表数据日期不一致：%s", ", ".join(sorted(dates)))
-    data_date = str(analysis["数据日期"].iloc[0])
 
     analysis_by_code = analysis.set_index("行业代码").to_dict("index")
     volume_codes = set(volume["行业代码"].astype(str))
@@ -781,9 +798,12 @@ def main() -> None:
             min_capacity=args.min_capacity,
             max_actionable=max(1, args.max_actionable),
         )
-    except Exception as exc:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
         logging.error("执行失败：%s", exc)
         sys.exit(1)
+    except Exception:
+        logging.exception("执行未预期异常")
+        raise
 
     print(f"结果文件：{path}")
 

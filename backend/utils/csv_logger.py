@@ -665,19 +665,66 @@ def _h15_signal(h15_result: Optional[Dict[str, Any]]) -> str:
     return _h15_signal_detail(h15_result).get("signal", "无信号")
 
 
-# 区间价格对齐：相对容差（|Δ|/|基准价|），默认千分之五；基准价过小时回退绝对差，避免除零或毛刺
+# 区间价格对齐：优先 15m ATR 动态容差；K 线不足时回退相对千分之五；基准价过小时回退绝对差
+_PRICE_ALIGN_ATR_PERIOD = 14
+_PRICE_ALIGN_ATR_MULTIPLIER = 0.6
 _PRICE_ALIGN_REL_FRACTION = 0.005
 _PRICE_ALIGN_ABS_FALLBACK = 0.01
 _REF_ABS_FLOOR = 1e-6
 
 
-def _price_interval_aligned(abs_diff: float, ref_level: float) -> bool:
+def _calculate_atr_15m(
+    h15_result: Optional[Dict[str, Any]],
+    period: int = _PRICE_ALIGN_ATR_PERIOD,
+) -> Optional[float]:
     """
-    True：|abs_diff| / |ref_level| <= 千分之五（0.005）；若 |ref_level| 过小则改用 |abs_diff| <= 0.01。
+    从 15m K 线（high/low/close）计算最新 ATR（TR 的 EMA，span=period）。
+    数据不足 period+1 根时返回 None，由调用方回退固定千分之五逻辑。
+    """
+    if not h15_result:
+        return None
+    data = h15_result.get("data") or []
+    if len(data) < period + 1:
+        return None
+    try:
+        highs = [float(b["high"]) for b in data]
+        lows = [float(b["low"]) for b in data]
+        closes = [float(b["close"]) for b in data]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    trs: list[float] = []
+    for i in range(len(data)):
+        h_l = highs[i] - lows[i]
+        if i == 0:
+            trs.append(h_l)
+        else:
+            h_pc = abs(highs[i] - closes[i - 1])
+            l_pc = abs(lows[i] - closes[i - 1])
+            trs.append(max(h_l, h_pc, l_pc))
+
+    alpha = 2.0 / (period + 1)
+    atr = trs[0]
+    for tr in trs[1:]:
+        atr = alpha * tr + (1.0 - alpha) * atr
+    return atr if atr > 0 else None
+
+
+def _price_interval_aligned(
+    abs_diff: float,
+    ref_level: float,
+    *,
+    atr_15m: Optional[float] = None,
+) -> bool:
+    """
+    True：|abs_diff| <= 0.6 * atr_15m（有足量 15m K 线时）；
+    否则 |abs_diff| / |ref_level| <= 千分之五；若 |ref_level| 过小则 |abs_diff| <= 0.01。
     """
     try:
-        r = abs(float(ref_level))
         d = abs(float(abs_diff))
+        if atr_15m is not None and atr_15m > 0:
+            return d <= _PRICE_ALIGN_ATR_MULTIPLIER * float(atr_15m)
+        r = abs(float(ref_level))
         if r < _REF_ABS_FLOOR:
             return d <= _PRICE_ALIGN_ABS_FALLBACK
         return d / r <= _PRICE_ALIGN_REL_FRACTION
@@ -708,10 +755,20 @@ def _price_alignment_with_trace(
     if h15_detail is None:
         h15_detail = _h15_signal_detail(h15_result)
     h15_extreme_price = h15_detail.get("extreme_price")
+    atr_15m = _calculate_atr_15m(h15_result)
     tr(
         f"h15_detail.signal={h15_detail.get('signal')!r} extreme_price={h15_extreme_price!r} "
         f"输入h15_sig={h15_sig!r} pen_dir={pen_dir!r}"
     )
+    if atr_15m is not None:
+        tr(
+            f"15m ATR({_PRICE_ALIGN_ATR_PERIOD})={atr_15m:.6g} "
+            f"动态阈值={_PRICE_ALIGN_ATR_MULTIPLIER}*ATR={_PRICE_ALIGN_ATR_MULTIPLIER * atr_15m:.6g}"
+        )
+    else:
+        tr(
+            f"15m ATR 不可用(K<{_PRICE_ALIGN_ATR_PERIOD + 1}) → 回退相对千分之五"
+        )
 
     if h15_sig == "底背驰":
         if pen_dir != "向下":
@@ -727,13 +784,19 @@ def _price_alignment_with_trace(
         diff = float(h15_extreme_price) - float(m60_low)
         ad = abs(diff)
         r = abs(float(m60_low))
-        use_fb = r < _REF_ABS_FLOOR
-        ok = _price_interval_aligned(diff, m60_low)
+        use_fb = r < _REF_ABS_FLOOR and atr_15m is None
+        ok = _price_interval_aligned(diff, m60_low, atr_15m=atr_15m)
         tr(
             f"底背驰对齐: 15m低价={float(h15_extreme_price):.6g} 60m向下笔低价={float(m60_low):.6g} "
             f"|diff|={ad:.6g}"
         )
-        if use_fb:
+        if atr_15m is not None:
+            thresh = _PRICE_ALIGN_ATR_MULTIPLIER * atr_15m
+            tr(
+                f"规则=ATR动态 |diff|<={thresh:.6g} ({_PRICE_ALIGN_ATR_MULTIPLIER}*ATR) "
+                f"→ {'是' if ok else '否'}"
+            )
+        elif use_fb:
             tr(f"规则=|60m|<eps 回退 |diff|<={_PRICE_ALIGN_ABS_FALLBACK} → {'是' if ok else '否'}")
         else:
             ratio = ad / r if r else 0.0
@@ -754,13 +817,19 @@ def _price_alignment_with_trace(
         diff = float(h15_extreme_price) - float(m60_high)
         ad = abs(diff)
         r = abs(float(m60_high))
-        use_fb = r < _REF_ABS_FLOOR
-        ok = _price_interval_aligned(diff, m60_high)
+        use_fb = r < _REF_ABS_FLOOR and atr_15m is None
+        ok = _price_interval_aligned(diff, m60_high, atr_15m=atr_15m)
         tr(
             f"顶背驰对齐: 15m高价={float(h15_extreme_price):.6g} 60m向上笔高价={float(m60_high):.6g} "
             f"|diff|={ad:.6g}"
         )
-        if use_fb:
+        if atr_15m is not None:
+            thresh = _PRICE_ALIGN_ATR_MULTIPLIER * atr_15m
+            tr(
+                f"规则=ATR动态 |diff|<={thresh:.6g} ({_PRICE_ALIGN_ATR_MULTIPLIER}*ATR) "
+                f"→ {'是' if ok else '否'}"
+            )
+        elif use_fb:
             tr(f"规则=|60m|<eps 回退 |diff|<={_PRICE_ALIGN_ABS_FALLBACK} → {'是' if ok else '否'}")
         else:
             ratio = ad / r if r else 0.0

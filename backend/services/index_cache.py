@@ -12,6 +12,8 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
+
 # backend/services -> backend/data
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -46,10 +48,12 @@ def _with_retry(fetch_fn, *, retries: int = 3, sleep_sec: float = 0.7):
     for i in range(retries):
         try:
             return fetch_fn()
-        except Exception as exc:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS as exc:
             last_exc = exc
             if i < retries - 1:
                 time.sleep(sleep_sec * (i + 1))
+        except Exception:
+            raise
     assert last_exc is not None
     raise last_exc
 
@@ -138,9 +142,11 @@ def sync_a_share_daily_cache_merged(code: str) -> pd.DataFrame:
     try:
         local = pd.read_csv(path, parse_dates=["date"])
         local["date"] = pd.to_datetime(local["date"]).dt.normalize()
-    except Exception:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS:
         raw.to_csv(path, index=False)
         return raw
+    except Exception:
+        raise
     merged = pd.concat([local, raw], ignore_index=True)
     merged = merged.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
     anchor_ts = pd.to_datetime(INDEX_DAILY_ANCHOR).normalize()

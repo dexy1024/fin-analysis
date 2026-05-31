@@ -7,7 +7,8 @@
        保存为 shenwan_v2_sectors.json（含 sector_code / sector_name / stocks）。
 
 步骤二：读取 JSON，用新浪 getKLineData 拉取 sh000300 及各行业日 K，
-       计算相对强度与均线多头打标，输出 shenwan_v2_analysis_result.csv。
+       计算相对强度与均线多头打标，输出 01_shenwan_v2_analysis_result.csv（当日快照，仅是否综合满足=1），
+       并追加 logs/02_shenwan_v2_analysis_history.csv（按数据日期 upsert 的长表，仅是否综合满足=1）。
 
 说明：新浪 getKLineData 对 sw2_* 板块指数通常返回 null；脚本会先尝试新浪
       （含 801 代码变体），再回退申万宏源官方指数 trend 接口（与 akshare 同源）。
@@ -36,6 +37,13 @@ warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 import akshare as ak
 import pandas as pd
 import requests
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _SCRIPT_DIR.parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 SINA_HQ_NODES_URL = (
     "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
@@ -67,7 +75,55 @@ RETURN_WINDOW = 20
 KLINE_FETCH_LEN = 120
 
 SECTORS_JSON = "shenwan_v2_sectors.json"
-RESULT_CSV = "shenwan_v2_analysis_result.csv"
+SECTOR_CODES_JSON = "shenwan_v2_sector_codes.json"
+RESULT_CSV = "01_shenwan_v2_analysis_result.csv"
+RESULT_HISTORY_CSV = "logs/02_shenwan_v2_analysis_history.csv"
+HISTORY_DATE_COL = "数据日期"
+HISTORY_KEY_COLS = (HISTORY_DATE_COL, "行业代码")
+
+ANALYSIS_RESULT_COLUMNS = (
+    HISTORY_DATE_COL,
+    "行业代码",
+    "行业名称",
+    "近20日涨幅",
+    "超额收益率",
+    "是否跑赢大盘",
+    "是否均线多头",
+    "是否综合满足",
+)
+
+
+def _reorder_date_column_first(df: pd.DataFrame, date_col: str = HISTORY_DATE_COL) -> pd.DataFrame:
+    """将数据日期列置于表头最前，其余列保持原顺序。"""
+    if date_col not in df.columns:
+        return df
+    rest = [c for c in df.columns if c != date_col]
+    return df[[date_col, *rest]]
+
+
+def warn_if_sector_data_lags(
+    benchmark: pd.DataFrame,
+    result_df: pd.DataFrame,
+    *,
+    label: str = "量化打标",
+) -> None:
+    """行业指数源常晚于沪深300更新；数据日期落后时长表只会 upsert 同日，不会追加新日。"""
+    if result_df.empty or HISTORY_DATE_COL not in result_df.columns:
+        return
+    bench_last = pd.to_datetime(benchmark["date"].iloc[-1]).strftime("%Y-%m-%d")
+    sector_last = str(result_df[HISTORY_DATE_COL].max())
+    if sector_last >= bench_last:
+        return
+    logging.warning(
+        "%s：行业指数 K 线最新仅至 %s（沪深300 已至 %s）。"
+        "长表按「数据日期 + 行业代码」upsert——同日重跑覆盖旧行，不会追加 %s。"
+        "请待申万指数源更新后重跑。",
+        label,
+        sector_last,
+        bench_last,
+        bench_last,
+    )
+
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -78,15 +134,77 @@ DEFAULT_HEADERS = {
 }
 
 
+def write_snapshot_and_append_history(
+    history_df: pd.DataFrame,
+    history_path: Path,
+    *,
+    snapshot_df: pd.DataFrame | None = None,
+    snapshot_path: Path | None = None,
+    sort_snapshot_by: str | None = None,
+) -> None:
+    """
+    按「数据日期 + 行业代码」 upsert 到历史长表；可选覆盖写入当日快照 CSV。
+    同一数据日期重复运行会替换该日旧行，避免重复追加。
+    """
+    if HISTORY_DATE_COL not in history_df.columns:
+        raise ValueError(f"缺少列 {HISTORY_DATE_COL!r}，无法写入历史长表")
+
+    hist = _reorder_date_column_first(history_df.reset_index(drop=True))
+
+    if snapshot_path is not None:
+        snap_src = hist if snapshot_df is None else snapshot_df
+        if sort_snapshot_by:
+            snap = snap_src.sort_values(sort_snapshot_by, ascending=False).reset_index(drop=True)
+        else:
+            snap = snap_src.reset_index(drop=True)
+        snap = _reorder_date_column_first(snap)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snap.to_csv(snapshot_path, index=False, encoding="utf-8-sig")
+    dates = hist[HISTORY_DATE_COL].astype(str).unique().tolist()
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if history_path.is_file():
+        try:
+            old = pd.read_csv(history_path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            old = pd.read_csv(history_path, encoding="utf-8")
+        if HISTORY_DATE_COL in old.columns:
+            old = old[~old[HISTORY_DATE_COL].astype(str).isin(dates)]
+        else:
+            logging.warning("历史 CSV 缺列 %s，将丢弃旧内容", HISTORY_DATE_COL)
+            old = pd.DataFrame()
+    else:
+        old = pd.DataFrame()
+
+    combined = pd.concat([old, hist], ignore_index=True)
+    combined[HISTORY_DATE_COL] = combined[HISTORY_DATE_COL].astype(str)
+    sort_cols = [HISTORY_DATE_COL]
+    if "行业代码" in combined.columns:
+        sort_cols.append("行业代码")
+    combined = combined.sort_values(sort_cols, ascending=[False] + [True] * (len(sort_cols) - 1))
+    combined = _reorder_date_column_first(combined.reset_index(drop=True))
+    combined.to_csv(history_path, index=False, encoding="utf-8-sig")
+
+    logging.info(
+        "历史长表 upsert %d 行（数据日期 %s）→ %s，合计 %d 行",
+        len(hist),
+        ", ".join(dates),
+        history_path,
+        len(combined),
+    )
+
+
 def _with_retry(fetch_fn, *, retries: int = 3, sleep_sec: float = 0.5):
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
             return fetch_fn()
-        except Exception as exc:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS as exc:
             last_exc = exc
             if attempt < retries - 1:
                 time.sleep(sleep_sec * (attempt + 1))
+        except Exception:
+            raise
     assert last_exc is not None
     raise last_exc
 
@@ -282,10 +400,26 @@ def apply_stable_fetch_profile() -> None:
     STOCK_RATE_LIMIT_BACKOFF_SEC = STABLE_RATE_LIMIT_BACKOFF_SEC
 
 
+def save_sector_codes_json(output_dir: Path, sectors: list[dict[str, Any]]) -> Path:
+    """从行业列表提取 code/name，写入 shenwan_v2_sector_codes.json。"""
+    codes_path = output_dir / SECTOR_CODES_JSON
+    payload = [
+        {"sector_code": _sector_code(s), "sector_name": _sector_name(s)}
+        for s in sectors
+        if _sector_code(s) and _sector_name(s)
+    ]
+    with codes_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    logging.info("行业 code/name 已保存至 %s", codes_path)
+    return codes_path
+
+
 def load_sectors_json(output_dir: Path) -> list[dict[str, Any]]:
-    json_path = output_dir / SECTORS_JSON
+    json_path = output_dir / SECTOR_CODES_JSON
     if not json_path.is_file():
-        raise FileNotFoundError(f"未找到 {json_path}，请先运行抓取脚本")
+        raise FileNotFoundError(
+            f"未找到 {json_path}，请先执行 ./fetch_shenwan_v2_sectors.sh 或维护行业 code/name 列表"
+        )
     with json_path.open("r", encoding="utf-8") as f:
         sectors = _normalize_sectors_json(json.load(f))
     logging.info("已加载 %d 个行业（%s）", len(sectors), json_path)
@@ -328,6 +462,7 @@ def load_or_fetch_sectors(
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(sectors, f, ensure_ascii=False, indent=2)
     logging.info("行业及成分股已保存至 %s", json_path)
+    save_sector_codes_json(output_dir, sectors)
     return sectors
 
 
@@ -381,8 +516,10 @@ def _try_sina_kline(symbol: str, datalen: int) -> pd.DataFrame | None:
                 df = _parse_kline_rows(rows, date_key="day", close_key="close")
                 if len(df) >= RETURN_WINDOW + 1:
                     return df.tail(datalen).reset_index(drop=True)
-        except Exception:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS:
             continue
+        except Exception:
+            raise
     return None
 
 
@@ -474,9 +611,12 @@ def analyze_sector(
 
     try:
         kline = fetch_sector_daily_kline(code, name, sw_index_code).tail(TRADING_DAYS)
-    except Exception as exc:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
         logging.warning("跳过 %s (%s)：%s", name, code, exc)
         return None
+    except Exception:
+        logging.exception("analyze_sector: %s (%s) 未预期异常", name, code)
+        raise
 
     merged = pd.merge(
         kline[["date", "close"]].rename(columns={"close": "sector_close"}),
@@ -491,16 +631,21 @@ def analyze_sector(
     try:
         return_20 = _pct_return(merged["sector_close"], RETURN_WINDOW)
         bench_return_20 = _pct_return(merged["bench_close"], RETURN_WINDOW)
-    except Exception as exc:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
         logging.warning("跳过 %s (%s)：涨幅计算失败 — %s", name, code, exc)
         return None
+    except Exception:
+        logging.exception("analyze_sector: %s (%s) 涨幅计算未预期异常", name, code)
+        raise
 
     excess = return_20 - bench_return_20
     outperform = 1 if return_20 > bench_return_20 else 0
     bull = _bull_alignment(merged["sector_close"])
     perfect = 1 if outperform == 1 and bull == 1 else 0
+    data_date = merged["date"].iloc[-1].strftime("%Y-%m-%d")
 
     return {
+        "数据日期": data_date,
         "行业代码": code,
         "行业名称": name,
         "近20日涨幅": round(return_20, 4),
@@ -552,12 +697,20 @@ def _run_sector_labeling(
     if not results:
         raise RuntimeError("无任何行业分析结果")
 
-    df = pd.DataFrame(results).sort_values("超额收益率", ascending=False).reset_index(drop=True)
+    df = pd.DataFrame(results)[list(ANALYSIS_RESULT_COLUMNS)]
+    warn_if_sector_data_lags(benchmark, df)
+    filtered = df[df["是否综合满足"] == 1].reset_index(drop=True)
     csv_path = output_dir / RESULT_CSV
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    history_path = output_dir / RESULT_HISTORY_CSV
+    write_snapshot_and_append_history(
+        filtered,
+        history_path,
+        snapshot_path=csv_path,
+        sort_snapshot_by="超额收益率",
+    )
 
-    logging.info("完成 %d / %d 个行业 → %s", len(df), total, csv_path)
-    logging.info("综合满足行业数：%d", int(df["是否综合满足"].sum()))
+    logging.info("完成 %d / %d 个行业 → %s", len(filtered), total, csv_path)
+    logging.info("综合满足行业数：%d", len(filtered))
     return csv_path
 
 
@@ -577,7 +730,7 @@ def run_analysis(
 
 
 def run_analysis_only(output_dir: Path, *, workers: int = 1) -> Path:
-    """仅基于本地 shenwan_v2_sectors.json 的行业 code/name 打标，不抓取成分股。"""
+    """仅基于本地 shenwan_v2_sector_codes.json 的行业 code/name 打标，不抓取成分股。"""
     sectors = load_sectors_json(output_dir)
     return _run_sector_labeling(sectors, output_dir, workers=workers)
 
@@ -603,7 +756,7 @@ def main() -> None:
     parser.add_argument(
         "--analysis-only",
         action="store_true",
-        help="仅读取本地 JSON 做行业打标，输出 CSV（不抓行业/成分股）",
+        help="仅读取本地 shenwan_v2_sector_codes.json 做行业打标，输出 CSV（不抓行业/成分股）",
     )
     parser.add_argument(
         "--stable",
@@ -646,9 +799,12 @@ def main() -> None:
                 refresh_stocks=args.refresh_stocks,
                 workers=args.workers,
             )
-    except Exception as exc:  # noqa: BLE001
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
         logging.error("执行失败：%s", exc)
         sys.exit(1)
+    except Exception:
+        logging.exception("执行未预期异常")
+        raise
 
     print(f"结果文件：{csv_path}")
 

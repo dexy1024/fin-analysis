@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# 申万二级行业快照：读取 backend/data/observation_shenwan_v2.json，
-# 追加写入 logs/snapshots_shenwan_v2_YYYY.csv（表头同 snapshots_YYYY_new.csv）。
+# 申万二级行业缠论快照（可选，默认多数环境不可用）：
+#   申万行业指数仅有官方日线，无 60m/15m；脚本在缺分钟 K 线时会拒绝写入，
+#   避免 logs/snapshots_shenwan_v2_YYYY.csv 出现「60m笔方向=向下」等误导列。
+# 日常行业筛选请用 run_shenwan_v2_daily.sh（量化打标 + 量价信号，纯日线）。
 # 须显式传 --write / -w。
 #
 # 用法（项目根目录）：

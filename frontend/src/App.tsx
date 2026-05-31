@@ -589,6 +589,8 @@ function App() {
   const pollingIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [dailyTab, setDailyTab] = useState<DailyTab>('index')
+  const dailyTabRef = useRef(dailyTab)
+  dailyTabRef.current = dailyTab
   const [indexKline, setIndexKline] = useState<IndexKlineResponse | null>(null)
   const [indexKline60, setIndexKline60] = useState<IndexKlineResponse | null>(null)
   const [indexKline15, setIndexKline15] = useState<IndexKlineResponse | null>(null)
@@ -599,18 +601,6 @@ function App() {
   const [defenseCodeToAlert, setDefenseCodeToAlert] = useState<Map<string, boolean> | null>(null)
   /** code -> 雷达摘要中的 60 分钟笔向（向上/向下/空）；与 defenseCodeToAlert 同次拉取 */
   const [defensePen60mByCode, setDefensePen60mByCode] = useState<Map<string, string> | null>(null)
-  /** code -> 60分钟买点7条件（后端定时计算，前端直接使用） */
-  const [defenseBuyConditionsByCode, setDefenseBuyConditionsByCode] = useState<
-    Map<string, {
-      radarZoneOk: boolean
-      pen60mDown: boolean
-      macdMomentumOk: boolean
-      blueTriangleStrict: boolean
-      inCCentral: boolean
-      hasBottomDivInSwitch: boolean
-      bollBuy: boolean
-    }>
-  >(() => new Map())
   /** 仅梅花2test（889999）mock：摘要中 full_trigger 为真时 Tab 橙色（其它标的不再用橙色 Tab） */
   const [meihuaMockFullTriggerTab, setMeihuaMockFullTriggerTab] = useState(false)
   /** 与 last_summary.json / 雷达 md 同步的预警原文（刷新页面后从 GET summary 拉取） */
@@ -705,6 +695,9 @@ function App() {
   /** 用户观察/自选列表（observation.json + observation_hk，仅显示用） */
   const [observation, setObservation] = useState<WatchlistItem[]>([])
 
+  /** 破位标的 code 集合，由后端定时调度预计算 */
+  const [brokenCodeSet, setBrokenCodeSet] = useState<Set<string>>(new Set())
+
   // 加载 observation
   useEffect(() => {
     let cancelled = false
@@ -743,6 +736,16 @@ function App() {
     }
   }, [])
 
+  /** 观察列表中应在 Tab 栏展示的标的（默认隐藏已破位项，与 Tab「破」标记同源） */
+  const displayObservation = useMemo(
+    () =>
+      observation.filter((o) => {
+        if (o.hideWhenBroken === false) return true
+        return !brokenCodeSet.has(o.code)
+      }),
+    [observation, brokenCodeSet],
+  )
+
   // 加载买卖信号状态（由后端定时调度预计算，刷新页面后直接显示「买」「卖」字）
   useEffect(() => {
     let cancelled = false
@@ -764,7 +767,12 @@ function App() {
   }, [])
 
   // 生成完整的 Tabs 列表（包含自定义标的、持仓标的和观察标的）
-  const fullChartTabs = useMemo(() => getFullChartTabs(customSymbols, watchlist, observation), [customSymbols, watchlist, observation])
+  const fullChartTabs = useMemo(
+    () => getFullChartTabs(customSymbols, watchlist, displayObservation),
+    [customSymbols, watchlist, displayObservation],
+  )
+  const fullChartTabsRef = useRef(fullChartTabs)
+  fullChartTabsRef.current = fullChartTabs
   const chartTabsForNav = useMemo(() => fullChartTabs, [fullChartTabs])
 
   const [chartDaily, setChartDaily] = useState(() => emptyChartKlineMap(customSymbols, watchlist, observation))
@@ -778,9 +786,9 @@ function App() {
     () => getAlwaysVisibleTabKeys(
       customSymbols.map(s => s.code),
       watchlist.map(w => w.code),
-      observation.map(o => o.code),
+      displayObservation.map(o => o.code),
     ),
-    [customSymbols, watchlist, observation],
+    [customSymbols, watchlist, displayObservation],
   )
 
   /** 持仓标的 code 集合，用于 Tab 上标记五角星 */
@@ -794,8 +802,8 @@ function App() {
 
   /** 观察标的 tab key 集合，用于排序 */
   const observationTabKeys = useMemo(
-    () => new Set(observation.map(o => CODE_TO_CHART_TAB_KEY.get(o.code) ?? `custom_${o.code}` as ChartTabKey)),
-    [observation],
+    () => new Set(displayObservation.map(o => CODE_TO_CHART_TAB_KEY.get(o.code) ?? `custom_${o.code}` as ChartTabKey)),
+    [displayObservation],
   )
 
   /** 持仓标的顺序映射（tab key -> 在 watchlist 中的索引），用于按用户配置排序 */
@@ -811,15 +819,12 @@ function App() {
   /** 观察标的顺序映射（tab key -> 在 observation 中的索引），用于按用户配置排序 */
   const observationOrder = useMemo(() => {
     const m = new Map<ChartTabKey, number>()
-    observation.forEach((o, i) => {
+    displayObservation.forEach((o, i) => {
       const key = CODE_TO_CHART_TAB_KEY.get(o.code) ?? `custom_${o.code}` as ChartTabKey
       m.set(key, i)
     })
     return m
-  }, [observation])
-
-  /** 破位标的 code 集合，由后端定时调度预计算 */
-  const [brokenCodeSet, setBrokenCodeSet] = useState<Set<string>>(new Set())
+  }, [displayObservation])
 
   /** 买/卖信号标的 code 集合，由后端定时调度预计算 */
   const [buyCodeSet, setBuyCodeSet] = useState<Set<string>>(new Set())
@@ -831,15 +836,6 @@ function App() {
       const m = new Map<string, boolean>()
       const pens = new Map<string, string>()
       const texts = new Map<string, string>()
-      const buyConds = new Map<string, {
-        radarZoneOk: boolean
-        pen60mDown: boolean
-        macdMomentumOk: boolean
-        blueTriangleStrict: boolean
-        inCCentral: boolean
-        hasBottomDivInSwitch: boolean
-        bollBuy: boolean
-      }>()
       let meihuaTrig = false
       for (const s of data.symbols ?? []) {
         const code = String(s.code ?? '').trim()
@@ -853,21 +849,10 @@ function App() {
         if (code === '889999' && s.full_trigger === true) {
           meihuaTrig = true
         }
-        // 存储7个买点条件（后端定时计算）
-        buyConds.set(code, {
-          radarZoneOk: s.radar_zone_ok === true,
-          pen60mDown: s.pen_60m_down === true,
-          macdMomentumOk: s.macd_momentum_ok === true,
-          blueTriangleStrict: s.blue_triangle_strict === true,
-          inCCentral: s.in_c_central === true,
-          hasBottomDivInSwitch: s.has_bottom_div_in_switch === true,
-          bollBuy: s.boll_buy === true,
-        })
       }
       setDefenseCodeToAlert(m)
       setDefensePen60mByCode(pens)
       setDefenseAlertTextByCode(texts)
-      setDefenseBuyConditionsByCode(buyConds)
       setMeihuaMockFullTriggerTab(meihuaTrig)
       setDefenseSummaryGeneratedAt(
         typeof data.generated_at === 'string' && data.generated_at.trim()
@@ -879,7 +864,6 @@ function App() {
       setDefenseCodeToAlert(new Map())
       setDefensePen60mByCode(new Map())
       setDefenseAlertTextByCode(new Map())
-      setDefenseBuyConditionsByCode(new Map())
       setMeihuaMockFullTriggerTab(false)
       setDefenseSummaryGeneratedAt(null)
     }
@@ -1021,6 +1005,8 @@ function App() {
   const fetch60Local = useCallback(async (symbol: string, startDate: string) => {
     return await fetchIndexKline(symbol, '60', startDate, undefined, false)
   }, [])
+  const fetch60LocalRef = useRef(fetch60Local)
+  fetch60LocalRef.current = fetch60Local
 
   /**
    * 15m：默认 refresh=false，只读后端本地 CSV/缓存；与 kline_scheduler 槽位同步后的数据一致。
@@ -1028,6 +1014,8 @@ function App() {
   const fetch15Local = useCallback(async (symbol: string, startDate: string) => {
     return await fetchIndexKline(symbol, '15', startDate, undefined, false)
   }, [])
+  const fetch15LocalRef = useRef(fetch15Local)
+  fetch15LocalRef.current = fetch15Local
 
   /** 首屏仅拉上证日线；其它标的改为切 tab 按需加载，避免首次并发过多请求 */
   const loadIndexDailyKline = useCallback(async () => {
@@ -1043,7 +1031,7 @@ function App() {
 
   /** 切 tab 时按需拉对应日线，避免首次全量并发导致卡顿 */
   const fetchDailyForTab = useCallback(async (tabKey: ChartTabKey) => {
-    const tab = fullChartTabs.find((t) => t.key === tabKey)
+    const tab = fullChartTabsRef.current.find((t) => t.key === tabKey)
     if (!tab) return
     try {
       const dailyStart = startDateDaysAgo(380)
@@ -1056,15 +1044,15 @@ function App() {
         [tab.key]: err instanceof Error ? err.message : '未知错误',
       }))
     }
-  }, [fullChartTabs])
+  }, [])
 
   /** 拉取单个 tab 的 60 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch60ForTab = useCallback(async (tabKey: ChartTabKey) => {
     const h60Start = startDateDaysAgo(79)
-    const tab = fullChartTabs.find((t) => t.key === tabKey)
+    const tab = fullChartTabsRef.current.find((t) => t.key === tabKey)
     if (!tab) return
     try {
-      const h60 = await fetch60Local(tab.code, h60Start)
+      const h60 = await fetch60LocalRef.current(tab.code, h60Start)
       setChart60((p) => ({ ...p, [tab.key]: h60 }))
       setChart60Err((p) => ({ ...p, [tab.key]: null }))
     } catch (err) {
@@ -1073,15 +1061,15 @@ function App() {
         [tab.key]: err instanceof Error ? err.message : '60分钟数据拉取失败',
       }))
     }
-  }, [fullChartTabs, fetch60Local])
+  }, [])
 
   /** 拉取单个 tab 的 15 分钟 K（按需，避免并发请求过多触发网络错误） */
   const fetch15ForTab = useCallback(async (tabKey: ChartTabKey) => {
     const h15Start = startDateDaysAgo(25)
-    const tab = fullChartTabs.find((t) => t.key === tabKey)
+    const tab = fullChartTabsRef.current.find((t) => t.key === tabKey)
     if (!tab) return
     try {
-      const h15 = await fetch15Local(tab.code, h15Start)
+      const h15 = await fetch15LocalRef.current(tab.code, h15Start)
       setChart15((p) => ({ ...p, [tab.key]: h15 }))
       setChart15Err((p) => ({ ...p, [tab.key]: null }))
     } catch (err) {
@@ -1090,56 +1078,8 @@ function App() {
         [tab.key]: err instanceof Error ? err.message : '15分钟数据拉取失败',
       }))
     }
-  }, [fullChartTabs, fetch15Local])
+  }, [])
 
-  /** 仅拉上证 60m（本地）；首屏用，不依赖 dailyTab，避免切 Tab 时整页重复请求上证 */
-  const refreshIndex60Only = useCallback(async () => {
-    const h60Start = startDateDaysAgo(79)
-    try {
-      const h60 = await fetch60Local('sh000001', h60Start)
-      setIndexKline60(h60)
-      setIndex60Error(null)
-    } catch (err) {
-      setIndex60Error(err instanceof Error ? err.message : '60分钟数据拉取失败')
-    }
-  }, [fetch60Local])
-
-  /** 仅拉上证 15m（本地）；首屏用 */
-  const refreshIndex15Only = useCallback(async () => {
-    const h15Start = startDateDaysAgo(25)
-    try {
-      const h15 = await fetch15Local('sh000001', h15Start)
-      setIndexKline15(h15)
-      setIndex15Error(null)
-    } catch (err) {
-      setIndex15Error(err instanceof Error ? err.message : '15分钟数据拉取失败')
-    }
-  }, [fetch15Local])
-
-  /** 上证 60m + 当前激活 tab 的 60m（切回页面等场景） */
-  const refresh60MinuteKlines = useCallback(async () => {
-    await refreshIndex60Only()
-    if (dailyTab !== 'index') {
-      await fetch60ForTab(dailyTab)
-    }
-  }, [dailyTab, fetch60ForTab, refreshIndex60Only])
-
-  /** 上证 15m + 当前激活 tab 的 15m（切回页面等场景） */
-  const refresh15MinuteKlines = useCallback(async () => {
-    await refreshIndex15Only()
-    if (dailyTab !== 'index') {
-      await fetch15ForTab(dailyTab)
-    }
-  }, [dailyTab, fetch15ForTab, refreshIndex15Only])
-
-  /** 与 refresh60MinuteKlines 相同；若 effect/别处误写此名，避免 ReferenceError */
-  const fetch60SyncThenDisplay = refresh60MinuteKlines
-  /** 与 refresh15MinuteKlines 相同 */
-  const fetch15SyncThenDisplay = refresh15MinuteKlines
-
-  // 使用 ref 存储 K 线刷新函数和当前 tab，供长轮询在检测到更新后同步刷新
-  const dailyTabRef = useRef(dailyTab)
-  dailyTabRef.current = dailyTab
   const fetchDailyForTabRef = useRef(fetchDailyForTab)
   fetchDailyForTabRef.current = fetchDailyForTab
   const fetch60ForTabRef = useRef(fetch60ForTab)
@@ -1148,33 +1088,85 @@ function App() {
   fetch15ForTabRef.current = fetch15ForTab
   const loadIndexDailyKlineRef = useRef(loadIndexDailyKline)
   loadIndexDailyKlineRef.current = loadIndexDailyKline
+
+  /** 仅拉上证 60m（本地）；首屏用，不依赖 dailyTab，避免切 Tab 时整页重复请求上证 */
+  const refreshIndex60Only = useCallback(async () => {
+    const h60Start = startDateDaysAgo(79)
+    try {
+      const h60 = await fetch60LocalRef.current('sh000001', h60Start)
+      setIndexKline60(h60)
+      setIndex60Error(null)
+    } catch (err) {
+      setIndex60Error(err instanceof Error ? err.message : '60分钟数据拉取失败')
+    }
+  }, [])
+
+  /** 仅拉上证 15m（本地）；首屏用 */
+  const refreshIndex15Only = useCallback(async () => {
+    const h15Start = startDateDaysAgo(25)
+    try {
+      const h15 = await fetch15LocalRef.current('sh000001', h15Start)
+      setIndexKline15(h15)
+      setIndex15Error(null)
+    } catch (err) {
+      setIndex15Error(err instanceof Error ? err.message : '15分钟数据拉取失败')
+    }
+  }, [])
+
   const refreshIndex60OnlyRef = useRef(refreshIndex60Only)
   refreshIndex60OnlyRef.current = refreshIndex60Only
   const refreshIndex15OnlyRef = useRef(refreshIndex15Only)
   refreshIndex15OnlyRef.current = refreshIndex15Only
 
+  /** 上证 60m + 当前激活 tab 的 60m（切回页面等场景） */
+  const refresh60MinuteKlines = useCallback(async () => {
+    await refreshIndex60OnlyRef.current()
+    const tab = dailyTabRef.current
+    if (tab !== 'index') {
+      await fetch60ForTabRef.current(tab)
+    }
+  }, [])
+
+  /** 上证 15m + 当前激活 tab 的 15m（切回页面等场景） */
+  const refresh15MinuteKlines = useCallback(async () => {
+    await refreshIndex15OnlyRef.current()
+    const tab = dailyTabRef.current
+    if (tab !== 'index') {
+      await fetch15ForTabRef.current(tab)
+    }
+  }, [])
+
+  const refresh60MinuteKlinesRef = useRef(refresh60MinuteKlines)
+  refresh60MinuteKlinesRef.current = refresh60MinuteKlines
+  const refresh15MinuteKlinesRef = useRef(refresh15MinuteKlines)
+  refresh15MinuteKlinesRef.current = refresh15MinuteKlines
+
   /** 摘要单独拉取，避免与 K 线并行失败时整段受影响；首屏尽快拿到 has_alert */
   useEffect(() => {
-    void loadDefenseSummary()
-  }, [loadDefenseSummary])
+    void loadDefenseSummaryRef.current()
+  }, [])
 
   useEffect(() => {
     void (async () => {
-      await Promise.all([loadIndexDailyKline(), refreshIndex60Only(), refreshIndex15Only()])
+      await Promise.all([
+        loadIndexDailyKlineRef.current(),
+        refreshIndex60OnlyRef.current(),
+        refreshIndex15OnlyRef.current(),
+      ])
     })()
-  }, [loadIndexDailyKline, refreshIndex60Only, refreshIndex15Only])
+  }, [])
 
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
-        void fetch60SyncThenDisplay()
-        void fetch15SyncThenDisplay()
-        void loadDefenseSummary()
+        void refresh60MinuteKlinesRef.current()
+        void refresh15MinuteKlinesRef.current()
+        void loadDefenseSummaryRef.current()
       }
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [fetch60SyncThenDisplay, fetch15SyncThenDisplay, loadDefenseSummary])
+  }, [])
 
   useEffect(() => {
     if (defenseCodeToAlert === null) return
@@ -1188,22 +1180,22 @@ function App() {
   useEffect(() => {
     if (dailyTab === 'index') return
     if (loadedKeysRef.current.has(dailyTab + '_60m')) return
-    void fetch60ForTab(dailyTab)
-  }, [dailyTab, fetch60ForTab])
+    void fetch60ForTabRef.current(dailyTab)
+  }, [dailyTab])
 
   // 切换 tab 时补拉当前 tab 的15m（若预加载已完成则跳过，避免重复请求）
   useEffect(() => {
     if (dailyTab === 'index') return
     if (loadedKeysRef.current.has(dailyTab + '_15m')) return
-    void fetch15ForTab(dailyTab)
-  }, [dailyTab, fetch15ForTab])
+    void fetch15ForTabRef.current(dailyTab)
+  }, [dailyTab])
 
   // 切换 tab 时按需补拉当前 tab 的日线
   useEffect(() => {
     if (dailyTab === 'index') return
     if (chartDaily[dailyTab]) return
-    void fetchDailyForTab(dailyTab)
-  }, [dailyTab, chartDaily, fetchDailyForTab])
+    void fetchDailyForTabRef.current(dailyTab)
+  }, [dailyTab, chartDaily])
   
   // 批量预加载 visibleChartTabs 的日线和60m数据（延迟2秒启动，避免阻塞首屏和交互）
   const loadedKeysRef = useRef(new Set<string>())
@@ -1468,7 +1460,6 @@ function App() {
                     dailyAZd={indexDailyAZd}
                     dailyCZd={indexDailyCZd}
                     dailyMacd={indexDailyMacd}
-                    buyConditions={undefined}
                   />
                 </div>
               )}
@@ -1485,7 +1476,6 @@ function App() {
                     dailyAZd={indexDailyAZd}
                     dailyCZd={indexDailyCZd}
                     dailyMacd={indexDailyMacd}
-                    buyConditions={undefined}
                   />
                 </div>
               )}
@@ -1515,7 +1505,7 @@ function App() {
                 return (
                   <>
                     <h3 className="hourly-section-title">
-                      60 分钟缠论（{activeChart.code}{holding ? ` ★持仓·${holding.name}` : ''}，近 79 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+                      60 分钟缠论（{activeChart.seriesName}·{activeChart.code}{holding ? ' ★持仓' : ''}，近 79 日 60min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
                     </h3>
                     {chart60Err[activeChart.key] && (
                       <div className="alert alert-error">{chart60Err[activeChart.key]}</div>
@@ -1529,13 +1519,12 @@ function App() {
                           dailyAZd={chartDailyAZd}
                           dailyCZd={chartDailyCZd}
                           dailyMacd={chartDailyMacd}
-                          buyConditions={defenseBuyConditionsByCode.get(activeChart.code)}
                           holdingInfo={holding}
                         />
                       </div>
                     )}
                     <h3 className="hourly-section-title">
-                      15 分钟缠论（{activeChart.code}{holding ? ` ★持仓·${holding.name}` : ''}，近 35 日 15min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
+                      15 分钟缠论（{activeChart.seriesName}·{activeChart.code}{holding ? ' ★持仓' : ''}，近 35 日 15min K 线；与日线同一套合并/笔/有效笔/线段/中枢逻辑）
                     </h3>
                     {chart15Err[activeChart.key] && (
                       <div className="alert alert-error">{chart15Err[activeChart.key]}</div>
@@ -1549,7 +1538,6 @@ function App() {
                           dailyAZd={chartDailyAZd}
                           dailyCZd={chartDailyCZd}
                           dailyMacd={chartDailyMacd}
-                          buyConditions={undefined}
                           holdingInfo={holding}
                         />
                       </div>

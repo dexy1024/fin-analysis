@@ -20,6 +20,7 @@ import pandas as pd
 from zoneinfo import ZoneInfo
 
 from services.indicators import _save_kline_15_cache
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -89,7 +90,7 @@ def _em_slice(
             if sleep_sec > 0:
                 time.sleep(sleep_sec)
             return _normalize_em_minute_df(raw)
-        except Exception as e:  # noqa: BLE001
+        except EXPECTED_BUSINESS_EXCEPTIONS as e:
             last_err = e
             logging.warning(
                 "kline_15_backfill_em: 请求失败 %s ~ %s (%s)，第 %d 次重试",
@@ -99,6 +100,9 @@ def _em_slice(
                 attempt + 1,
             )
             time.sleep(max(1.5, sleep_sec * 2))
+        except Exception:
+            logging.exception("kline_15_backfill_em: 请求未预期异常 %s ~ %s", start_s, end_s)
+            raise
     raise RuntimeError(f"东财 15m 拉取失败 {start_s} ~ {end_s}: {last_err}") from last_err
 
 

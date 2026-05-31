@@ -172,12 +172,14 @@ python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 
 ### 4.8 申万二级行业与成分股（离线脚本）
 
+> **行业轮动三层流水线**（趋势方向 / 今日可做 / 60m 缠论）设计说明见 [`docs/shenwan_v2_行业轮动流水线.md`](docs/shenwan_v2_行业轮动流水线.md)。调整阈值或分层逻辑时请同步更新该文档。
+
 与主站缠论/雷达**独立**：手动不定期执行，产物写在**项目根目录**，不经过 FastAPI。
 
 | 产物 | 说明 |
 |------|------|
 | `shenwan_v2_sectors.json` | 申万二级行业列表 + 各行业成分股 |
-| `shenwan_v2_analysis_result.csv` | 行业指数相对沪深300的量化打标结果 |
+| `01_shenwan_v2_analysis_result.csv` | 行业指数相对沪深300的量化打标结果 |
 | `logs/shenwan_v2_fetch_*.log` | 抓取脚本日志 |
 | `logs/shenwan_v2_analysis_*.log` | 打标脚本日志 |
 
@@ -210,7 +212,7 @@ python backend/run_defense_radar.py --refresh  # 排障：先拉网再算
 ./fetch_shenwan_v2_sectors.sh              # 仅补没有 stocks 的行业（日常）
 ./fetch_shenwan_v2_sectors.sh --force      # 强制重抓列表与全部成分股
 
-# ② 不定期：基于 JSON 中的行业 code/name 打标 → shenwan_v2_analysis_result.csv
+# ② 不定期：基于 JSON 中的行业 code/name 打标 → 01_shenwan_v2_analysis_result.csv
 ./run_shenwan_v2_analysis.sh               # 需先有 shenwan_v2_sectors.json
 ```
 
@@ -304,9 +306,9 @@ fin-analysis/
 ├── README.md
 ├── restart_services.sh          # 重启后端+前端，日志写入 logs/
 ├── fetch_shenwan_v2_sectors.sh  # 申万二级：行业+成分股 → shenwan_v2_sectors.json
-├── run_shenwan_v2_analysis.sh   # 申万二级：行业打标 → shenwan_v2_analysis_result.csv
+├── run_shenwan_v2_analysis.sh   # 申万二级：行业打标 → 01_shenwan_v2_analysis_result.csv
 ├── shenwan_v2_sectors.json      # 申万二级行业与成分股（脚本生成）
-├── shenwan_v2_analysis_result.csv
+├── 01_shenwan_v2_analysis_result.csv
 ├── backend/
 │   ├── main.py                  # 路由与 lifespan
 │   ├── requirements.txt
