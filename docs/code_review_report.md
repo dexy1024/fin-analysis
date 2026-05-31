@@ -414,9 +414,9 @@ type ChartTabKey = typeof CHART_TABS_CONFIG[number]['key'] | `custom_${string}`
 ## 修复优先级建议
 
 ### 本周修复（高优先级）
-1. ✅ SSE 线程安全问题
-2. ✅ 规范化异常处理
-3. ✅ 数据持久化原子写入（短期方案）
+1. ✅ SSE 线程安全问题 - **已修复**（使用 `_SseClient` + `run_coroutine_threadsafe`）
+2. ✅ 规范化异常处理 - **已修复**（添加 `walk_forward_backtest.py`、`email_notifier.py`）
+3. ⏳ 数据持久化原子写入（短期方案）
 
 ### 本月修复（中优先级）
 4. ✅ 解决循环导入

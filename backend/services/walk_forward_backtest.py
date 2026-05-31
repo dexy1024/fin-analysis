@@ -34,6 +34,7 @@ from services.trade_command_engine import (
     _run_symbol_analysis_pipeline,
 )
 from utils.csv_logger import build_snapshot_data
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 
 INITIAL_CASH = 50_000.0
 
@@ -74,9 +75,12 @@ def _load_timeline_15m(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> L
             period="15",
             refresh=False,
         )
-    except Exception:
-        logging.exception("walk_forward: 构建 15m 时间轴失败 %s", symbol)
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
+        logging.warning("walk_forward: 构建 15m 时间轴失败 %s: %s", symbol, e)
         return []
+    except Exception:
+        logging.exception("walk_forward: 构建 15m 时间轴未预期异常 %s", symbol)
+        raise
     out: List[pd.Timestamp] = []
     for row in resp.get("data") or []:
         d = row.get("date")
@@ -102,16 +106,25 @@ def _fetch_triple_at_t(
     daily_r, h60_r, h15_r = None, None, None
     try:
         daily_r = get_index_kline(symbol=symbol, start_date=daily_s, end_date=end_s, period="daily", refresh=False)
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
+        logging.debug("walk_forward: %s 日线 @ %s 失败: %s", symbol, end_s, e)
     except Exception:
-        logging.debug("walk_forward: %s 日线 @ %s 失败", symbol, end_s, exc_info=True)
+        logging.exception("walk_forward: %s 日线 @ %s 未预期异常", symbol, end_s)
+        raise
     try:
         h60_r = get_index_kline(symbol=symbol, start_date=h60_s, end_date=end_s, period="60", refresh=False)
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
+        logging.debug("walk_forward: %s 60m @ %s 失败: %s", symbol, end_s, e)
     except Exception:
-        logging.debug("walk_forward: %s 60m @ %s 失败", symbol, end_s, exc_info=True)
+        logging.exception("walk_forward: %s 60m @ %s 未预期异常", symbol, end_s)
+        raise
     try:
         h15_r = get_index_kline(symbol=symbol, start_date=h15_s, end_date=end_s, period="15", refresh=False)
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
+        logging.debug("walk_forward: %s 15m @ %s 失败: %s", symbol, end_s, e)
     except Exception:
-        logging.debug("walk_forward: %s 15m @ %s 失败", symbol, end_s, exc_info=True)
+        logging.exception("walk_forward: %s 15m @ %s 未预期异常", symbol, end_s)
+        raise
     return daily_r, h60_r, h15_r
 
 
@@ -227,8 +240,11 @@ def run_walk_forward_backtest(
                 buy_signals=buy_signals,
             )
             action = snap.get("实际交易动作") or "观望"
+        except EXPECTED_BUSINESS_EXCEPTIONS as e:
+            logging.debug("walk_forward: 信号计算失败 @ %s: %s", _bar_index_end_str(t), e)
         except Exception:
-            logging.debug("walk_forward: 信号计算失败 @ %s", _bar_index_end_str(t), exc_info=True)
+            logging.exception("walk_forward: 信号计算未预期异常 @ %s", _bar_index_end_str(t))
+            raise
 
         eq_before = cash + shares * close_px
         if peak < 0:

@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 # 项目根目录（backend/services/ 的上两级）
 ROOT_DIR = Path(__file__).resolve().parents[2]
+
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 LOGS_DIR = ROOT_DIR / "logs"
 
 
@@ -76,8 +78,11 @@ def _read_latest_snapshot_records(csv_path: Path) -> List[dict]:
             for row in all_rows:
                 if row.get("时间", "").strip() == latest_time:
                     records.append(row)
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
+        logging.warning("email_notifier: 读取 CSV 失败: %s", e)
     except Exception:
-        logging.warning("email_notifier: 读取 CSV 失败", exc_info=True)
+        logging.exception("email_notifier: 读取 CSV 未预期异常")
+        raise
 
     return records
 
@@ -121,8 +126,11 @@ def _read_snapshot_records_by_slot(
                         records.append(row)
                 except ValueError:
                     continue
+    except EXPECTED_BUSINESS_EXCEPTIONS as e:
+        logging.warning("email_notifier: 按槽位读取 CSV 失败: %s", e)
     except Exception:
-        logging.warning("email_notifier: 按槽位读取 CSV 失败", exc_info=True)
+        logging.exception("email_notifier: 按槽位读取 CSV 未预期异常")
+        raise
 
     return records
 
@@ -241,6 +249,9 @@ def send_snapshot_alert(
             sender, recipient, len(alerts),
         )
         return True
-    except Exception:
-        logging.exception("email_notifier: 邮件发送失败")
+    except (OSError, smtplib.SMTPException, TimeoutError) as e:
+        logging.warning("email_notifier: 邮件发送失败: %s", e)
         return False
+    except Exception:
+        logging.exception("email_notifier: 邮件发送未预期异常")
+        raise
