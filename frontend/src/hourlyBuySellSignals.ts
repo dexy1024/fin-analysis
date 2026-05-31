@@ -1228,8 +1228,8 @@ export function computeHourlyBuySellState(
     indexKline.fractals,
   )
 
-  // TODO: 临时测试代码 - 为889999模拟一买信号
-  if (!firstBuyPoint?.hasSignal && data.length > 0) {
+  // 【开发环境测试代码】仅在 VITE_DEV_MOCK_BUY_SIGNAL=true 时为 889999 模拟一买信号
+  if (import.meta.env.VITE_DEV_MOCK_BUY_SIGNAL === 'true' && !firstBuyPoint?.hasSignal && data.length > 0) {
     const lastDate = data[data.length - 1].date
     // 检查是否是889999的数据（通过价格范围判断，889999的价格在10-11左右）
     const avgPrice = data.reduce((sum, d) => sum + d.close, 0) / data.length
@@ -1251,7 +1251,7 @@ export function computeHourlyBuySellState(
         stopLoss: minLow,
         areaRatio: 0.65,
         reasons: [
-          '趋势底背驰: 65.0%',
+          '【开发环境模拟】趋势底背驰: 65.0%',
           '跌破B中枢: 创新低',
           `止损线: ${minLow.toFixed(2)}`,
         ],
