@@ -30,6 +30,7 @@ if str(BACKEND_DIR) not in sys.path:
 from services.observation_data import load_watchlist_observation_symbols
 from services.kline_hs300_incremental_sync import (
     Period,
+    StaleAuditReport,
     _sync_symbol,
     audit_kline_freshness_for_periods,
     run_pairs_kline_sync_stable,
@@ -73,13 +74,13 @@ def run_watchlist_observation_sync(
     max_rounds: int = 3,
     include_hk: bool = False,
     include_sh_index: bool = False,
-    etf_em_fallback: bool = True,
+    etf_em_fallback: bool = False,
     dry_run: bool = False,
-) -> int:
+) -> tuple[int, StaleAuditReport | None]:
     """
     watchlist + observation 增量 K 线同步（默认跳过港股、放慢节奏防新浪限流）。
 
-    返回 0 表示全部已齐，1 表示仍有未齐标的。
+    返回 (exit_code, report)：exit_code 0 表示全部已齐，1 表示仍有未齐标的。
     """
     pairs = _pairs(no_hk=not include_hk, include_sh_index=include_sh_index)
     target = datetime.now(TZ).strftime("%Y-%m-%d")
@@ -119,7 +120,7 @@ def run_watchlist_observation_sync(
                 r.start_60 or "-",
                 r.start_15 or "-",
             )
-        return 0
+        return 0, report
 
     report = run_pairs_kline_sync_stable(
         pairs,
@@ -130,7 +131,7 @@ def run_watchlist_observation_sync(
         etf_em_fallback=etf_em_fallback,
         label="watchlist+observation",
     )
-    return 0 if not report.stale else 1
+    return (0 if not report.stale else 1), report
 
 
 def main() -> int:
@@ -151,7 +152,11 @@ def main() -> int:
         help="同一标的各周期间隔（秒），如 60m 与 15m 之间",
     )
     p.add_argument("--max-rounds", type=int, default=3, help="未齐时最多补跑轮数")
-    p.add_argument("--etf-em-fallback", action="store_true", default=True, help="ETF 15m 失败后试东财")
+    p.add_argument(
+        "--etf-em-fallback",
+        action="store_true",
+        help="白名单 ETF（如515050）东财 qfq 未齐时补拉（默认关闭，主路径已分流）",
+    )
     args = p.parse_args()
 
     try:
@@ -160,7 +165,7 @@ def main() -> int:
         logging.error("%s", exc)
         return 2
 
-    return run_watchlist_observation_sync(
+    rc, _ = run_watchlist_observation_sync(
         periods=periods,
         sleep_sec=args.sleep,
         period_sleep_sec=args.period_sleep,
@@ -169,6 +174,7 @@ def main() -> int:
         etf_em_fallback=args.etf_em_fallback,
         dry_run=args.dry_run,
     )
+    return rc
 
 
 if __name__ == "__main__":

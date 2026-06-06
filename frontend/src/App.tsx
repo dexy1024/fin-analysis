@@ -1323,7 +1323,7 @@ function App() {
       <main className="app-main">
         <section className="card" style={{ width: '100%', maxWidth: 'none' }}>
           <h2 className="section-title">
-            日K 分析（2024-12-01 至今；个股/港股前复权，ETF 不复权，本地缓存）
+            日K 分析（2024-12-01 至今；A 股/ETF 新浪、除权 ETF 东财 qfq、港股 Yahoo）
             <span className="section-title-hint">
               {' '}
               · 本地缓存由后端定时更新；除上证指数与始终展示的 Tab 外，仅当双防线为一级/终极/红色警报且雷达摘要中

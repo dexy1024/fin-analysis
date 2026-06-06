@@ -88,14 +88,14 @@ def main() -> int:
     from sync_watchlist_observation import run_watchlist_observation_sync
 
     print(f"\n[1/3] 增量拉取 {period_label} ...")
-    kline_rc = run_watchlist_observation_sync(
+    kline_rc, sync_report = run_watchlist_observation_sync(
         periods=periods,
         sleep_sec=args.sleep,
         period_sleep_sec=args.period_sleep,
         max_rounds=args.max_rounds,
         include_hk=True,
         include_sh_index=True,
-        etf_em_fallback=True,
+        etf_em_fallback=False,
     )
 
     if not args.skip_signals:
@@ -151,6 +151,10 @@ def main() -> int:
         print("完成：全部标的已齐")
     else:
         print("完成：部分标的未齐，可加大 --sleep 后重试")
+        if sync_report and sync_report.stale:
+            print(f"  未齐 {len(sync_report.stale)} 个：")
+            for sf in sync_report.stale:
+                print(f"    {sf.code} {sf.name or '-'} 缺 {sf.missing_labels()}")
     print("=" * 50)
     return kline_rc
 

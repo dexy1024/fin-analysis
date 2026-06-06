@@ -1,8 +1,7 @@
 """
 K 线增量同步（HS300 / kline_scheduler / watchlist+observation 共用）。
 
-- 日线：按本地日线 CSV 最后一根交易日为起点（无文件则 380 自然日冷启动）；A 股/ETF 用
-  sync_a_share_daily_cache_merged 合并写回；指数/港股拉网写回对应 index_daily_*.csv / hk_daily_*.csv。
+- 日线：按本地日线 CSV 最后一根交易日为起点；A 股/ETF/指数新浪合并写回；港股 yfinance 优先写回 hk_daily_*.csv。
 - 60m/15m：读 kline_{60|15}_*.csv 最后一根为起点；无有效缓存时 60m=79 日、15m=25 日。
 """
 
@@ -744,44 +743,55 @@ def audit_kline_freshness_for_periods(
     )
 
 
-def etf_15m_em_fallback(
+def etf_em_qfq_fallback(
     pairs: list[tuple[str, str]],
     sleep_sec: float,
     *,
     periods: tuple[Period, ...],
     target_date: Optional[str] = None,
 ) -> int:
-    """ETF 15m 新浪仍失败时，东财分段从增量起点补拉。"""
-    from services.index_cache import _is_likely_etf_code
-    from services.kline_15_backfill_em import backfill_etf_15m_em_to_csv
+    """白名单 ETF（东财 qfq）分钟线未齐时，东财分段补拉 60m/15m。"""
+    from services.etf_em_qfq import etf_needs_em_qfq
+    from services.kline_15_backfill_em import backfill_etf_min_em_to_csv
 
-    if "15" not in periods:
+    minute_periods = [p for p in periods if p in ("60", "15")]
+    if not minute_periods:
         return 0
 
     report = audit_kline_freshness_for_periods(pairs, periods, target_date)
     n = 0
     for sf in report.stale:
-        if not sf.needs_15 or not _is_likely_etf_code(sf.code):
+        if not etf_needs_em_qfq(sf.code):
             continue
-        start = incremental_start_date(sf.code, "15")
-        if sleep_sec > 0:
-            time.sleep(sleep_sec)
-        try:
-            backfill_etf_15m_em_to_csv(
-                sf.code,
-                start[:10],
-                None,
-                chunk_calendar_days=3,
-                sleep_sec=max(0.8, sleep_sec * 0.4),
-            )
-            logging.info("%s ETF 15m 东财增量补拉完成", sf.code)
-            n += 1
-        except EXPECTED_BUSINESS_EXCEPTIONS:
-            logging.warning("%s ETF 15m 东财补拉失败", sf.code, exc_info=True)
-        except Exception:
-            logging.exception("%s ETF 15m 东财补拉未预期异常", sf.code)
-            raise
+        for mp in minute_periods:
+            if mp == "60" and not sf.needs_60:
+                continue
+            if mp == "15" and not sf.needs_15:
+                continue
+            start = incremental_start_date(sf.code, mp)  # type: ignore[arg-type]
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
+            try:
+                backfill_etf_min_em_to_csv(
+                    sf.code,
+                    start[:10],
+                    None,
+                    period=mp,
+                    chunk_calendar_days=3,
+                    sleep_sec=max(0.8, sleep_sec * 0.4),
+                )
+                logging.info("%s ETF %sm 东财 qfq 补拉完成", sf.code, mp)
+                n += 1
+            except EXPECTED_BUSINESS_EXCEPTIONS:
+                logging.warning("%s ETF %sm 东财 qfq 补拉失败", sf.code, mp, exc_info=True)
+            except Exception:
+                logging.exception("%s ETF %sm 东财 qfq 补拉未预期异常", sf.code, mp)
+                raise
     return n
+
+
+# 兼容旧名
+etf_15m_em_fallback = etf_em_qfq_fallback
 
 
 def run_pairs_kline_sync_stable(
@@ -828,13 +838,13 @@ def run_pairs_kline_sync_stable(
             logging.exception("%s 第 %d 轮补跑未预期异常", label, round_i)
             raise
 
-        if etf_em_fallback and "15" in period_list:
+        if etf_em_fallback and ("15" in period_list or "60" in period_list):
             try:
-                etf_15m_em_fallback(pairs, sleep_sec, periods=period_list, target_date=target)
+                etf_em_qfq_fallback(pairs, sleep_sec, periods=period_list, target_date=target)
             except EXPECTED_BUSINESS_EXCEPTIONS:
-                logging.warning("%s ETF 15m 东财 fallback 异常", label, exc_info=True)
+                logging.warning("%s ETF 东财 qfq fallback 异常", label, exc_info=True)
             except Exception:
-                logging.exception("%s ETF 15m 东财 fallback 未预期异常", label)
+                logging.exception("%s ETF 东财 qfq fallback 未预期异常", label)
                 raise
 
         report = audit_kline_freshness_for_periods(pairs, period_list, target)

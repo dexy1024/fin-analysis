@@ -149,7 +149,7 @@ def _sync_periods_incremental(periods: tuple[Period, ...]) -> None:
             sleep_sec=_SYNC_SLEEP_SEC,
             period_sleep_sec=_PERIOD_SLEEP_SEC,
             max_rounds=_MAX_SYNC_ROUNDS,
-            etf_em_fallback=True,
+            etf_em_fallback=False,
             label="kline_scheduler",
         )
     except _SCHEDULER_EXPECTED_EXCEPTIONS:

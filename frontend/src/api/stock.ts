@@ -71,7 +71,7 @@ export interface IndexKlineResponse {
   start_date: string
   end_date: string
   period: 'daily' | '60' | '15'
-  /** 指数/ETF 为 none；普通 A 股与港股日 K/60m 为前复权 qfq */
+  /** 指数/一般 ETF 为 none；除权 ETF(如515050)/A 股/港股为 qfq */
   adjust: 'none' | 'qfq'
   data: IndexKlinePoint[]
   fractals: Array<{

@@ -12,6 +12,13 @@ import json
 import pandas as pd
 import requests.exceptions
 
+try:
+    from yfinance.exceptions import YFRateLimitError
+except ImportError:
+
+    class YFRateLimitError(Exception):
+        """旧版 yfinance 无此类型时的占位"""
+
 EXPECTED_BUSINESS_EXCEPTIONS = (
     ValueError,
     OSError,
@@ -21,6 +28,7 @@ EXPECTED_BUSINESS_EXCEPTIONS = (
     json.JSONDecodeError,
     requests.exceptions.RequestException,
     pd.errors.EmptyDataError,
+    YFRateLimitError,
 )
 
 # 向后兼容 kline_scheduler 旧名

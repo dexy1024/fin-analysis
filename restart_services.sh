@@ -32,11 +32,9 @@ if [ -f "${ENV_FILE}" ]; then
   set +a
 fi
 
-# 设置代理（Clash Verge）
-export HTTP_PROXY="http://127.0.0.1:7897"
-export HTTPS_PROXY="http://127.0.0.1:7897"
-export http_proxy="http://127.0.0.1:7897"
-export https_proxy="http://127.0.0.1:7897"
+# 设置代理（Clash Verge）；国内金融站点 NO_PROXY 直连
+# shellcheck source=proxy_env.sh
+source "${ROOT_DIR}/proxy_env.sh"
 
 # 选用已安装 uvicorn 的 Python（系统自带 python3 常未装依赖）
 pick_python_with_uvicorn() {

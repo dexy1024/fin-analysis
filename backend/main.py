@@ -24,6 +24,8 @@ from services.observation_data import (
     load_observation_items,
     load_observation_items_for_frontend,
 )
+from services.option_quote import get_option_board, list_supported_underlyings
+from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
 WATCHLIST_FILE = Path(__file__).resolve().parents[0] / "data" / "watchlist.json"
 
 
@@ -537,6 +539,40 @@ async def get_symbols_config():
         "custom": merged_custom,
         "total_count": len(core_symbols) + len(merged_custom),
     }
+
+
+@app.get("/api/option/supported")
+def option_supported():
+    """支持的 ETF 期权标的列表（588000、159915 等）。"""
+    return {"underlyings": list_supported_underlyings()}
+
+
+@app.get("/api/option/board")
+def option_board(
+    underlying: str = Query(..., description="标的 ETF 代码，如 588000、159915"),
+    end_month: Optional[str] = Query(
+        None,
+        description="到期月份 YYMM，默认当月，如 2606",
+    ),
+    option_type: str = Query(
+        "all",
+        description="合约类型：all、put（认沽）、call（认购）",
+    ),
+):
+    """
+    ETF 期权 T 型报价：行权价、现价/前结算、涨跌幅等。
+    588000 等上交所品种含实时现价；159915 等深交所品种在东财可用时补充现价。
+    """
+    ot = option_type.strip().lower()
+    if ot not in ("all", "put", "call"):
+        raise HTTPException(status_code=400, detail="option_type 须为 all、put 或 call")
+    try:
+        return get_option_board(underlying, end_month=end_month, option_type=ot)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EXPECTED_BUSINESS_EXCEPTIONS as exc:
+        logging.exception("获取期权 board 失败: %s", underlying)
+        raise HTTPException(status_code=502, detail=f"期权数据源暂不可用: {exc}") from exc
 
 
 @app.get("/api/buy-sell-signals")

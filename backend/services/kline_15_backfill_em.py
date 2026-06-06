@@ -1,10 +1,10 @@
 """
-东方财富（AKShare fund_etf_hist_min_em）分段拉取场内 ETF 15 分钟 K 线，补全本地 CSV。
+东方财富（AKShare fund_etf_hist_min_em）分段拉取场内 ETF 15/60 分钟前复权 K 线。
 
-新浪 CN_MarketData.getKLineData 单次最多约 2048 根，15m 可回溯日历远短于「2024-03 至今」；
-本模块按日历窗口分段请求后去重合并，写入 data/kline_15_{code}.csv（与 indicators 缓存格式一致）。
+新浪 CN_MarketData.getKLineData 为不复权且单次约 2048 根；ETF 分红/拆分后会出现价格断崖。
+本模块按日历窗口分段请求后去重合并，写入 data/kline_{15|60}_{code}.csv。
 
-适用范围：场内 ETF 代码（如 510300）。非 ETF 请改用其它接口。
+适用范围：场内 ETF 代码（如 515050、510300）。非 ETF 请用 kline_minute_sync 新浪路径。
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo
 
 from services.indicators import _save_kline_15_cache
 from utils.expected_exceptions import EXPECTED_BUSINESS_EXCEPTIONS
+
+ETF_MIN_ADJUST = "qfq"
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 
@@ -70,11 +72,14 @@ def _em_slice(
     start_naive: pd.Timestamp,
     end_naive: pd.Timestamp,
     *,
+    period: str,
     sleep_sec: float,
 ) -> pd.DataFrame:
     """
-    单次请求东财 ETF 分钟线；symbol_6 为六位代码如 510300。
+    单次请求东财 ETF 分钟线；symbol_6 为六位代码如 510300；period 为 15 或 60。
     """
+    if period not in ("15", "60"):
+        raise ValueError(f"ETF 分钟 period 仅支持 15/60，收到: {period!r}")
     start_s = start_naive.strftime("%Y-%m-%d %H:%M:%S")
     end_s = end_naive.strftime("%Y-%m-%d %H:%M:%S")
     last_err: Optional[Exception] = None
@@ -82,10 +87,10 @@ def _em_slice(
         try:
             raw = ak.fund_etf_hist_min_em(
                 symbol=symbol_6,
-                period="15",
+                period=period,
                 start_date=start_s,
                 end_date=end_s,
-                adjust="",
+                adjust=ETF_MIN_ADJUST,
             )
             if sleep_sec > 0:
                 time.sleep(sleep_sec)
@@ -103,20 +108,21 @@ def _em_slice(
         except Exception:
             logging.exception("kline_15_backfill_em: 请求未预期异常 %s ~ %s", start_s, end_s)
             raise
-    raise RuntimeError(f"东财 15m 拉取失败 {start_s} ~ {end_s}: {last_err}") from last_err
+    raise RuntimeError(f"东财 ETF {period}m 前复权拉取失败 {start_s} ~ {end_s}: {last_err}") from last_err
 
 
-def backfill_etf_15m_em(
+def backfill_etf_min_em(
     symbol: str,
     start_date: str,
     end_date: Optional[str] = None,
     *,
+    period: str = "15",
     chunk_calendar_days: int = 14,
     sleep_sec: float = 0.6,
 ) -> pd.DataFrame:
     """
-    分段拉取 [start_date, end_date]（含）区间内 15m K 线，合并去重后返回 DataFrame。
-    end_date 默认当前上海时间。
+    分段拉取 [start_date, end_date]（含）区间内 ETF 前复权分钟 K 线，合并去重后返回。
+    period 为 15 或 60；end_date 默认当前上海时间。
     """
     code = symbol.strip().replace("sh", "").replace("sz", "")
     if not code.isdigit() or len(code) != 6:
@@ -142,12 +148,13 @@ def backfill_etf_15m_em(
     while cur <= end_naive:
         nxt = min(cur + pd.Timedelta(days=chunk_days), end_naive)
         logging.info(
-            "kline_15_backfill_em: 拉取 %s 15m %s ~ %s",
+            "kline_15_backfill_em: 拉取 %s %sm qfq %s ~ %s",
             code,
+            period,
             cur,
             nxt,
         )
-        chunk_df = _em_slice(code, cur, nxt, sleep_sec=sleep_sec)
+        chunk_df = _em_slice(code, cur, nxt, period=period, sleep_sec=sleep_sec)
         if not chunk_df.empty:
             parts.append(chunk_df)
         cur = nxt + pd.Timedelta(seconds=1)
@@ -161,6 +168,60 @@ def backfill_etf_15m_em(
     return merged.reset_index(drop=True)
 
 
+def backfill_etf_15m_em(
+    symbol: str,
+    start_date: str,
+    end_date: Optional[str] = None,
+    *,
+    chunk_calendar_days: int = 14,
+    sleep_sec: float = 0.6,
+) -> pd.DataFrame:
+    """兼容旧名：等价于 backfill_etf_min_em(..., period='15')。"""
+    return backfill_etf_min_em(
+        symbol,
+        start_date,
+        end_date,
+        period="15",
+        chunk_calendar_days=chunk_calendar_days,
+        sleep_sec=sleep_sec,
+    )
+
+
+def backfill_etf_min_em_to_csv(
+    symbol: str,
+    start_date: str,
+    end_date: Optional[str] = None,
+    *,
+    period: str = "15",
+    chunk_calendar_days: int = 14,
+    sleep_sec: float = 0.6,
+) -> Path:
+    """拉取并写入 ``backend/data/kline_{15|60}_{symbol}.csv``。"""
+    from services.indicators import _save_kline_15_cache, _save_kline_60_cache
+
+    sym = symbol.strip()
+    pr = period.strip()
+    if pr not in ("15", "60"):
+        raise ValueError(f"period 仅支持 15/60，收到: {period!r}")
+    df = backfill_etf_min_em(
+        sym,
+        start_date,
+        end_date,
+        period=pr,
+        chunk_calendar_days=chunk_calendar_days,
+        sleep_sec=sleep_sec,
+    )
+    if df.empty:
+        logging.warning("kline_15_backfill_em: 无数据写入 %s %sm", sym, pr)
+    if pr == "60":
+        _save_kline_60_cache(sym, df)
+        fname = f"kline_60_{sym.replace('/', '_')}.csv"
+    else:
+        _save_kline_15_cache(sym, df)
+        fname = f"kline_15_{sym.replace('/', '_')}.csv"
+    return Path(__file__).resolve().parents[1] / "data" / fname
+
+
 def backfill_etf_15m_em_to_csv(
     symbol: str,
     start_date: str,
@@ -170,14 +231,11 @@ def backfill_etf_15m_em_to_csv(
     sleep_sec: float = 0.6,
 ) -> Path:
     """拉取并写入 ``backend/data/kline_15_{symbol}.csv``。"""
-    df = backfill_etf_15m_em(
+    return backfill_etf_min_em_to_csv(
         symbol,
         start_date,
         end_date,
+        period="15",
         chunk_calendar_days=chunk_calendar_days,
         sleep_sec=sleep_sec,
     )
-    if df.empty:
-        logging.warning("kline_15_backfill_em: 无数据写入 %s", symbol)
-    _save_kline_15_cache(symbol.strip(), df)
-    return Path(__file__).resolve().parents[1] / "data" / f"kline_15_{symbol.strip().replace('/', '_')}.csv"

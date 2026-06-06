@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.chan_hourly_signals import (
+    _build_date_to_idx,
     _detect_first_buy_point,
     _detect_first_sell_point,
     _detect_second_buy_point,

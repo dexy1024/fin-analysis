@@ -419,9 +419,10 @@ type ChartTabKey = typeof CHART_TABS_CONFIG[number]['key'] | `custom_${string}`
 3. ⏳ 数据持久化原子写入（短期方案）
 
 ### 本月修复（中优先级）
-4. ✅ 解决循环导入
-5. ✅ 修复 useEffect 依赖问题
+4. ✅ 解决循环导入 - **已修复**（提取公共模块 `chan_hourly_signals.py`）
+5. ✅ 修复 useEffect 依赖问题 - **已修复**（使用 `useRef` 模式避免闭包问题）
 6. ✅ 添加前端 Error Boundary
+7. ✅ TODO 测试代码残留 - **已修复**（添加 `VITE_DEV_MOCK_BUY_SIGNAL` 环境变量控制）
 
 ### 长期改进（低优先级）
 7. ⏳ 提取公共代码，消除重复

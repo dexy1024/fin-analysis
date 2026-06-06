@@ -12,6 +12,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT}"
 
+if [[ -x "${ROOT}/.venv/bin/python3" ]]; then
+  PYTHON="${ROOT}/.venv/bin/python3"
+else
+  PYTHON="python3"
+fi
+
 PY="${ROOT}/backend/scripts/shenwan_v2_sector_analysis.py"
 JSON="${ROOT}/shenwan_v2_sectors.json"
 LOG_DIR="${ROOT}/logs"
@@ -57,7 +63,7 @@ fi
 PY_ARGS+=("${EXTRA_ARGS[@]}")
 
 count_missing() {
-  python3 - "${JSON}" <<'PY'
+  "${PYTHON}" - "${JSON}" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
@@ -74,7 +80,7 @@ round=1
 while [[ "${round}" -le "${MAX_ROUNDS}" ]]; do
   echo ""
   echo "--- 第 ${round}/${MAX_ROUNDS} 轮 ---"
-  if python3 "${PY}" "${PY_ARGS[@]}"; then
+  if "${PYTHON}" "${PY}" "${PY_ARGS[@]}"; then
     if [[ -f "${JSON}" ]]; then
       missing="$(count_missing)"
       echo "校验: 缺成分股的行业数 = ${missing}"

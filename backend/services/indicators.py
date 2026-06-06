@@ -14,6 +14,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from services.etf_em_qfq import etf_needs_em_qfq
 from services.index_cache import (
     _a_share_daily_cache_path,
     _cache_path,
@@ -193,7 +194,7 @@ def _refresh_daily_cache_for_kline_symbol(symbol: str) -> None:
 
 
 def _kline_adjust_label(symbol: str) -> str:
-    """API 返回的复权说明：指数/ETF 为 none；普通 A 股与港股为前复权 qfq。"""
+    """API 复权说明：指数/一般 ETF(none)；白名单 ETF/普通 A 股/港股为 qfq。"""
     try:
         api_sym, src = _split_kline_symbol(symbol)
     except ValueError:
@@ -203,7 +204,11 @@ def _kline_adjust_label(symbol: str) -> str:
     if src == "hk":
         return "qfq"
     if src == "a_share":
-        return "none" if _is_likely_etf_code(api_sym) else "qfq"
+        if etf_needs_em_qfq(api_sym):
+            return "qfq"
+        if _is_likely_etf_code(api_sym):
+            return "none"
+        return "qfq"
     return "none"
 
 
@@ -211,7 +216,7 @@ def _split_kline_symbol(symbol: str) -> tuple[str, str]:
     """
     返回 (api_symbol, source)。
     source 为 'index' 时使用 stock_zh_index_daily；'a_share' 为 A 股/ETF；
-    'hk' 为港股 5 位代码（ak.stock_hk_hist / stock_hk_hist_min_em）。
+    'hk' 为港股 5 位代码（分钟/日线拉取优先 yfinance，失败回退 AKShare）。
     """
     s = symbol.strip()
     if not s:
@@ -279,6 +284,15 @@ def _normalize_kline_ohlcv_df(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
 
 
+def _has_qfq_adjustment_cliff(df: pd.DataFrame) -> bool:
+    """检测相邻 K 线收盘价是否存在典型「不复权+前复权」混用断崖（如 3.x→1.x）。"""
+    if len(df) < 2:
+        return False
+    close = pd.to_numeric(df["close"], errors="coerce")
+    ratio = close / close.shift(1)
+    return bool(((ratio > 1.25) | (ratio < 0.8)).any())
+
+
 def _merge_kline_ohlcv_with_cache(path: Path, df: pd.DataFrame) -> pd.DataFrame:
     incoming = _normalize_kline_ohlcv_df(df)
     if not path.exists():
@@ -290,7 +304,14 @@ def _merge_kline_ohlcv_with_cache(path: Path, df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         raise
     merged = pd.concat([existing, incoming], ignore_index=True)
-    return merged.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+    merged = merged.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+    if _has_qfq_adjustment_cliff(merged):
+        logging.warning(
+            "K 线合并出现复权断崖，丢弃旧缓存仅保留新批次: %s",
+            path.name,
+        )
+        return incoming
+    return merged
 
 
 def _save_kline_60_cache(symbol: str, df: pd.DataFrame) -> None:
@@ -595,7 +616,14 @@ def _fetch_hk_min_em_raw(symbol: str, period: str) -> pd.DataFrame:
     }
 
     def _get() -> pd.DataFrame:
-        r = requests.get(url, params=params, timeout=20, headers=headers)
+        # 东财为国内站点，显式绕过环境代理，避免 Clash 全局代理导致 ProxyError
+        r = requests.get(
+            url,
+            params=params,
+            timeout=20,
+            headers=headers,
+            proxies={"http": None, "https": None},
+        )
         r.raise_for_status()
         klines = (r.json().get("data") or {}).get("klines") or []
         if not klines:
@@ -1819,7 +1847,7 @@ def get_index_kline(
     缓存与本地文件（日线与 60m/15m 分开判断）：
     - refresh=False 时，若本周期对应本地 CSV 的修改时间晚于该 symbol+period 下已缓存响应所记录的时间，
       会先丢弃该标的该周期全部内存缓存再重算；否则在 TTL（默认 300s）内可命中缓存。
-    - 日线 CSV：指数 index_daily_*.csv，A 股/ETF 为 a_daily_qfq_*.csv / a_daily_nq_*.csv，港股为 hk_daily_*.csv。
+    - 日线 CSV：指数 index_daily_*；A 股 a_daily_qfq_*；一般 ETF a_daily_nq_*（新浪）；白名单 ETF a_daily_qfq_*（东财）；港股 hk_daily_*。
     - 60m CSV：data/kline_60_{symbol}.csv；15m CSV：data/kline_15_{symbol}.csv。
     - 60m/15m 消费侧只读上述本地文件；拉网写入请用 kline_minute_sync.sync_minute_kline_to_csv
       或 kline_scheduler；refresh 对分钟线不再触发请求远端，仅清理内存响应缓存后重读磁盘。
